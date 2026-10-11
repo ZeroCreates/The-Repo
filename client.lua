@@ -1,9 +1,7 @@
 local PROTOCOL = "order_system_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
-local TIMEOUT = 5
-local touchMonitor
-local touchMonitorSide
+local mouseEnabled = false
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -35,19 +33,69 @@ local function sectionTitle(y, title)
     writeAt(2, y, title, colors.white, colors.blue)
 end
 
+local function drawChoices(help)
+    local width, height = term.getSize()
+    local options = {}
+    for part in help:gmatch("[^|]+") do
+        local key, label = part:match("^%s*([%w/]+)%s*(.-)%s*$")
+        if key then
+            if key:find("/") then
+                local first, second = key:match("([^/]+)/([^/]+)")
+                table.insert(options, { key = first, label = "NEXT " .. label })
+                table.insert(options, { key = second, label = "PREV " .. label })
+            else
+                table.insert(options, { key = key, label = label ~= "" and label or key })
+            end
+        end
+    end
+
+    if #options == 0 then return {} end
+    local columns = math.min(3, #options)
+    local rows = math.ceil(#options / columns)
+    local buttons = {}
+    for index, option in ipairs(options) do
+        local row = height - rows + math.floor((index - 1) / columns)
+        local column = (index - 1) % columns
+        local left = math.floor(column * width / columns) + 1
+        local right = math.floor((column + 1) * width / columns)
+        local label = ("[" .. option.label .. "]"):sub(1, right - left + 1)
+        writeAt(left, row, label, colors.black, colors.lightBlue)
+        table.insert(buttons, { key = option.key, row = row, left = left, right = right })
+    end
+    return buttons
+end
+
 local function readChoice(help)
-    local _, height = term.getSize()
-    writeAt(2, height - 2, help, colors.lightGray)
-    writeAt(2, height - 1, "> ", colors.lime)
-    term.setCursorPos(4, height - 1)
-    return read():lower()
+    if not mouseEnabled then
+        local _, height = term.getSize()
+        writeAt(2, height - 2, help, colors.lightGray)
+        writeAt(2, height - 1, "> ", colors.lime)
+        term.setCursorPos(4, height - 1)
+        return read():lower()
+    end
+
+    local buttons = drawChoices(help)
+    while true do
+        local event, button, x, y = os.pullEvent()
+        if event == "mouse_click" and button == 1 then
+            for _, choice in ipairs(buttons) do
+                if y == choice.row and x >= choice.left and x <= choice.right then
+                    return choice.key
+                end
+            end
+        end
+    end
 end
 
 local function showNotice(title, message)
     drawHeader(title, "ORDER DESK  /  SHARED PRODUCT CATALOG")
     writeAt(2, 5, message, colors.white)
-    writeAt(2, 7, "Press Enter to continue.", colors.lightGray)
-    read()
+    if mouseEnabled then
+        readChoice("ok continue")
+    else
+        writeAt(2, 7, "Press Enter to continue.", colors.lightGray)
+        read()
+    end
 end
 
 local function openModems()
@@ -56,16 +104,10 @@ local function openModems()
         if peripheral.getType(name) == "modem" then
             if not rednet.isOpen(name) then rednet.open(name) end
             found = true
-        elseif peripheral.getType(name) == "monitor" and not touchMonitor then
-            touchMonitor = peripheral.wrap(name)
-            touchMonitorSide = name
         end
     end
     if not found then error("Attach a modem before starting the ordering page.") end
-    if touchMonitor then
-        touchMonitor.setTextScale(0.5)
-        term.redirect(touchMonitor)
-    end
+    mouseEnabled = term.isColor()
 end
 
 local function request(message)
@@ -135,7 +177,6 @@ local function printOrderReceipt(order)
             end
         end
     end)
-
     return ok, err
 end
 
@@ -176,7 +217,7 @@ local function renderCatalog(products, cart, errorMessage, page)
         for index = first, last do
             local product = products[index]
             local y = 5 + (index - first) * 2
-            visibleProducts[#visibleProducts + 1] = { product = product, firstRow = y }
+            table.insert(visibleProducts, { product = product, firstRow = y })
             writeAt(2, y, "#" .. product.id, colors.cyan)
             writeAt(8, y, product.name:sub(1, math.max(1, width - 20)), colors.white)
             writeAt(width - 9, y, money(product.price), colors.lime)
@@ -185,38 +226,18 @@ local function renderCatalog(products, cart, errorMessage, page)
         end
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
-    local help = "a add by ID| c cart " .. cartCount(cart)
-        .. "| s track| n/v pages| r refresh| q quit"
-    if not touchMonitor then return readChoice(help), page end
 
-    local options = {
-        { key = "a", label = "Add by ID" },
-        { key = "c", label = "Cart " .. cartCount(cart) },
-        { key = "s", label = "Track" },
-        { key = "n", label = "Next page" },
-        { key = "v", label = "Prev page" },
-        { key = "r", label = "Refresh" },
-        { key = "q", label = "Quit" },
-    }
-    local width, height = term.getSize()
-    local columns = 4
-    local rows = math.ceil(#options / columns)
-    local buttons = {}
-    for index, option in ipairs(options) do
-        local row = height - rows + math.floor((index - 1) / columns)
-        local column = (index - 1) % columns
-        local left = math.floor(column * width / columns) + 1
-        local right = math.floor((column + 1) * width / columns)
-        writeAt(left, row, "[" .. option.label .. "]", colors.black, colors.lightBlue)
-        buttons[index] = { key = option.key, row = row, left = left, right = right }
-    end
+    local help = "a add by ID|c cart " .. cartCount(cart)
+        .. "|s track|n/v pages|r refresh|q quit"
+    if not mouseEnabled then return readChoice(help), page end
 
+    local buttons = drawChoices(help)
     while true do
-        local event, side, x, y = os.pullEvent()
-        if event == "monitor_touch" and side == touchMonitorSide then
-            for _, button in ipairs(buttons) do
-                if y == button.row and x >= button.left and x <= button.right then
-                    return button.key, page
+        local event, button, x, y = os.pullEvent()
+        if event == "mouse_click" and button == 1 then
+            for _, choice in ipairs(buttons) do
+                if y == choice.row and x >= choice.left and x <= choice.right then
+                    return choice.key, page
                 end
             end
             for _, entry in ipairs(visibleProducts) do
@@ -251,7 +272,8 @@ addSelectedProduct = function(products, product, cart)
             return
         end
     end
-    term.setCursorPos(2, 8)
+    drawHeader("ADD TO CART", product.name .. "  /  " .. money(product.price))
+    term.setCursorPos(2, 6)
     write("Quantity (1-99): ")
     local quantity = tonumber(read())
     local newQuantity = quantity and ((cart[product.id] or 0) + quantity)
@@ -275,9 +297,7 @@ local function cartPage(products, cart)
     local visible = math.min(#entries, math.max(0, height - 10))
     for index, entry in ipairs(entries) do
         local product = findProduct(products, entry.id)
-        if product then
-            total = total + entry.quantity * product.price
-        end
+        if product then total = total + entry.quantity * product.price end
         if index <= visible then
             local y = 5 + index
             if product then
@@ -296,7 +316,7 @@ local function cartPage(products, cart)
             writeAt(2, height - 3, "Some items are below the visible area.", colors.yellow)
         end
     end
-    return readChoice("p place order  |  d remove by ID  |  b back")
+    return readChoice("p place order|d remove by ID|b back")
 end
 
 local function removeFromCart(cart)
@@ -327,8 +347,12 @@ local function showOrder(order)
         writeAt(width - 9, y, money(item.lineTotal), colors.lime)
     end
     writeAt(2, height - 4, "TOTAL  " .. money(order.total), colors.white, colors.blue)
-    writeAt(2, height - 1, "Press Enter to return.", colors.lightGray)
-    read()
+    if mouseEnabled then
+        readChoice("b back")
+    else
+        writeAt(2, height - 1, "Press Enter to return.", colors.lightGray)
+        read()
+    end
 end
 
 local function placeOrder(cart)
@@ -361,9 +385,16 @@ local function placeOrder(cart)
         row = row + 1
     end
     writeAt(2, math.min(row + 1, height - 5), "Items in order: " .. #items, colors.lightGray)
-    writeAt(2, height - 4, "Place this order? [y/N]", colors.lime)
-    term.setCursorPos(2, height - 3)
-    if read():lower() ~= "y" then return end
+    local confirmed
+    if mouseEnabled then
+        writeAt(2, height - 4, "Confirm order?", colors.lime)
+        confirmed = readChoice("y yes|n no") == "y"
+    else
+        writeAt(2, height - 4, "Place this order? [y/N]", colors.lime)
+        term.setCursorPos(2, height - 3)
+        confirmed = read():lower() == "y"
+    end
+    if not confirmed then return end
 
     local response, err = request({
         type = "place_order",
@@ -407,9 +438,15 @@ local function checkStatus()
 
     drawHeader("DELIVERY CONFIRMATION", "ONLY CONFIRM AFTER THE ORDER ARRIVES")
     writeAt(2, 5, "Order " .. (response.order.reference or response.order.id) .. " has shipped.", colors.lightGray)
-    writeAt(2, 7, "Mark this order completed? [y/N]", colors.lime)
-    term.setCursorPos(2, 9)
-    if read():lower() ~= "y" then return end
+    local confirmCompletion
+    if mouseEnabled then
+        confirmCompletion = readChoice("y complete|n not yet") == "y"
+    else
+        writeAt(2, 7, "Mark this order completed? [y/N]", colors.lime)
+        term.setCursorPos(2, 9)
+        confirmCompletion = read():lower() == "y"
+    end
+    if not confirmCompletion then return end
 
     local completed, completionError = request({ type = "complete_order", orderId = orderId })
     if not completed then

@@ -1,13 +1,12 @@
 local PROTOCOL = "order_system_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
+
 local NEXT_STATUSES = {
     waiting = { "preparing", "cancelled" },
     preparing = { "shipping", "cancelled" },
     shipping = { "cancelled" },
 }
-local touchMonitor
-local touchMonitorSide
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -47,113 +46,40 @@ local function drawChoices(help)
         if key then
             if key:find("/") then
                 local first, second = key:match("([^/]+)/([^/]+)")
-                table.insert(options, { key = first, label = "Next " .. label })
-                table.insert(options, { key = second, label = "Prev " .. label })
+                table.insert(options, { key = first, label = "NEXT " .. label })
+                table.insert(options, { key = second, label = "PREV " .. label })
             else
                 table.insert(options, { key = key, label = label ~= "" and label or key })
             end
         end
     end
 
-    local columns = math.min(4, #options)
+    if #options == 0 then return {} end
+    local columns = math.min(3, #options)
     local rows = math.ceil(#options / columns)
-    local firstRow = height - rows
+    local firstRow = height - rows + 1
     local buttons = {}
     for index, option in ipairs(options) do
         local row = firstRow + math.floor((index - 1) / columns)
         local column = (index - 1) % columns
         local left = math.floor(column * width / columns) + 1
         local right = math.floor((column + 1) * width / columns)
-        local label = "[" .. option.label .. "]"
+        local label = ("[" .. option.label .. "]"):sub(1, right - left + 1)
         writeAt(left, row, label, colors.black, colors.lightBlue)
-        buttons[index] = { left = left, right = right, row = row, key = option.key }
+        table.insert(buttons, { key = option.key, row = row, left = left, right = right })
     end
-
     return buttons
 end
 
-local function waitForTouch(buttons)
-    while true do
-        local event, side, x, y = os.pullEvent()
-        if event == "monitor_touch" and side == touchMonitorSide then
-            for _, button in ipairs(buttons) do
-                if y == button.row and x >= button.left and x <= button.right then
-                    return button.key
-                end
-            end
-        end
-    end
-end
-
 local function readChoice(help)
-    return waitForTouch(drawChoices(help))
-end
-
-local function touchInput(prompt, initial, numericOnly)
-    local value = initial or ""
-    local shift = false
-    local rows = numericOnly
-        and { "1234567890", ".-" }
-        or { "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm-_." }
-
+    local buttons = drawChoices(help)
     while true do
-        drawHeader("TOUCH INPUT", prompt)
-        writeAt(2, 4, value, colors.yellow)
-        local width, height = term.getSize()
-        local keyButtons = {}
-        local firstKeyRow = numericOnly and 7 or 5
-        for rowIndex, keys in ipairs(rows) do
-            local row = firstKeyRow + rowIndex - 1
-            local keyWidth = math.max(1, math.floor(width / #keys))
-            for keyIndex = 1, #keys do
-                local key = keys:sub(keyIndex, keyIndex)
-                local left = (keyIndex - 1) * keyWidth + 1
-                local right = keyIndex == #keys and width or keyIndex * keyWidth
-                writeAt(left, row, " " .. (shift and key:upper() or key) .. " ", colors.black, colors.lightBlue)
-                table.insert(keyButtons, { left = left, right = right, row = row, key = key })
-            end
-        end
-
-        local controls = numericOnly
-            and { { "DEL", "del" }, { "CLEAR", "clear" }, { "OK", "ok" }, { "CANCEL", "cancel" } }
-            or { { "SHIFT", "shift" }, { "SPACE", "space" }, { "DEL", "del" }, { "CLEAR", "clear" }, { "OK", "ok" }, { "CANCEL", "cancel" } }
-        local controlRow = height - 1
-        local controlWidth = math.max(1, math.floor(width / #controls))
-        local controlButtons = {}
-        for index, control in ipairs(controls) do
-            local left = (index - 1) * controlWidth + 1
-            local right = index == #controls and width or index * controlWidth
-            writeAt(left, controlRow, "[" .. control[1] .. "]", colors.white, colors.blue)
-            table.insert(controlButtons, { left = left, right = right, row = controlRow, action = control[2] })
-        end
-
-        while true do
-            local event, side, x, y = os.pullEvent()
-            if event == "monitor_touch" and side == touchMonitorSide then
-                local handled = false
-                for _, button in ipairs(keyButtons) do
-                    if y == button.row and x >= button.left and x <= button.right then
-                        local key = shift and button.key:upper() or button.key
-                        if #value < 100 then value = value .. key end
-                        shift = false
-                        handled = true
-                        break
-                    end
+        local event, button, x, y = os.pullEvent()
+        if event == "mouse_click" and button == 1 then
+            for _, choice in ipairs(buttons) do
+                if y == choice.row and x >= choice.left and x <= choice.right then
+                    return choice.key
                 end
-                if not handled then
-                    for _, button in ipairs(controlButtons) do
-                        if y == button.row and x >= button.left and x <= button.right then
-                            if button.action == "ok" then return value
-                            elseif button.action == "cancel" then return nil
-                            elseif button.action == "shift" then shift = not shift
-                            elseif button.action == "space" and #value < 100 then value = value .. " "
-                            elseif button.action == "clear" then value = ""
-                            elseif button.action == "del" then value = value:sub(1, -2) end
-                            break
-                        end
-                    end
-                end
-                break
             end
         end
     end
@@ -171,17 +97,12 @@ local function openModems()
         if peripheral.getType(name) == "modem" then
             if not rednet.isOpen(name) then rednet.open(name) end
             found = true
-        elseif peripheral.getType(name) == "monitor" and not touchMonitor then
-            touchMonitor = peripheral.wrap(name)
-            touchMonitorSide = name
         end
     end
     if not found then error("Attach a modem before starting the provider page.") end
-    if not touchMonitor then
-        error("Attach an advanced touchscreen monitor to use the mouse-only provider interface.")
+    if not term.isColor() then
+        error("Run the provider on an advanced computer with a mouse attached.")
     end
-    touchMonitor.setTextScale(0.5)
-    term.redirect(touchMonitor)
 end
 
 local function request(message)
@@ -216,13 +137,13 @@ local function printReceipt(order)
     local ok, err = pcall(function()
         if printer.getPaperLevel() < 1 then error("The printer needs paper.") end
         if printer.getInkLevel() < 1 then error("The printer needs ink.") end
-
         if not printer.newPage() then error("The printer could not start a page; check paper and ink.") end
+
         local width, height = printer.getPageSize()
         local lines = {
             "ORDER RECEIPT #" .. order.id,
             "PAYMENT REF: " .. (order.reference or string.format("ORD-%06d", order.id)),
-            "STATUS: PREPARING",
+            "STATUS: " .. order.status:upper(),
             "",
             "DELIVERY ADDRESS",
         }
@@ -238,7 +159,7 @@ local function printReceipt(order)
 
         local lineIndex = 1
         while lineIndex <= #lines do
-            printer.setPageTitle("Order #" .. order.id)
+            printer.setPageTitle("Order " .. (order.reference or order.id))
             for row = 1, height do
                 if lineIndex > #lines then break end
                 printer.setCursorPos(1, row)
@@ -273,6 +194,7 @@ local function showOrders(orders, page, errorMessage)
     sectionTitle(4, "ACTIVE ORDERS  |  " .. #orders)
     local visibleOrders = {}
     local firstRow = 5
+
     if errorMessage then
         writeAt(2, 6, errorMessage, colors.red)
     elseif #orders == 0 then
@@ -284,10 +206,11 @@ local function showOrders(orders, page, errorMessage)
         page = math.max(1, math.min(page, pageCount))
         local first = (page - 1) * perPage + 1
         local last = math.min(#orders, first + perPage - 1)
+
         for index = first, last do
             local order = orders[index]
             local y = firstRow + (index - first) * 3
-            visibleOrders[#visibleOrders + 1] = { order = order, firstRow = y }
+            table.insert(visibleOrders, { order = order, firstRow = y })
             local statusColor = order.status == "shipping" and colors.lime
                 or (order.status == "preparing" and colors.orange or colors.yellow)
             writeAt(2, y, order.reference or string.format("ORD-%06d", order.id), colors.cyan)
@@ -304,14 +227,13 @@ local function showOrders(orders, page, errorMessage)
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
 
-    local buttons = drawChoices("p products| n/v pages| r refresh| q quit")
-    local _, height = term.getSize()
+    local buttons = drawChoices("p products|n/v pages|r refresh|q quit")
     while true do
-        local event, side, x, y = os.pullEvent()
-        if event == "monitor_touch" and side == touchMonitorSide then
-            for _, button in ipairs(buttons) do
-                if y == button.row and x >= button.left and x <= button.right then
-                    return button.key, page
+        local event, button, x, y = os.pullEvent()
+        if event == "mouse_click" and button == 1 then
+            for _, choice in ipairs(buttons) do
+                if y == choice.row and x >= choice.left and x <= choice.right then
+                    return choice.key, page
                 end
             end
             for _, entry in ipairs(visibleOrders) do
@@ -319,21 +241,13 @@ local function showOrders(orders, page, errorMessage)
                     return "order", page, entry.order
                 end
             end
-            if y > 4 and y < height - 2 then
-                for _, entry in ipairs(visibleOrders) do
-                    if y >= entry.firstRow and y <= entry.firstRow + 2 then
-                        return "order", page, entry.order
-                    end
-                end
-            end
         end
     end
 end
 
-local updateStatus
-
 local function showDeliveryDetails(order)
-    drawHeader("ORDER #" .. order.id, "STATUS  /  " .. order.status:upper())
+    drawHeader(order.reference or string.format("ORDER #%06d", order.id),
+        "STATUS  /  " .. order.status:upper())
     sectionTitle(4, "DELIVERY ADDRESS")
     local width, height = term.getSize()
     writeAt(2, 5, "PAYMENT REF: "
@@ -344,20 +258,21 @@ local function showDeliveryDetails(order)
     for start = 1, #address, lineWidth do
         writeAt(2, row, address:sub(start, start + lineWidth - 1), colors.yellow)
         row = row + 1
-        if row >= height - 4 then break end
+        if row >= height - 3 then break end
     end
     readChoice("b back")
 end
+
+local updateStatus
 
 local function showOrderActions(order)
     while true do
         drawHeader(order.reference or string.format("ORDER #%06d", order.id),
             "ORDER ACTIONS  /  " .. order.status:upper())
         sectionTitle(4, "ORDER DETAILS")
-        local _, height = term.getSize()
         writeAt(2, 6, "TOTAL  " .. money(order.total), colors.lime)
         writeAt(2, 8, "DELIVER TO  " .. (order.deliveryAddress or "ADDRESS NOT SET"), colors.yellow)
-        local action = readChoice("s status| d address| p print receipt| b back")
+        local action = readChoice("s status|d address|p print receipt|b back")
         if action == "s" then
             updateStatus(order)
             return
@@ -376,6 +291,7 @@ local function productPage(products, page, errorMessage)
     drawHeader("MY PRODUCTS", "PUBLISHED LISTINGS  /  MANAGED BY THIS PROVIDER")
     sectionTitle(4, "YOUR CATALOG  |  " .. #products)
     local visibleProducts = {}
+
     if errorMessage then
         writeAt(2, 6, errorMessage, colors.red)
     elseif #products == 0 then
@@ -390,7 +306,7 @@ local function productPage(products, page, errorMessage)
         for index = first, last do
             local product = products[index]
             local y = 5 + index - first
-            visibleProducts[#visibleProducts + 1] = { product = product, row = y }
+            table.insert(visibleProducts, { product = product, row = y })
             writeAt(2, y, "#" .. product.id, colors.cyan)
             writeAt(8, y, product.name:sub(1, math.max(1, width - 23)), colors.white)
             writeAt(width - 14, y, money(product.price), colors.yellow)
@@ -399,13 +315,14 @@ local function productPage(products, page, errorMessage)
         end
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
+
     local buttons = drawChoices("a add|n/v pages|b back")
     while true do
-        local event, side, x, y = os.pullEvent()
-        if event == "monitor_touch" and side == touchMonitorSide then
-            for _, button in ipairs(buttons) do
-                if y == button.row and x >= button.left and x <= button.right then
-                    return button.key, page
+        local event, button, x, y = os.pullEvent()
+        if event == "mouse_click" and button == 1 then
+            for _, choice in ipairs(buttons) do
+                if y == choice.row and x >= choice.left and x <= choice.right then
+                    return choice.key, page
                 end
             end
             for _, entry in ipairs(visibleProducts) do
@@ -456,9 +373,13 @@ end
 local function addProduct()
     drawHeader("NEW PRODUCT", "PUBLISH A LISTING TO THE SHARED CATALOG")
     writeAt(2, 5, "Product names can be up to 32 characters.", colors.lightGray)
-    local name = touchInput("Product name:")
-    if not name or name == "" then return end
-    local price = tonumber(touchInput("Price in dollars:", "", true))
+    term.setCursorPos(2, 7)
+    write("Name: ")
+    local name = read()
+    if name == "" then return end
+    term.setCursorPos(2, 9)
+    write("Price in dollars: $")
+    local price = tonumber(read())
     if not price or price <= 0 or price > 10000 then
         showNotice("INVALID PRICE", "Enter a price greater than $0 and no more than $10000.")
         return
@@ -466,18 +387,14 @@ local function addProduct()
     publishProduct({ name = name, price = math.floor(price * 100 + 0.5), available = true })
 end
 
-local function findProduct(products, productId)
-    for _, product in ipairs(products) do
-        if product.id == productId then return product end
-    end
-end
-
 editProduct = function(product)
     drawHeader("EDIT PRODUCT #" .. product.id, "Leave a field blank to keep it unchanged.")
-    local name = touchInput("Name (blank keeps current):", product.name)
-    if name == nil then return end
-    local priceInput = touchInput("Price (blank keeps current):", "", true)
-    if priceInput == nil then return end
+    term.setCursorPos(2, 6)
+    write("Name [" .. product.name .. "]: ")
+    local name = read()
+    term.setCursorPos(2, 8)
+    write("Price [$" .. string.format("%.2f", product.price / 100) .. "]: $")
+    local priceInput = read()
     local price = priceInput == "" and product.price or tonumber(priceInput)
     if not price or price <= 0 or price > 10000 then
         showNotice("INVALID PRICE", "Enter a price greater than $0 and no more than $10000.")
@@ -501,7 +418,6 @@ toggleProduct = function(product)
 end
 
 updateStatus = function(order)
-    drawHeader("UPDATE ORDER", "STATUS CHANGES ARE VALIDATED BY THE SERVER")
     local allowed = NEXT_STATUSES[order.status]
     if not allowed then
         showNotice("NO STATUS CHANGES", "This order is already " .. order.status .. ".")
@@ -516,47 +432,50 @@ updateStatus = function(order)
     local choice = readChoice(table.concat(menu, " | "))
     local selectedIndex = tonumber(choice)
     if not selectedIndex or not allowed[selectedIndex] then return end
-    local status = allowed[selectedIndex]
-    local response, err = request({ type = "set_status", orderId = order.id, status = status })
+    local response, err = request({ type = "set_status", orderId = order.id, status = allowed[selectedIndex] })
     if not response then
         showNotice("UPDATE REJECTED", err)
         return
     end
-    showNotice("STATUS UPDATED", "Order #" .. response.order.id .. " is now " .. response.order.status .. ".")
+    showNotice("STATUS UPDATED", "Order " .. response.order.reference
+        .. " is now " .. response.order.status .. ".")
 end
 
 openModems()
 local orderPage = 1
+local productPageNumber = 1
 local printedReceipts = {}
+
 while true do
-    local orders, err = refreshOrders()
-    if orders then
+    local orders, orderError = refreshOrders()
+    orders = orders or {}
+
+    if not peripheral.find("printer") then
+        printedReceipts = {}
+    else
         for _, order in ipairs(orders) do
-            if order.status == "preparing" and not printedReceipts[order.id]
-                and peripheral.find("printer") then
+            if order.status == "preparing" and not printedReceipts[order.id] then
                 printedReceipts[order.id] = true
                 local printed, printMessage = printReceipt(order)
                 if not printed then showNotice("RECEIPT NOT PRINTED", printMessage) end
             end
         end
     end
-    local choice, shownOrderPage = showOrders(orders or {}, orderPage, err)
-    local choice, shownOrderPage, selectedOrder = showOrders(orders or {}, orderPage, err)
+
+    local choice, shownOrderPage, selectedOrder = showOrders(orders, orderPage, orderError)
     orderPage = shownOrderPage or orderPage
     if choice == "order" then
         showOrderActions(selectedOrder)
     elseif choice == "p" then
-        local products, productError = refreshProducts()
-        local productPageNumber = 1
         while true do
-            local productChoice, shownProductPage, selectedProduct = productPage(products or {}, productPageNumber, productError)
+            local products, productError = refreshProducts()
+            local productChoice, shownProductPage, selectedProduct = productPage(
+                products or {}, productPageNumber, productError)
             productPageNumber = shownProductPage or productPageNumber
             if productChoice == "a" then
                 addProduct()
-                products, productError = refreshProducts()
             elseif productChoice == "product" then
                 productActions(selectedProduct)
-                products, productError = refreshProducts()
             elseif productChoice == "n" then
                 productPageNumber = productPageNumber + 1
             elseif productChoice == "v" then
