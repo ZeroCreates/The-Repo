@@ -168,8 +168,7 @@ local function showOrders(orders, page, errorMessage)
         end
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
-    return readChoice("p products  |  u update status  |  n/v pages  |  r refresh  |  q quit"), page
-    return readChoice("p products  |  d delivery details  |  u status  |  n/v pages  |  r refresh  |  q quit"), page
+    return readChoice("p products| d delivery details| u status| n/v pages| r refresh| q quit"), page
 end
 
 local function showDeliveryDetails(orders)

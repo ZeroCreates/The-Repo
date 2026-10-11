@@ -120,8 +120,8 @@ local function renderCatalog(products, cart, errorMessage, page)
         end
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
-    return readChoice("a add by ID  |  c cart " .. cartCount(cart)
-        .. "  |  s track  |  n/v pages  |  r refresh  |  q quit"), page
+    return readChoice("a add by ID| c cart " .. cartCount(cart)
+        .. "| s track| n/v pages| r refresh| q quit"), page
 end
 
 local function addToCart(products, cart)
