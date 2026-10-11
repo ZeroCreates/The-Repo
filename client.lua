@@ -76,6 +76,59 @@ local function money(cents)
     return string.format("$%.2f", cents / 100)
 end
 
+local function appendReceiptText(lines, text, width)
+    text = tostring(text)
+    for start = 1, #text, width do
+        table.insert(lines, text:sub(start, start + width - 1))
+    end
+end
+
+local function printOrderReceipt(order)
+    local printer = peripheral.find("printer")
+    if not printer then return nil end
+
+    local ok, err = pcall(function()
+        if printer.getPaperLevel() < 1 then error("The printer needs paper.") end
+        if printer.getInkLevel() < 1 then error("The printer needs ink.") end
+        if not printer.newPage() then error("The printer could not start a page; check paper and ink.") end
+
+        local width, height = printer.getPageSize()
+        local lines = {
+            "ORDER RECEIPT #" .. order.id,
+            "PAYMENT REF: " .. (order.reference or string.format("ORD-%06d", order.id)),
+            "STATUS: " .. order.status:upper(),
+            "",
+            "DELIVERY ADDRESS",
+        }
+        appendReceiptText(lines, order.deliveryAddress or "ADDRESS NOT SAVED", width)
+        table.insert(lines, "")
+        table.insert(lines, "ITEMS")
+        for _, item in ipairs(order.items) do
+            appendReceiptText(lines, item.quantity .. " x " .. item.name
+                .. "  " .. money(item.lineTotal), width)
+        end
+        table.insert(lines, "")
+        appendReceiptText(lines, "TOTAL: " .. money(order.total), width)
+
+        local lineIndex = 1
+        while lineIndex <= #lines do
+            printer.setPageTitle("Order " .. (order.reference or order.id))
+            for row = 1, height do
+                if lineIndex > #lines then break end
+                printer.setCursorPos(1, row)
+                printer.write(lines[lineIndex]:sub(1, width))
+                lineIndex = lineIndex + 1
+            end
+            if not printer.endPage() then error("The printer could not finish the receipt page.") end
+            if lineIndex <= #lines and not printer.newPage() then
+                error("The printer could not start another page; check paper and ink.")
+            end
+        end
+    end)
+
+    return ok, err
+end
+
 local function fetchCatalog()
     local response, err = request({ type = "get_catalog" })
     if not response then return nil, err end
@@ -205,11 +258,13 @@ local function showOrder(order)
     drawHeader("ORDER #" .. order.id, "STATUS  /  " .. order.status:upper())
     sectionTitle(4, "ORDER SUMMARY")
     local width, height = term.getSize()
-    writeAt(2, 5, "DELIVER TO  " .. (order.deliveryAddress or "Address not provided"), colors.yellow)
-    local visible = math.min(#order.items, math.max(0, height - 11))
+    writeAt(2, 5, "MAIL PAYMENT WITH REFERENCE: "
+        .. (order.reference or string.format("ORD-%06d", order.id)), colors.cyan)
+    writeAt(2, 6, "DELIVER TO  " .. (order.deliveryAddress or "Address not provided"), colors.yellow)
+    local visible = math.min(#order.items, math.max(0, height - 12))
     for index = 1, visible do
         local item = order.items[index]
-        local y = 5 + index
+        local y = 6 + index
         writeAt(2, y, item.quantity .. "x " .. item.name, colors.white)
         writeAt(2, y + 1, item.providerName or "Provider", colors.lightGray)
         writeAt(width - 9, y, money(item.lineTotal), colors.lime)
@@ -269,6 +324,10 @@ local function placeOrder(cart)
             .. " was accepted, but the server did not save its address. Update and restart server.lua.")
         return
     end
+    local printed, printError = printOrderReceipt(response.order)
+    if printed == false then
+        showNotice("ORDER SAVED, PRINT FAILED", tostring(printError))
+    end
     showOrder(response.order)
 end
 
@@ -287,6 +346,20 @@ local function checkStatus()
         return
     end
     showOrder(response.order)
+    if response.order.status ~= "shipping" then return end
+
+    drawHeader("DELIVERY CONFIRMATION", "ONLY CONFIRM AFTER THE ORDER ARRIVES")
+    writeAt(2, 5, "Order " .. (response.order.reference or response.order.id) .. " has shipped.", colors.lightGray)
+    writeAt(2, 7, "Mark this order completed? [y/N]", colors.lime)
+    term.setCursorPos(2, 9)
+    if read():lower() ~= "y" then return end
+
+    local completed, completionError = request({ type = "complete_order", orderId = orderId })
+    if not completed then
+        showNotice("ORDER NOT COMPLETED", completionError)
+        return
+    end
+    showOrder(completed.order)
 end
 
 openModems()

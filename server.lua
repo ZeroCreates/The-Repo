@@ -6,6 +6,7 @@ local TEMP_FILE = "orders.db.tmp"
 local state
 
 local ALLOWED_TRANSITIONS = {
+    waiting = { preparing = true, cancelled = true },
     preparing = { shipping = true, cancelled = true },
     shipping = { completed = true, cancelled = true },
     completed = {},
@@ -48,8 +49,9 @@ local function loadState()
     loaded.products = type(loaded.products) == "table" and loaded.products or {}
     loaded.nextProductId = loaded.nextProductId or 1
     for _, order in ipairs(loaded.orders) do
+        order.reference = order.reference or string.format("ORD-%06d", order.id)
         if order.status == "received" then
-            order.status = "preparing"
+            order.status = "waiting"
         elseif order.status == "ready" then
             order.status = "shipping"
         end
@@ -126,11 +128,13 @@ local function createOrder(senderId, message)
     local now = os.epoch("utc")
     local order = {
         id = state.nextId,
+        reference = string.format("ORD-%06d", state.nextId),
+        customerId = senderId,
         providerId = orderProviderId,
         deliveryAddress = deliveryAddress,
         items = items,
         total = total,
-        status = "preparing",
+        status = "waiting",
         createdAt = now,
         updatedAt = now,
     }
@@ -146,7 +150,29 @@ local function getOrder(senderId, message)
     end
     local order = findOrder(message.orderId)
     if not order then return sendError(senderId, "Order not found.") end
+    if order.customerId and order.customerId ~= senderId then
+        return sendError(senderId, "That order belongs to another customer.")
+    end
     rednet.send(senderId, { type = "order_status", order = order }, PROTOCOL)
+end
+
+local function completeOrder(senderId, message)
+    if type(message.orderId) ~= "number" then
+        return sendError(senderId, "Enter a valid order number.")
+    end
+    local order = findOrder(message.orderId)
+    if not order then return sendError(senderId, "Order not found.") end
+    if order.customerId ~= senderId then
+        return sendError(senderId, "Only the customer who placed this order can complete it.")
+    end
+    if order.status ~= "shipping" then
+        return sendError(senderId, "You can complete the order after it is marked shipping.")
+    end
+
+    order.status = "completed"
+    order.updatedAt = os.epoch("utc")
+    saveState()
+    rednet.send(senderId, { type = "order_completed", order = order }, PROTOCOL)
 end
 
 local function listOrders(senderId)
@@ -226,6 +252,9 @@ local function updateOrder(senderId, message)
     end
     local order = findOrder(message.orderId)
     if not order then return sendError(senderId, "Order not found.") end
+    if message.status == "completed" then
+        return sendError(senderId, "The customer must confirm order completion.")
+    end
     if order.providerId and order.providerId ~= senderId then
         return sendError(senderId, "You can only update orders for your products.")
     end
@@ -318,6 +347,8 @@ while true do
             createOrder(senderId, message)
         elseif message.type == "get_order" then
             getOrder(senderId, message)
+        elseif message.type == "complete_order" then
+            completeOrder(senderId, message)
         elseif message.type == "provider_list" then
             listOrders(senderId)
         elseif message.type == "get_catalog" then

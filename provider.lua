@@ -1,9 +1,17 @@
+        local lines = {
+            "ORDER RECEIPT #" .. order.id,
+            "PAYMENT REF: " .. (order.reference or string.format("ORD-%06d", order.id)),
+            "STATUS: PREPARING",
+            "",
+            "DELIVERY ADDRESS",
+        }
 local PROTOCOL = "order_system_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
 local NEXT_STATUSES = {
+    waiting = { "preparing", "cancelled" },
     preparing = { "shipping", "cancelled" },
-    shipping = { "completed", "cancelled" },
+    shipping = { "cancelled" },
 }
 
 local function clearScreen()
@@ -159,9 +167,10 @@ local function showOrders(orders, page, errorMessage)
             local y = 5 + (index - first) * 3
             local statusColor = order.status == "shipping" and colors.lime
                 or (order.status == "preparing" and colors.orange or colors.yellow)
-            writeAt(2, y, "#" .. order.id, colors.cyan)
-            writeAt(8, y, order.status:upper(), statusColor)
-            writeAt(22, y, money(order.total), colors.white)
+            writeAt(2, y, order.reference or string.format("ORD-%06d", order.id), colors.cyan)
+            writeAt(18, y, order.status:upper(), statusColor)
+            local width = term.getSize()
+            writeAt(width - 9, y, money(order.total), colors.white)
             local summary = {}
             for _, item in ipairs(order.items) do
                 table.insert(summary, item.quantity .. "x " .. item.name)
@@ -194,6 +203,8 @@ local function showDeliveryDetails(orders)
     drawHeader("ORDER #" .. order.id, "STATUS  /  " .. order.status:upper())
     sectionTitle(4, "DELIVERY ADDRESS")
     local width, height = term.getSize()
+    writeAt(2, 5, "PAYMENT REF: "
+        .. (order.reference or string.format("ORD-%06d", order.id)), colors.cyan)
     local address = order.deliveryAddress or "No address was saved. Update and restart server.lua."
     local lineWidth = math.max(1, width - 3)
     local row = 6
