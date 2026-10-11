@@ -1,10 +1,3 @@
-        local lines = {
-            "ORDER RECEIPT #" .. order.id,
-            "PAYMENT REF: " .. (order.reference or string.format("ORD-%06d", order.id)),
-            "STATUS: PREPARING",
-            "",
-            "DELIVERY ADDRESS",
-        }
 local PROTOCOL = "order_system_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
@@ -105,7 +98,13 @@ local function printReceipt(order)
 
         if not printer.newPage() then error("The printer could not start a page; check paper and ink.") end
         local width, height = printer.getPageSize()
-        local lines = { "ORDER RECEIPT #" .. order.id, "STATUS: PREPARING", "", "DELIVERY ADDRESS" }
+        local lines = {
+            "ORDER RECEIPT #" .. order.id,
+            "PAYMENT REF: " .. (order.reference or string.format("ORD-%06d", order.id)),
+            "STATUS: PREPARING",
+            "",
+            "DELIVERY ADDRESS",
+        }
         appendReceiptText(lines, order.deliveryAddress or "ADDRESS NOT SAVED", width)
         table.insert(lines, "")
         table.insert(lines, "ITEMS")
