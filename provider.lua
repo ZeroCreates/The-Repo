@@ -98,14 +98,14 @@ local function showOrders(orders, page, errorMessage)
         writeAt(2, 6, "No active orders right now.", colors.lightGray)
     else
         local _, height = term.getSize()
-        local perPage = math.max(1, math.floor((height - 8) / 2))
+        local perPage = math.max(1, math.floor((height - 8) / 3))
         local pageCount = math.max(1, math.ceil(#orders / perPage))
         page = math.max(1, math.min(page, pageCount))
         local first = (page - 1) * perPage + 1
         local last = math.min(#orders, first + perPage - 1)
         for index = first, last do
             local order = orders[index]
-            local y = 5 + (index - first) * 2
+            local y = 5 + (index - first) * 3
             local statusColor = order.status == "ready" and colors.lime
                 or (order.status == "preparing" and colors.orange or colors.yellow)
             writeAt(2, y, "#" .. order.id, colors.cyan)
@@ -116,6 +116,7 @@ local function showOrders(orders, page, errorMessage)
                 table.insert(summary, item.quantity .. "x " .. item.name)
             end
             writeAt(2, y + 1, table.concat(summary, ", "), colors.lightGray)
+            writeAt(2, y + 2, "TO " .. (order.deliveryAddress or "ADDRESS NOT SET"), colors.yellow)
         end
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end

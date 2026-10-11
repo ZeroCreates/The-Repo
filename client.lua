@@ -205,6 +205,7 @@ local function showOrder(order)
     drawHeader("ORDER #" .. order.id, "STATUS  /  " .. order.status:upper())
     sectionTitle(4, "ORDER SUMMARY")
     local width, height = term.getSize()
+    writeAt(2, 5, "DELIVER TO  " .. (order.deliveryAddress or "Address not provided"), colors.yellow)
     local visible = math.min(#order.items, math.max(0, height - 11))
     for index = 1, visible do
         local item = order.items[index]
@@ -227,7 +228,22 @@ local function placeOrder(cart)
         showNotice("CART IS EMPTY", "Add a product before placing an order.")
         return
     end
-    local response, err = request({ type = "place_order", items = items })
+
+    drawHeader("DELIVERY ADDRESS", "ENTER THE ADDRESS FOR THIS ORDER")
+    writeAt(2, 5, "Up to 100 characters.", colors.lightGray)
+    term.setCursorPos(2, 7)
+    write("Address: ")
+    local deliveryAddress = read():match("^%s*(.-)%s*$")
+    if #deliveryAddress < 1 or #deliveryAddress > 100 or deliveryAddress:find("%c") then
+        showNotice("INVALID ADDRESS", "Enter a non-empty address up to 100 characters.")
+        return
+    end
+
+    local response, err = request({
+        type = "place_order",
+        items = items,
+        deliveryAddress = deliveryAddress,
+    })
     if not response then
         showNotice("ORDER NOT PLACED", err)
         return

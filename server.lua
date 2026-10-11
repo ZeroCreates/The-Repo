@@ -78,6 +78,13 @@ local function findProduct(productId)
 end
 
 local function createOrder(senderId, message)
+    if type(message.deliveryAddress) ~= "string" then
+        return sendError(senderId, "A delivery address is required.")
+    end
+    local deliveryAddress = message.deliveryAddress:match("^%s*(.-)%s*$")
+    if #deliveryAddress < 1 or #deliveryAddress > 100 or deliveryAddress:find("%c") then
+        return sendError(senderId, "Enter a valid delivery address up to 100 characters.")
+    end
     if type(message.items) ~= "table" or #message.items < 1 or #message.items > 50 then
         return sendError(senderId, "Choose at least one available product.")
     end
@@ -114,6 +121,7 @@ local function createOrder(senderId, message)
     local order = {
         id = state.nextId,
         providerId = orderProviderId,
+        deliveryAddress = deliveryAddress,
         items = items,
         total = total,
         status = "received",
