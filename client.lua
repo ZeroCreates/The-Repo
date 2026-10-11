@@ -239,6 +239,20 @@ local function placeOrder(cart)
         return
     end
 
+    drawHeader("ORDER REVIEW", "CONFIRM THE DELIVERY ADDRESS BEFORE PLACING")
+    sectionTitle(4, "DELIVER TO")
+    local width, height = term.getSize()
+    local lineWidth = math.max(1, width - 3)
+    local row = 6
+    for start = 1, #deliveryAddress, lineWidth do
+        writeAt(2, row, deliveryAddress:sub(start, start + lineWidth - 1), colors.yellow)
+        row = row + 1
+    end
+    writeAt(2, math.min(row + 1, height - 5), "Items in order: " .. #items, colors.lightGray)
+    writeAt(2, height - 4, "Place this order? [y/N]", colors.lime)
+    term.setCursorPos(2, height - 3)
+    if read():lower() ~= "y" then return end
+
     local response, err = request({
         type = "place_order",
         items = items,
@@ -249,6 +263,12 @@ local function placeOrder(cart)
         return
     end
     for productId in pairs(cart) do cart[productId] = nil end
+    if not response.order or response.order.deliveryAddress ~= deliveryAddress then
+        local orderId = response.order and response.order.id or "unknown"
+        showNotice("SERVER NEEDS UPDATE", "Order #" .. orderId
+            .. " was accepted, but the server did not save its address. Update and restart server.lua.")
+        return
+    end
     showOrder(response.order)
 end
 

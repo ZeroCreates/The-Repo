@@ -199,9 +199,9 @@ ItemEvents.rightClicked(event => {
     return
   }
 
-  item.shrink(1)
   setBalance(player, balance + cents)
   player.tell('Redeemed 1 ' + item.id + ' for ' + formatMoney(cents)
     + '. Balance: ' + formatMoney(balance + cents))
+  item.shrink(1)
   event.cancel()
 })

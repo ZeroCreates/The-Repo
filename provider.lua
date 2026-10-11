@@ -77,6 +77,54 @@ local function money(cents)
     return string.format("$%.2f", cents / 100)
 end
 
+local function appendReceiptText(lines, text, width)
+    text = tostring(text)
+    for start = 1, #text, width do
+        table.insert(lines, text:sub(start, start + width - 1))
+    end
+end
+
+local function printReceipt(order)
+    local printer = peripheral.find("printer")
+    if not printer then return false, "No printer is attached to this provider computer." end
+
+    local ok, err = pcall(function()
+        if printer.getPaperLevel() < 1 then error("The printer needs paper.") end
+        if printer.getInkLevel() < 1 then error("The printer needs ink.") end
+
+        if not printer.newPage() then error("The printer could not start a page; check paper and ink.") end
+        local width, height = printer.getPageSize()
+        local lines = { "ORDER RECEIPT #" .. order.id, "STATUS: PREPARING", "", "DELIVERY ADDRESS" }
+        appendReceiptText(lines, order.deliveryAddress or "ADDRESS NOT SAVED", width)
+        table.insert(lines, "")
+        table.insert(lines, "ITEMS")
+        for _, item in ipairs(order.items) do
+            appendReceiptText(lines, item.quantity .. " x " .. item.name
+                .. "  " .. money(item.lineTotal), width)
+        end
+        table.insert(lines, "")
+        appendReceiptText(lines, "TOTAL: " .. money(order.total), width)
+
+        local lineIndex = 1
+        while lineIndex <= #lines do
+            printer.setPageTitle("Order #" .. order.id)
+            for row = 1, height do
+                if lineIndex > #lines then break end
+                printer.setCursorPos(1, row)
+                printer.write(lines[lineIndex]:sub(1, width))
+                lineIndex = lineIndex + 1
+            end
+            if not printer.endPage() then error("The printer could not finish the receipt page.") end
+            if lineIndex <= #lines and not printer.newPage() then
+                error("The printer could not start another page; check paper and ink.")
+            end
+        end
+    end)
+
+    if not ok then return false, tostring(err) end
+    return true, "Receipt printed for order #" .. order.id .. "."
+end
+
 local function refreshOrders()
     local response, err = request({ type = "provider_list" })
     if not response then return nil, err end
@@ -116,11 +164,44 @@ local function showOrders(orders, page, errorMessage)
                 table.insert(summary, item.quantity .. "x " .. item.name)
             end
             writeAt(2, y + 1, table.concat(summary, ", "), colors.lightGray)
-            writeAt(2, y + 2, "TO " .. (order.deliveryAddress or "ADDRESS NOT SET"), colors.yellow)
+            writeAt(2, y + 2, "DELIVER TO: " .. (order.deliveryAddress or "ADDRESS NOT SET"), colors.yellow)
         end
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
     return readChoice("p products  |  u update status  |  n/v pages  |  r refresh  |  q quit"), page
+    return readChoice("p products  |  d delivery details  |  u status  |  n/v pages  |  r refresh  |  q quit"), page
+end
+
+local function showDeliveryDetails(orders)
+    drawHeader("DELIVERY DETAILS", "LOOK UP AN ACTIVE ORDER BY NUMBER")
+    term.setCursorPos(2, 6)
+    write("Order number: ")
+    local orderId = tonumber(read())
+    local order
+    for _, candidate in ipairs(orders) do
+        if candidate.id == orderId then
+            order = candidate
+            break
+        end
+    end
+    if not order then
+        showNotice("ORDER NOT FOUND", "Refresh the provider order list and try again.")
+        return
+    end
+
+    drawHeader("ORDER #" .. order.id, "STATUS  /  " .. order.status:upper())
+    sectionTitle(4, "DELIVERY ADDRESS")
+    local width, height = term.getSize()
+    local address = order.deliveryAddress or "No address was saved. Update and restart server.lua."
+    local lineWidth = math.max(1, width - 3)
+    local row = 6
+    for start = 1, #address, lineWidth do
+        writeAt(2, row, address:sub(start, start + lineWidth - 1), colors.yellow)
+        row = row + 1
+        if row >= height - 4 then break end
+    end
+    writeAt(2, height - 1, "Press Enter to return.", colors.lightGray)
+    read()
 end
 
 local function productPage(products, page, errorMessage)
@@ -263,7 +344,12 @@ local function updateStatus()
         showNotice("UPDATE REJECTED", err)
         return
     end
-    showNotice("STATUS UPDATED", "Order #" .. response.order.id .. " is now " .. response.order.status .. ".")
+    if response.order.status == "preparing" then
+        local printed, printMessage = printReceipt(response.order)
+        showNotice(printed and "RECEIPT PRINTED" or "STATUS UPDATED, NO RECEIPT", printMessage)
+    else
+        showNotice("STATUS UPDATED", "Order #" .. response.order.id .. " is now " .. response.order.status .. ".")
+    end
 end
 
 openModems()
@@ -274,6 +360,8 @@ while true do
     orderPage = shownOrderPage or orderPage
     if choice == "u" then
         updateStatus()
+    elseif choice == "d" then
+        showDeliveryDetails(orders or {})
     elseif choice == "p" then
         local products, productError = refreshProducts()
         local productPageNumber = 1
