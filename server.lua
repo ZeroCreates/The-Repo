@@ -238,32 +238,99 @@ local function updateOrder(senderId, message)
     rednet.send(senderId, { type = "status_updated", order = order }, PROTOCOL)
 end
 
+local display = peripheral.find("monitor")
+if display then display.setTextScale(0.5) end
+
+local function drawDashboard()
+    local screen = display or term.current()
+    local width, height = screen.getSize()
+    screen.setBackgroundColor(colors.black)
+    screen.setTextColor(colors.white)
+    screen.clear()
+
+    local function line(row, text, foreground, background)
+        if row < 1 or row > height then return end
+        screen.setCursorPos(1, row)
+        screen.setTextColor(foreground or colors.white)
+        screen.setBackgroundColor(background or colors.black)
+        screen.write(tostring(text):sub(1, width))
+        screen.setBackgroundColor(colors.black)
+    end
+
+    line(1, string.rep(" ", width), colors.white, colors.cyan)
+    line(1, " ORDER SERVER  |  ONLINE", colors.white, colors.cyan)
+
+    local activeCount, completedCount, cancelledCount, liveProducts = 0, 0, 0, 0
+    for _, order in ipairs(state.orders) do
+        if order.status == "completed" then
+            completedCount = completedCount + 1
+        elseif order.status == "cancelled" then
+            cancelledCount = cancelledCount + 1
+        else
+            activeCount = activeCount + 1
+        end
+    end
+    for _, product in ipairs(state.products) do
+        if product.available then liveProducts = liveProducts + 1 end
+    end
+
+    line(2, " Computer #" .. os.getComputerID() .. "  |  Protocol: " .. PROTOCOL, colors.lightGray)
+    line(4, "ACTIVE ORDERS  " .. activeCount, colors.white, colors.blue)
+    line(5, "COMPLETED " .. completedCount .. "   CANCELLED " .. cancelledCount, colors.lightGray)
+    line(6, "CATALOG  " .. liveProducts .. " live / " .. #state.products .. " total", colors.lime)
+    line(8, "RECENT ACTIVE ORDERS", colors.white, colors.blue)
+
+    local row = 9
+    local shown = 0
+    for index = #state.orders, 1, -1 do
+        local order = state.orders[index]
+        if order.status ~= "completed" and order.status ~= "cancelled" then
+            if row + 2 > height then break end
+            local statusColor = order.status == "shipping" and colors.lime
+                or (order.status == "preparing" and colors.orange or colors.yellow)
+            line(row, "#" .. order.id .. "  " .. order.status:upper() .. "  $"
+                .. string.format("%.2f", order.total / 100), statusColor)
+            local summary = {}
+            for _, item in ipairs(order.items) do
+                table.insert(summary, item.quantity .. "x " .. item.name)
+            end
+            line(row + 1, table.concat(summary, ", "), colors.lightGray)
+            line(row + 2, "TO " .. (order.deliveryAddress or "ADDRESS NOT SAVED"), colors.yellow)
+            row = row + 3
+            shown = shown + 1
+        end
+    end
+    if shown == 0 then line(9, "Waiting for orders...", colors.lightGray) end
+end
+
 openModems()
 state = loadState()
 saveState()
 rednet.host(PROTOCOL, SERVER_NAME)
-print("Order server running as " .. SERVER_NAME)
-print("Saved orders: " .. #state.orders .. "  |  Products: " .. #state.products)
+drawDashboard()
 
 while true do
-    local senderId, message = rednet.receive(PROTOCOL)
-    if type(message) ~= "table" then
-        sendError(senderId, "Invalid request.")
-    elseif message.type == "place_order" then
-        createOrder(senderId, message)
-    elseif message.type == "get_order" then
-        getOrder(senderId, message)
-    elseif message.type == "provider_list" then
-        listOrders(senderId)
-    elseif message.type == "get_catalog" then
-        getCatalog(senderId)
-    elseif message.type == "get_provider_products" then
-        listProviderProducts(senderId)
-    elseif message.type == "publish_product" then
-        publishProduct(senderId, message)
-    elseif message.type == "set_status" then
-        updateOrder(senderId, message)
-    else
-        sendError(senderId, "Unknown request.")
+    local senderId, message = rednet.receive(PROTOCOL, 1)
+    if senderId then
+        if type(message) ~= "table" then
+            sendError(senderId, "Invalid request.")
+        elseif message.type == "place_order" then
+            createOrder(senderId, message)
+        elseif message.type == "get_order" then
+            getOrder(senderId, message)
+        elseif message.type == "provider_list" then
+            listOrders(senderId)
+        elseif message.type == "get_catalog" then
+            getCatalog(senderId)
+        elseif message.type == "get_provider_products" then
+            listProviderProducts(senderId)
+        elseif message.type == "publish_product" then
+            publishProduct(senderId, message)
+        elseif message.type == "set_status" then
+            updateOrder(senderId, message)
+        else
+            sendError(senderId, "Unknown request.")
+        end
     end
+    drawDashboard()
 end
