@@ -1,6 +1,9 @@
 local PROTOCOL = "order_system_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
+local TIMEOUT = 5
+local touchMonitor
+local touchMonitorSide
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -53,9 +56,16 @@ local function openModems()
         if peripheral.getType(name) == "modem" then
             if not rednet.isOpen(name) then rednet.open(name) end
             found = true
+        elseif peripheral.getType(name) == "monitor" and not touchMonitor then
+            touchMonitor = peripheral.wrap(name)
+            touchMonitorSide = name
         end
     end
     if not found then error("Attach a modem before starting the ordering page.") end
+    if touchMonitor then
+        touchMonitor.setTextScale(0.5)
+        term.redirect(touchMonitor)
+    end
 end
 
 local function request(message)
@@ -148,6 +158,7 @@ local function cartCount(cart)
 end
 
 local function renderCatalog(products, cart, errorMessage, page)
+    local visibleProducts = {}
     drawHeader("THE MARKET", "INDEPENDENT PROVIDERS  /  LIVE CATALOG")
     sectionTitle(4, "AVAILABLE PRODUCTS  |  " .. #products)
     if errorMessage then
@@ -165,6 +176,7 @@ local function renderCatalog(products, cart, errorMessage, page)
         for index = first, last do
             local product = products[index]
             local y = 5 + (index - first) * 2
+            visibleProducts[#visibleProducts + 1] = { product = product, firstRow = y }
             writeAt(2, y, "#" .. product.id, colors.cyan)
             writeAt(8, y, product.name:sub(1, math.max(1, width - 20)), colors.white)
             writeAt(width - 9, y, money(product.price), colors.lime)
@@ -173,9 +185,50 @@ local function renderCatalog(products, cart, errorMessage, page)
         end
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
-    return readChoice("a add by ID| c cart " .. cartCount(cart)
-        .. "| s track| n/v pages| r refresh| q quit"), page
+    local help = "a add by ID| c cart " .. cartCount(cart)
+        .. "| s track| n/v pages| r refresh| q quit"
+    if not touchMonitor then return readChoice(help), page end
+
+    local options = {
+        { key = "a", label = "Add by ID" },
+        { key = "c", label = "Cart " .. cartCount(cart) },
+        { key = "s", label = "Track" },
+        { key = "n", label = "Next page" },
+        { key = "v", label = "Prev page" },
+        { key = "r", label = "Refresh" },
+        { key = "q", label = "Quit" },
+    }
+    local width, height = term.getSize()
+    local columns = 4
+    local rows = math.ceil(#options / columns)
+    local buttons = {}
+    for index, option in ipairs(options) do
+        local row = height - rows + math.floor((index - 1) / columns)
+        local column = (index - 1) % columns
+        local left = math.floor(column * width / columns) + 1
+        local right = math.floor((column + 1) * width / columns)
+        writeAt(left, row, "[" .. option.label .. "]", colors.black, colors.lightBlue)
+        buttons[index] = { key = option.key, row = row, left = left, right = right }
+    end
+
+    while true do
+        local event, side, x, y = os.pullEvent()
+        if event == "monitor_touch" and side == touchMonitorSide then
+            for _, button in ipairs(buttons) do
+                if y == button.row and x >= button.left and x <= button.right then
+                    return button.key, page
+                end
+            end
+            for _, entry in ipairs(visibleProducts) do
+                if y >= entry.firstRow and y <= entry.firstRow + 1 then
+                    return "product", page, entry.product
+                end
+            end
+        end
+    end
 end
+
+local addSelectedProduct
 
 local function addToCart(products, cart)
     drawHeader("ADD TO CART", "ENTER A PRODUCT ID FROM THE MARKET")
@@ -187,6 +240,10 @@ local function addToCart(products, cart)
         showNotice("PRODUCT NOT FOUND", "Refresh the market and choose an available product ID.")
         return
     end
+    addSelectedProduct(products, product, cart)
+end
+
+addSelectedProduct = function(products, product, cart)
     for existingId in pairs(cart) do
         local existingProduct = findProduct(products, existingId)
         if existingProduct and existingProduct.providerId ~= product.providerId then
@@ -367,11 +424,13 @@ local cart = {}
 local page = 1
 while true do
     local products, err = fetchCatalog()
-    local choice, shownPage = renderCatalog(products or {}, cart, err, page)
+    local choice, shownPage, selectedProduct = renderCatalog(products or {}, cart, err, page)
     page = shownPage or page
     if choice == "a" then
         if products then addToCart(products, cart)
         else showNotice("MARKET UNAVAILABLE", err) end
+    elseif choice == "product" then
+        if products and selectedProduct then addSelectedProduct(products, selectedProduct, cart) end
     elseif choice == "c" then
         local cartChoice = cartPage(products or {}, cart)
         if cartChoice == "p" then
