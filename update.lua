@@ -1,5 +1,11 @@
+local ROLE_FILES = {
+    server = "server.lua",
+    provider = "provider.lua",
+    client = "client.lua",
+}
 local CONFIG_FILE = "order-system.cfg"
-local FILES = { "server.lua", "client.lua", "provider.lua", "update.lua", "install.lua" }
+local OWNER_REPO = "ZeroCreates/The-Repo"
+local BRANCH = "main"
 
 local function fetch(url)
     local response, err = http.get(url)
@@ -19,22 +25,23 @@ if not http or not http.get then
     error("Enable the ComputerCraft HTTP API, then run update again.")
 end
 if not fs.exists(CONFIG_FILE) then
-    error("No install configuration found. Run install.lua first.")
+    error("No installed role found. Run install.lua and choose a role first.")
 end
 
 local configFile = fs.open(CONFIG_FILE, "r")
 local configText = configFile.readAll()
 configFile.close()
 local parsed, config = pcall(textutils.unserialize, configText)
-if not parsed or type(config) ~= "table"
-    or type(config.ownerRepo) ~= "string" or type(config.branch) ~= "string" then
-    error("The saved GitHub source is invalid. Run install.lua again.")
+if not parsed or type(config) ~= "table" or not ROLE_FILES[config.role] then
+    error("The installed role configuration is invalid. Run install.lua again.")
 end
 
+local roleFile = ROLE_FILES[config.role]
+local FILES = { roleFile, "update.lua", "install.lua" }
 local staged = {}
-print("Checking GitHub for updates: " .. config.ownerRepo .. " (" .. config.branch .. ")")
+print("Checking GitHub for updates: " .. OWNER_REPO .. " (" .. BRANCH .. ")")
 for _, name in ipairs(FILES) do
-    local url = "https://raw.githubusercontent.com/" .. config.ownerRepo .. "/" .. config.branch .. "/" .. name
+    local url = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/" .. name
     local contents, err = fetch(url)
     if not contents then
         for _, tempPath in pairs(staged) do
@@ -73,4 +80,12 @@ for _, name in ipairs(FILES) do
     table.insert(installed, name)
 end
 
-print("All scripts updated. Restart running scripts to use the new versions.")
+for otherRole, otherFile in pairs(ROLE_FILES) do
+    if otherRole ~= config.role and fs.exists(otherFile) then
+        local backup = otherFile .. ".bak"
+        if fs.exists(backup) then fs.delete(backup) end
+        fs.move(otherFile, backup)
+    end
+end
+
+print("The " .. config.role .. " system is updated. Restart running scripts to use the new version.")

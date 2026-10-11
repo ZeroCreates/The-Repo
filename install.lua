@@ -1,5 +1,12 @@
+local ROLE_FILES = {
+    server = "server.lua",
+    provider = "provider.lua",
+    client = "client.lua",
+}
+local FILES
+local OWNER_REPO = "ZeroCreates/The-Repo"
+local BRANCH = "main"
 local CONFIG_FILE = "order-system.cfg"
-local FILES = { "server.lua", "client.lua", "provider.lua", "update.lua", "install.lua" }
 
 local function validSource(ownerRepo, branch)
     return type(ownerRepo) == "string"
@@ -59,28 +66,29 @@ local function installStaged(staged)
     return true
 end
 
-local ownerRepo, branch = ...
-if not ownerRepo then
-    write("GitHub repository (owner/repo): ")
-    ownerRepo = read()
-end
-if not branch then
-    write("Branch [main]: ")
-    branch = read()
-    if branch == "" then branch = "main" end
-end
-
-if not validSource(ownerRepo, branch) then
-    error("Use a GitHub owner/repo and a valid branch name.")
+if not validSource(OWNER_REPO, BRANCH) then
+    error("The configured GitHub repository or branch is invalid.")
 end
 if not http or not http.get then
     error("Enable the ComputerCraft HTTP API, then run install again.")
 end
 
-print("Downloading order system from " .. ownerRepo .. " (" .. branch .. ")...")
+print("Choose one system role to install:")
+print("1. Server")
+print("2. Provider")
+print("3. Client")
+write("> ")
+local choice = read():lower()
+local roles = { ["1"] = "server", ["2"] = "provider", ["3"] = "client" }
+local role = ROLE_FILES[choice] and choice or roles[choice]
+if not role then error("Choose 1, 2, or 3.") end
+
+local roleFile = ROLE_FILES[role]
+FILES = { roleFile, "update.lua", "install.lua" }
+print("Downloading order system from " .. OWNER_REPO .. " (" .. BRANCH .. ")...")
 local staged = {}
 for _, name in ipairs(FILES) do
-    local url = "https://raw.githubusercontent.com/" .. ownerRepo .. "/" .. branch .. "/" .. name
+    local url = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/" .. name
     local contents, err = fetch(url)
     if not contents then
         for _, tempPath in pairs(staged) do
@@ -94,7 +102,18 @@ for _, name in ipairs(FILES) do
     print("Downloaded " .. name)
 end
 
-write("Install these files into this computer's root? [y/N] ")
+local startupContents = "shell.run(" .. textutils.serialize(role) .. ")\n"
+local startupTemp, startupError = stageFile("startup.lua", startupContents)
+if not startupTemp then
+    for _, tempPath in pairs(staged) do
+        if fs.exists(tempPath) then fs.delete(tempPath) end
+    end
+    error(startupError)
+end
+staged["startup.lua"] = startupTemp
+table.insert(FILES, "startup.lua")
+
+write("Install the " .. role .. " system only? Other role scripts will be backed up. [y/N] ")
 if read():lower() ~= "y" then
     for _, tempPath in pairs(staged) do
         if fs.exists(tempPath) then fs.delete(tempPath) end
@@ -107,6 +126,16 @@ local ok, err = installStaged(staged)
 if not ok then error("Installation failed: " .. err) end
 
 local config = fs.open(CONFIG_FILE, "w")
-config.write(textutils.serialize({ ownerRepo = ownerRepo, branch = branch }))
+if not config then error("Installed, but could not save the selected role configuration.") end
+config.write(textutils.serialize({ role = role }))
 config.close()
-print("Installed. Run client, provider, or server to start.")
+
+for otherRole, otherFile in pairs(ROLE_FILES) do
+    if otherRole ~= role and fs.exists(otherFile) then
+        local backup = otherFile .. ".bak"
+        if fs.exists(backup) then fs.delete(backup) end
+        fs.move(otherFile, backup)
+    end
+end
+
+print("Installed the " .. role .. " system. Run " .. role .. " to start.")
