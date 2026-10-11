@@ -1,7 +1,10 @@
 local PROTOCOL = "order_system_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
-local STATUSES = { "preparing", "ready", "completed", "cancelled" }
+local NEXT_STATUSES = {
+    preparing = { "shipping", "cancelled" },
+    shipping = { "completed", "cancelled" },
+}
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -154,7 +157,7 @@ local function showOrders(orders, page, errorMessage)
         for index = first, last do
             local order = orders[index]
             local y = 5 + (index - first) * 3
-            local statusColor = order.status == "ready" and colors.lime
+            local statusColor = order.status == "shipping" and colors.lime
                 or (order.status == "preparing" and colors.orange or colors.yellow)
             writeAt(2, y, "#" .. order.id, colors.cyan)
             writeAt(8, y, order.status:upper(), statusColor)
@@ -317,7 +320,7 @@ local function toggleProduct(products)
     })
 end
 
-local function updateStatus()
+local function updateStatus(orders)
     drawHeader("UPDATE ORDER", "STATUS CHANGES ARE VALIDATED BY THE SERVER")
     writeAt(2, 5, "Order number:", colors.white)
     term.setCursorPos(2, 6)
@@ -326,13 +329,33 @@ local function updateStatus()
         showNotice("INVALID ORDER", "Enter a valid order number.")
         return
     end
-    writeAt(2, 8, "New: preparing / ready / completed / cancelled", colors.lightGray)
+    local order
+    for _, candidate in ipairs(orders) do
+        if candidate.id == orderId then
+            order = candidate
+            break
+        end
+    end
+    if not order then
+        showNotice("ORDER NOT FOUND", "Refresh the provider order list and try again.")
+        return
+    end
+    local allowed = NEXT_STATUSES[order.status]
+    if not allowed then
+        showNotice("NO STATUS CHANGES", "This order is already " .. order.status .. ".")
+        return
+    end
+    local labels = {}
+    for _, nextStatus in ipairs(allowed) do
+        table.insert(labels, nextStatus:sub(1, 1):upper() .. nextStatus:sub(2))
+    end
+    writeAt(2, 8, "Allowed: " .. table.concat(labels, " / "), colors.lightGray)
     term.setCursorPos(2, 10)
     local status = read():lower()
     if status == "q" then return end
     local valid = false
-    for _, allowed in ipairs(STATUSES) do
-        if status == allowed then valid = true break end
+    for _, nextStatus in ipairs(allowed) do
+        if status == nextStatus then valid = true break end
     end
     if not valid then
         showNotice("UNKNOWN STATUS", "Choose a listed status.")
@@ -343,22 +366,28 @@ local function updateStatus()
         showNotice("UPDATE REJECTED", err)
         return
     end
-    if response.order.status == "preparing" then
-        local printed, printMessage = printReceipt(response.order)
-        showNotice(printed and "RECEIPT PRINTED" or "STATUS UPDATED, NO RECEIPT", printMessage)
-    else
-        showNotice("STATUS UPDATED", "Order #" .. response.order.id .. " is now " .. response.order.status .. ".")
-    end
+    showNotice("STATUS UPDATED", "Order #" .. response.order.id .. " is now " .. response.order.status .. ".")
 end
 
 openModems()
 local orderPage = 1
+local printedReceipts = {}
 while true do
     local orders, err = refreshOrders()
+    if orders then
+        for _, order in ipairs(orders) do
+            if order.status == "preparing" and not printedReceipts[order.id]
+                and peripheral.find("printer") then
+                printedReceipts[order.id] = true
+                local printed, printMessage = printReceipt(order)
+                if not printed then showNotice("RECEIPT NOT PRINTED", printMessage) end
+            end
+        end
+    end
     local choice, shownOrderPage = showOrders(orders or {}, orderPage, err)
     orderPage = shownOrderPage or orderPage
     if choice == "u" then
-        updateStatus()
+        updateStatus(orders or {})
     elseif choice == "d" then
         showDeliveryDetails(orders or {})
     elseif choice == "p" then

@@ -6,9 +6,8 @@ local TEMP_FILE = "orders.db.tmp"
 local state
 
 local ALLOWED_TRANSITIONS = {
-    received = { preparing = true, cancelled = true },
-    preparing = { ready = true, cancelled = true },
-    ready = { completed = true },
+    preparing = { shipping = true, cancelled = true },
+    shipping = { completed = true, cancelled = true },
     completed = {},
     cancelled = {},
 }
@@ -48,6 +47,13 @@ local function loadState()
     end
     loaded.products = type(loaded.products) == "table" and loaded.products or {}
     loaded.nextProductId = loaded.nextProductId or 1
+    for _, order in ipairs(loaded.orders) do
+        if order.status == "received" then
+            order.status = "preparing"
+        elseif order.status == "ready" then
+            order.status = "shipping"
+        end
+    end
     return loaded
 end
 
@@ -124,7 +130,7 @@ local function createOrder(senderId, message)
         deliveryAddress = deliveryAddress,
         items = items,
         total = total,
-        status = "received",
+        status = "preparing",
         createdAt = now,
         updatedAt = now,
     }
@@ -234,6 +240,7 @@ end
 
 openModems()
 state = loadState()
+saveState()
 rednet.host(PROTOCOL, SERVER_NAME)
 print("Order server running as " .. SERVER_NAME)
 print("Saved orders: " .. #state.orders .. "  |  Products: " .. #state.products)
