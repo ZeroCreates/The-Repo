@@ -478,7 +478,7 @@ function redeemHeldItem(event) {
   }
 
   if (itemId === 'minecraft:paper') {
-    const data = getMoneyNoteData(item)
+    var data = getMoneyNoteData(item)
     if (data && readMoneyNoteString(data, 'signature') === NOTE_SIGNATURE) {
       var noteCents = Number(readMoneyNoteAmount(data))
       if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > MAX_BALANCE) {
