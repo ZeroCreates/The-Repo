@@ -63,10 +63,7 @@ function formatMoney(cents) {
 }
 
 function createCurrencyItem(denomination, count) {
-  const itemData = '{' + CURRENCY_TAG
-    + ':{signature:"' + CURRENCY_SIGNATURE + '",kind:"' + denomination.kind
-    + '",amount:' + denomination.cents + '}}'
-  return Item.of(denomination.item + itemData, count)
+  return Item.of(denomination.item, count)
     .withCustomName(Text.of(denomination.label))
 }
 
@@ -212,34 +209,27 @@ ServerEvents.commandRegistry(event => {
   )
 })
 
-ItemEvents.rightClicked(event => {
+function redeemHeldItem(event) {
   const player = event.player
   const item = event.item
+  if (!item) return
   const itemId = String(item.id)
-
-  const customData = item.getCustomData()
-  const currencyData = customData && customData[CURRENCY_TAG]
   const denomination = CURRENCY_DENOMINATIONS.find(entry => entry.item === itemId)
-  const legacyDenomination = currencyData && currencyData.signature === CURRENCY_SIGNATURE
-    ? CURRENCY_DENOMINATIONS.find(entry =>
-      entry.kind === currencyData.kind && entry.cents === Number(currencyData.amount)
-        && entry.legacyItem === itemId)
-    : null
-  const redeemedDenomination = denomination || legacyDenomination
+  const redeemedDenomination = denomination
   if (redeemedDenomination) {
-    const cents = redeemedDenomination.cents
+    var billCents = redeemedDenomination.cents
 
-    const balance = getBalance(player)
-    if (balance + cents > MAX_BALANCE) {
+    var balance = getBalance(player)
+    if (balance + billCents > MAX_BALANCE) {
       player.tell('Your balance is too high to redeem this bill or coin.')
       event.cancel()
       return
     }
 
     item.shrink(1)
-    setBalance(player, balance + cents)
-    player.tell('Redeemed ' + redeemedDenomination.label + ' for ' + formatMoney(cents)
-      + '. Balance: ' + formatMoney(balance + cents))
+    setBalance(player, balance + billCents)
+    player.tell('Redeemed ' + redeemedDenomination.label + ' for ' + formatMoney(billCents)
+      + '. Balance: ' + formatMoney(balance + billCents))
     event.cancel()
     return
   }
@@ -247,37 +237,39 @@ ItemEvents.rightClicked(event => {
   if (itemId === 'minecraft:paper') {
     const data = customData && customData[NOTE_TAG]
     if (data && data.signature === NOTE_SIGNATURE) {
-      const cents = Number(data.amount)
-      if (isNaN(cents) || cents < 1 || cents % 1 !== 0 || cents > MAX_BALANCE) {
+      var noteCents = Number(data.amount)
+      if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > MAX_BALANCE) {
         player.tell('This money note is invalid.')
         return
       }
 
-      const balance = getBalance(player)
-      if (balance + cents > MAX_BALANCE) {
+      var balance = getBalance(player)
+      if (balance + noteCents > MAX_BALANCE) {
         player.tell('Your balance is too high to redeem this note.')
         return
       }
 
       item.shrink(1)
-      setBalance(player, balance + cents)
-      player.tell('Redeemed ' + formatMoney(cents) + '. Balance: ' + formatMoney(balance + cents))
+      setBalance(player, balance + noteCents)
+      player.tell('Redeemed ' + formatMoney(noteCents) + '. Balance: ' + formatMoney(balance + noteCents))
       event.cancel()
       return
     }
   }
 
-  const cents = Number(redeemableItems[itemId])
-  if (isNaN(cents) || cents < 1 || cents % 1 !== 0) return
-  const balance = getBalance(player)
-  if (balance + cents > MAX_BALANCE) {
+  var redeemableCents = Number(redeemableItems[itemId])
+  if (isNaN(redeemableCents) || redeemableCents < 1 || redeemableCents % 1 !== 0) return
+  var balance = getBalance(player)
+  if (balance + redeemableCents > MAX_BALANCE) {
     player.tell('Your balance is too high to redeem this item.')
     return
   }
 
-  setBalance(player, balance + cents)
-  player.tell('Redeemed 1 ' + itemId + ' for ' + formatMoney(cents)
-    + '. Balance: ' + formatMoney(balance + cents))
+  setBalance(player, balance + redeemableCents)
+  player.tell('Redeemed 1 ' + itemId + ' for ' + formatMoney(redeemableCents)
+    + '. Balance: ' + formatMoney(balance + redeemableCents))
   item.shrink(1)
   event.cancel()
-})
+}
+
+ItemEvents.rightClicked(event => redeemHeldItem(event))
