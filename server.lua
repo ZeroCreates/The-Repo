@@ -40,13 +40,14 @@ end
 
 local function loadState()
     if not fs.exists(DATA_FILE) and not fs.exists(BACKUP_FILE) then
-        return { nextId = 1, nextProductId = 1, orders = {}, products = {} }
+        return { nextId = 1, nextProductId = 1, orders = {}, products = {}, providerAddresses = {} }
     end
     local loaded = readState(DATA_FILE) or readState(BACKUP_FILE)
     if not loaded then
         error("Could not read orders.db or its backup; refusing to overwrite order data.")
     end
     loaded.products = type(loaded.products) == "table" and loaded.products or {}
+    loaded.providerAddresses = type(loaded.providerAddresses) == "table" and loaded.providerAddresses or {}
     loaded.nextProductId = loaded.nextProductId or 1
     for _, order in ipairs(loaded.orders) do
         order.reference = order.reference or string.format("ORD-%06d", order.id)
@@ -98,6 +99,7 @@ local function createOrder(senderId, message)
     end
     local items, total, seen = {}, 0, {}
     local orderProviderId
+    local orderProviderAddress
     for _, requested in ipairs(message.items) do
         if type(requested) ~= "table" or type(requested.productId) ~= "number"
             or requested.productId % 1 ~= 0 or type(requested.quantity) ~= "number"
@@ -112,6 +114,7 @@ local function createOrder(senderId, message)
             return sendError(senderId, "Place separate orders for products from different providers.")
         end
         orderProviderId = product.providerId
+        orderProviderAddress = state.providerAddresses[tostring(product.providerId)] or product.providerAddress
         seen[requested.productId] = true
         local lineTotal = product.price * requested.quantity
         total = total + lineTotal
@@ -131,6 +134,7 @@ local function createOrder(senderId, message)
         reference = string.format("ORD-%06d", state.nextId),
         customerId = senderId,
         providerId = orderProviderId,
+        providerAddress = orderProviderAddress,
         deliveryAddress = deliveryAddress,
         items = items,
         total = total,
@@ -150,10 +154,28 @@ local function getOrder(senderId, message)
     end
     local order = findOrder(message.orderId)
     if not order then return sendError(senderId, "Order not found.") end
-    if order.customerId and order.customerId ~= senderId then
+    if order.customerId ~= senderId and order.providerId ~= senderId then
         return sendError(senderId, "That order belongs to another customer.")
     end
-    rednet.send(senderId, { type = "order_status", order = order }, PROTOCOL)
+    local orderCopy = {}
+    for key, value in pairs(order) do orderCopy[key] = value end
+    orderCopy.providerAddress = orderCopy.providerAddress
+        or state.providerAddresses[tostring(order.providerId)]
+    rednet.send(senderId, { type = "order_status", order = orderCopy }, PROTOCOL)
+end
+
+local function getProviderAddress(senderId, message)
+    if type(message.orderId) ~= "number" or message.orderId % 1 ~= 0 then
+        return sendError(senderId, "Enter a valid order number.")
+    end
+    local order = findOrder(message.orderId)
+    if not order then return sendError(senderId, "Order not found.") end
+    local address = order.providerAddress
+        or state.providerAddresses[tostring(order.providerId)]
+    if not address or address == "" then
+        return sendError(senderId, "The provider has not registered a Packager address.")
+    end
+    rednet.send(senderId, { type = "provider_address", address = address }, PROTOCOL)
 end
 
 local function completeOrder(senderId, message)
@@ -180,10 +202,31 @@ local function listOrders(senderId)
     for _, order in ipairs(state.orders) do
         if (order.providerId == senderId or order.providerId == nil)
             and order.status ~= "completed" and order.status ~= "cancelled" then
-            table.insert(active, order)
+            local orderCopy = {}
+            for key, value in pairs(order) do orderCopy[key] = value end
+            orderCopy.providerAddress = orderCopy.providerAddress
+                or state.providerAddresses[tostring(order.providerId)]
+            table.insert(active, orderCopy)
         end
     end
     rednet.send(senderId, { type = "provider_orders", orders = active }, PROTOCOL)
+end
+
+local function setProviderAddress(senderId, message)
+    if type(message.address) ~= "string" then
+        return sendError(senderId, "A provider Packager address is required.")
+    end
+    local address = message.address:match("^%s*(.-)%s*$")
+    if #address < 1 or #address > 64 or address:find("%c") then
+        return sendError(senderId, "Provider addresses must be 1 to 64 characters without control characters.")
+    end
+
+    state.providerAddresses[tostring(senderId)] = address
+    for _, product in ipairs(state.products) do
+        if product.providerId == senderId then product.providerAddress = address end
+    end
+    saveState()
+    rednet.send(senderId, { type = "provider_address_saved", address = address }, PROTOCOL)
 end
 
 local function getCatalog(senderId)
@@ -214,6 +257,17 @@ local function publishProduct(senderId, message)
     if #name < 1 or #name > 32 or name:find("%c") then
         return sendError(senderId, "Product names must be 1 to 32 characters without control characters.")
     end
+    local providerAddress = state.providerAddresses[tostring(senderId)]
+    if submitted.providerAddress ~= nil then
+        if type(submitted.providerAddress) ~= "string" then
+            return sendError(senderId, "The provider Packager address is invalid.")
+        end
+        providerAddress = submitted.providerAddress:match("^%s*(.-)%s*$")
+        if #providerAddress < 1 or #providerAddress > 64 or providerAddress:find("%c") then
+            return sendError(senderId, "Provider addresses must be 1 to 64 characters without control characters.")
+        end
+        state.providerAddresses[tostring(senderId)] = providerAddress
+    end
 
     local product
     if submitted.id ~= nil then
@@ -241,6 +295,7 @@ local function publishProduct(senderId, message)
     providerName = providerName:match("^%s*(.-)%s*$")
     if providerName == "" then providerName = "Provider #" .. senderId end
     product.providerName = providerName:sub(1, 24)
+    product.providerAddress = providerAddress
     product.updatedAt = os.epoch("utc")
     saveState()
     rednet.send(senderId, { type = "product_saved", product = product }, PROTOCOL)
@@ -347,10 +402,14 @@ while true do
             createOrder(senderId, message)
         elseif message.type == "get_order" then
             getOrder(senderId, message)
+        elseif message.type == "get_provider_address" then
+            getProviderAddress(senderId, message)
         elseif message.type == "complete_order" then
             completeOrder(senderId, message)
         elseif message.type == "provider_list" then
             listOrders(senderId)
+        elseif message.type == "set_provider_address" then
+            setProviderAddress(senderId, message)
         elseif message.type == "get_catalog" then
             getCatalog(senderId)
         elseif message.type == "get_provider_products" then

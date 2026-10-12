@@ -1,6 +1,9 @@
 local PROTOCOL = "order_system_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
+local ADDRESS_FILE = "provider-address.cfg"
+local providerAddress
+local providerAddressRegistered = false
 
 local NEXT_STATUSES = {
     waiting = { "preparing", "cancelled" },
@@ -123,6 +126,16 @@ local function request(message)
     return response
 end
 
+local function registerProviderAddress()
+    if not providerAddress or providerAddress == "" then
+        return nil, "Set your Packager address first."
+    end
+    local response, err = request({ type = "set_provider_address", address = providerAddress })
+    if not response then return nil, err end
+    providerAddressRegistered = true
+    return true
+end
+
 local function money(cents)
     return string.format("$%.2f", cents / 100)
 end
@@ -182,6 +195,9 @@ local function printReceipt(order)
 end
 
 local function refreshOrders()
+    if providerAddress and not providerAddressRegistered then
+        registerProviderAddress()
+    end
     local response, err = request({ type = "provider_list" })
     if not response then return nil, err end
     return response.orders or {}
@@ -191,6 +207,52 @@ local function refreshProducts()
     local response, err = request({ type = "get_provider_products" })
     if not response then return nil, err end
     return response.products or {}
+end
+
+local function loadProviderAddress()
+    if not fs.exists(ADDRESS_FILE) then return "" end
+    local file = fs.open(ADDRESS_FILE, "r")
+    if not file then return "" end
+    local contents = file.readAll()
+    file.close()
+    local ok, saved = pcall(textutils.unserialize, contents)
+    if ok and type(saved) == "table" and type(saved.address) == "string" then
+        return saved.address
+    end
+    return ""
+end
+
+local function saveProviderAddress(address)
+    local file = fs.open(ADDRESS_FILE, "w")
+    if not file then return false end
+    file.write(textutils.serialize({ address = address }))
+    file.close()
+    return true
+end
+
+local function configureProviderAddress()
+    drawHeader("PROVIDER PACKAGER ADDRESS", "THIS ADDRESS IS SAVED WITH YOUR ORDERS")
+    writeAt(2, 5, "Enter the exact address shown by your Create Packager.", colors.lightGray)
+    writeAt(2, 7, "Current: " .. (providerAddress ~= "" and providerAddress or "not set"), colors.yellow)
+    term.setCursorPos(2, 9)
+    write("Address: ")
+    local address = read():match("^%s*(.-)%s*$")
+    if address == "" then return end
+    if #address > 64 or address:find("%c") then
+        showNotice("INVALID ADDRESS", "Use 1 to 64 characters without control characters.")
+        return
+    end
+    if not saveProviderAddress(address) then
+        showNotice("ADDRESS NOT SAVED", "Could not write " .. ADDRESS_FILE .. ".")
+        return
+    end
+    providerAddress = address
+    local registered, err = registerProviderAddress()
+    if not registered then
+        showNotice("ADDRESS SAVED LOCALLY", "Could not register with the order server: " .. err)
+        return
+    end
+    showNotice("ADDRESS REGISTERED", "Orders will route to " .. address .. ".")
 end
 
 local function drawOrderMonitor(orders, errorMessage)
@@ -282,7 +344,7 @@ local function showOrders(orders, page, errorMessage)
     end
 
     local visibleOrders = render()
-    local buttons = drawChoices("p products|n/v pages|r refresh|q quit")
+    local buttons = drawChoices("p products|a address|n/v pages|r refresh|q quit")
     local refreshTimer = os.startTimer(5)
     while true do
         local event, eventId, x, y = os.pullEvent()
@@ -296,7 +358,7 @@ local function showOrders(orders, page, errorMessage)
             end
             drawOrderMonitor(orders, errorMessage)
             visibleOrders = render()
-            buttons = drawChoices("p products|n/v pages|r refresh|q quit")
+            buttons = drawChoices("p products|a address|n/v pages|r refresh|q quit")
             refreshTimer = os.startTimer(5)
         elseif event == "mouse_click" and eventId == 1 then
             for _, choice in ipairs(buttons) do
@@ -428,7 +490,12 @@ local function publishProduct(product)
     if not providerName or providerName == "" then
         providerName = "Provider #" .. os.getComputerID()
     end
+    if not providerAddress or providerAddress == "" then
+        showNotice("ADDRESS REQUIRED", "Set your Packager address before publishing products.")
+        return false
+    end
     product.providerName = providerName
+    product.providerAddress = providerAddress
     local response, err = request({ type = "publish_product", product = product })
     if not response then
         showNotice("PRODUCT NOT SAVED", err)
@@ -510,6 +577,15 @@ updateStatus = function(order)
 end
 
 openModems()
+providerAddress = loadProviderAddress()
+if providerAddress == "" then
+    configureProviderAddress()
+else
+    local registered, addressError = registerProviderAddress()
+    if not registered then
+        showNotice("ADDRESS NOT REGISTERED", "Could not register with the order server: " .. addressError)
+    end
+end
 local orderPage = 1
 local productPageNumber = 1
 local printedReceipts = {}
@@ -554,6 +630,8 @@ while true do
                 break
             end
         end
+    elseif choice == "a" then
+        configureProviderAddress()
     elseif choice == "n" then
         orderPage = orderPage + 1
     elseif choice == "v" then
