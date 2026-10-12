@@ -127,7 +127,7 @@ function createCurrencyItem(denomination, count) {
 function createMoneyNote(cents) {
   const noteData = '{' + NOTE_TAG + ':{signature:"' + NOTE_SIGNATURE
     + '",amount:' + cents + '}}'
-  return Item.of('minecraft:paper'+noteData)
+  return Item.of('minecraft:paper', 1, noteData)
     .withCustomName(Text.of('Money Note ' + formatMoney(cents)))
 }
 
