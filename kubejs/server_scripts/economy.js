@@ -165,7 +165,9 @@ ServerEvents.commandRegistry(event => {
       .executes(context => {
         const player = context.source.player
         if (!player) return 0
-        player.tell('Balance: ' + formatMoney(getBalance(player)))
+        const account = getSavingsAccount(player)
+        player.tell('Checking: ' + formatMoney(getBalance(player))
+          + ' | Savings: ' + formatMoney(account.savings))
         return 1
       })
   )
