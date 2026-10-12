@@ -2,7 +2,6 @@ local ROLE_FILES = {
     server = "server.lua",
     provider = "provider.lua",
     client = "client.lua",
-    packager = "packager.lua",
 }
 local CONFIG_FILE = "order-system.cfg"
 local OWNER_REPO = "ZeroCreates/The-Repo"

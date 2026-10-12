@@ -128,7 +128,7 @@ end
 
 local function registerProviderAddress()
     if not providerAddress or providerAddress == "" then
-        return nil, "Set your Packager address first."
+        return nil, "Set your payment address first."
     end
     local response, err = request({ type = "set_provider_address", address = providerAddress })
     if not response then return nil, err end
@@ -231,8 +231,8 @@ local function saveProviderAddress(address)
 end
 
 local function configureProviderAddress()
-    drawHeader("PROVIDER PACKAGER ADDRESS", "THIS ADDRESS IS SAVED WITH YOUR ORDERS")
-    writeAt(2, 5, "Enter the exact address shown by your Create Packager.", colors.lightGray)
+    drawHeader("PROVIDER PAYMENT ADDRESS", "THIS ADDRESS IS SAVED WITH YOUR ORDERS")
+    writeAt(2, 5, "Enter the address customers should send payments to.", colors.lightGray)
     writeAt(2, 7, "Current: " .. (providerAddress ~= "" and providerAddress or "not set"), colors.yellow)
     term.setCursorPos(2, 9)
     write("Address: ")
@@ -491,7 +491,7 @@ local function publishProduct(product)
         providerName = "Provider #" .. os.getComputerID()
     end
     if not providerAddress or providerAddress == "" then
-        showNotice("ADDRESS REQUIRED", "Set your Packager address before publishing products.")
+        showNotice("ADDRESS REQUIRED", "Set your payment address before publishing products.")
         return false
     end
     product.providerName = providerName

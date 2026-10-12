@@ -149,9 +149,11 @@ local function printOrderReceipt(order)
             "ORDER RECEIPT #" .. order.id,
             "PAYMENT REF: " .. (order.reference or string.format("ORD-%06d", order.id)),
             "STATUS: " .. order.status:upper(),
-            "",
-            "DELIVERY ADDRESS",
+            "PROVIDER PAYMENT ADDRESS",
         }
+        appendReceiptText(lines, order.providerAddress or "NOT REGISTERED", width)
+        table.insert(lines, "")
+        table.insert(lines, "DELIVERY ADDRESS")
         appendReceiptText(lines, order.deliveryAddress or "ADDRESS NOT SAVED", width)
         table.insert(lines, "")
         table.insert(lines, "ITEMS")
@@ -337,14 +339,27 @@ local function showOrder(order)
     local width, height = term.getSize()
     writeAt(2, 5, "MAIL PAYMENT WITH REFERENCE: "
         .. (order.reference or string.format("ORD-%06d", order.id)), colors.cyan)
-    writeAt(2, 6, "DELIVER TO  " .. (order.deliveryAddress or "Address not provided"), colors.yellow)
-    local visible = math.min(#order.items, math.max(0, height - 12))
+    local providerAddress = order.providerAddress or "Not registered"
+    local providerLabel = "PAY PROVIDER: "
+    local addressWidth = math.max(1, width - #providerLabel - 2)
+    writeAt(2, 6, providerLabel .. providerAddress:sub(1, addressWidth), colors.lime)
+    local row = 7
+    for start = addressWidth + 1, #providerAddress, math.max(1, width - 2) do
+        writeAt(2, row, providerAddress:sub(start, start + width - 3), colors.lime)
+        row = row + 1
+    end
+    writeAt(2, row, "DELIVER TO  " .. (order.deliveryAddress or "Address not provided"), colors.yellow)
+    row = row + 1
+    local visible = math.min(#order.items, math.max(0, math.floor((height - 4 - row) / 2)))
     for index = 1, visible do
         local item = order.items[index]
-        local y = 6 + index
+        local y = row + (index - 1) * 2
         writeAt(2, y, item.quantity .. "x " .. item.name, colors.white)
         writeAt(2, y + 1, item.providerName or "Provider", colors.lightGray)
         writeAt(width - 9, y, money(item.lineTotal), colors.lime)
+    end
+    if visible < #order.items then
+        writeAt(2, height - 3, "See the printed receipt for remaining items.", colors.yellow)
     end
     writeAt(2, height - 4, "TOTAL  " .. money(order.total), colors.white, colors.blue)
     if mouseEnabled then

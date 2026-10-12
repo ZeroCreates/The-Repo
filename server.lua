@@ -128,6 +128,9 @@ local function createOrder(senderId, message)
             lineTotal = lineTotal,
         })
     end
+    if not orderProviderAddress or orderProviderAddress == "" then
+        return sendError(senderId, "This provider has not registered a payment address yet.")
+    end
     local now = os.epoch("utc")
     local order = {
         id = state.nextId,
@@ -162,20 +165,6 @@ local function getOrder(senderId, message)
     orderCopy.providerAddress = orderCopy.providerAddress
         or state.providerAddresses[tostring(order.providerId)]
     rednet.send(senderId, { type = "order_status", order = orderCopy }, PROTOCOL)
-end
-
-local function getProviderAddress(senderId, message)
-    if type(message.orderId) ~= "number" or message.orderId % 1 ~= 0 then
-        return sendError(senderId, "Enter a valid order number.")
-    end
-    local order = findOrder(message.orderId)
-    if not order then return sendError(senderId, "Order not found.") end
-    local address = order.providerAddress
-        or state.providerAddresses[tostring(order.providerId)]
-    if not address or address == "" then
-        return sendError(senderId, "The provider has not registered a Packager address.")
-    end
-    rednet.send(senderId, { type = "provider_address", address = address }, PROTOCOL)
 end
 
 local function completeOrder(senderId, message)
@@ -214,7 +203,7 @@ end
 
 local function setProviderAddress(senderId, message)
     if type(message.address) ~= "string" then
-        return sendError(senderId, "A provider Packager address is required.")
+        return sendError(senderId, "A provider payment address is required.")
     end
     local address = message.address:match("^%s*(.-)%s*$")
     if #address < 1 or #address > 64 or address:find("%c") then
@@ -402,8 +391,6 @@ while true do
             createOrder(senderId, message)
         elseif message.type == "get_order" then
             getOrder(senderId, message)
-        elseif message.type == "get_provider_address" then
-            getProviderAddress(senderId, message)
         elseif message.type == "complete_order" then
             completeOrder(senderId, message)
         elseif message.type == "provider_list" then

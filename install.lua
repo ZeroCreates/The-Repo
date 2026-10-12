@@ -2,7 +2,6 @@ local ROLE_FILES = {
     server = "server.lua",
     provider = "provider.lua",
     client = "client.lua",
-    packager = "packager.lua",
 }
 local FILES
 local OWNER_REPO = "ZeroCreates/The-Repo"
@@ -78,15 +77,9 @@ print("Choose one system role to install:")
 print("1. Server")
 print("2. Provider")
 print("3. Client")
-print("4. Packager")
 write("> ")
 local choice = read():lower()
-local roles = {
-    ["1"] = "server",
-    ["2"] = "provider",
-    ["3"] = "client",
-    ["4"] = "packager",
-}
+local roles = { ["1"] = "server", ["2"] = "provider", ["3"] = "client" }
 local role = ROLE_FILES[choice] and choice or roles[choice]
 if not role then error("Choose 1, 2, or 3.") end
 
