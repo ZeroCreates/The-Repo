@@ -127,7 +127,7 @@ function createCurrencyItem(denomination, count) {
 function createMoneyNote(cents) {
   const noteData = '{' + NOTE_TAG + ':{signature:"' + NOTE_SIGNATURE
     + '",amount:' + cents + '}}'
-  return Item.of('minecraft:paper', 1, noteData)
+  return Item.of('minecraft:paper' + noteData)
     .withCustomName(Text.of('Money Note ' + formatMoney(cents)))
 }
 
@@ -456,9 +456,11 @@ function redeemHeldItem(event) {
   }
 
   if (itemId === 'minecraft:paper') {
-    const data = item.nbt && item.nbt[NOTE_TAG]
-    if (data && data.signature === NOTE_SIGNATURE) {
-      var noteCents = Number(data.amount)
+    const itemNbt = item.nbt
+    if (itemNbt && itemNbt.contains(NOTE_TAG)) {
+      const data = itemNbt.getCompound(NOTE_TAG)
+      if (data.getString('signature') !== NOTE_SIGNATURE) return
+      var noteCents = data.getInt('amount')
       if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > MAX_BALANCE) {
         player.tell('This money note is invalid.')
         return
