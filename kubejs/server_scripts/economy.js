@@ -67,6 +67,13 @@ function createCurrencyItem(denomination, count) {
     .withCustomName(Text.of(denomination.label))
 }
 
+function createMoneyNote(cents) {
+  const noteData = '{' + NOTE_TAG + ':{signature:"' + NOTE_SIGNATURE
+    + '",amount:' + cents + '}}'
+  return Item.of('minecraft:paper', noteData)
+    .withCustomName(Text.of('Money Note ' + formatMoney(cents)))
+}
+
 function giveCurrency(player, cents) {
   let remaining = cents
   CURRENCY_DENOMINATIONS.forEach(denomination => {
@@ -127,6 +134,30 @@ ServerEvents.commandRegistry(event => {
           setBalance(player, balance - cents)
           giveCurrency(player, cents)
           player.tell('Withdrew ' + formatMoney(cents) + '.')
+          return 1
+        })
+      )
+  )
+
+  event.register(
+    Commands.literal('moneynote')
+      .requires(source => source.hasPermission(2))
+      .then(Commands.argument('amount', Arguments.DOUBLE.create(event))
+        .executes(context => {
+          const player = context.source.player
+          if (!player) {
+            sendCommandMessage(context.source, 'Run this command as a player to receive the note.')
+            return 0
+          }
+
+          const cents = readAmountCents(Arguments.DOUBLE.getResult(context, 'amount'), false)
+          if (cents == null || cents < 1) {
+            player.tell('Enter an amount from $0.01 to $20,000,000.00.')
+            return 0
+          }
+
+          player.give(createMoneyNote(cents))
+          player.tell('Created a money note worth ' + formatMoney(cents) + '.')
           return 1
         })
       )
@@ -235,7 +266,7 @@ function redeemHeldItem(event) {
   }
 
   if (itemId === 'minecraft:paper') {
-    const data = customData && customData[NOTE_TAG]
+    const data = item.nbt && item.nbt[NOTE_TAG]
     if (data && data.signature === NOTE_SIGNATURE) {
       var noteCents = Number(data.amount)
       if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > MAX_BALANCE) {
