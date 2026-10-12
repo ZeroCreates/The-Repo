@@ -3,7 +3,9 @@ const MAX_BALANCE = 2000000000
 const BALANCE_KEY = 'kubejs_economy_balance_cents'
 const NOTE_TAG = 'kubejs_economy_note'
 const NOTE_SIGNATURE = 'the_repo_economy_note_v1'
+const BALANCES_FILE = 'kubejs/data/economy_balances.json'
 const REDEEMABLES_FILE = 'kubejs/data/economy_redeemables.json'
+let balances = JsonIO.read(BALANCES_FILE) || {}
 const savedRedeemableItems = JsonIO.read(REDEEMABLES_FILE)
 let redeemableItems = savedRedeemableItems || {}
 if (!savedRedeemableItems) {
@@ -11,16 +13,32 @@ if (!savedRedeemableItems) {
   JsonIO.write(REDEEMABLES_FILE, redeemableItems)
 }
 
+function playerBalanceId(player) {
+  return player.uuid.toString()
+}
+
+function saveBalances() {
+  JsonIO.write(BALANCES_FILE, balances)
+}
+
 function getBalance(player) {
-  const data = player.persistentData
-  if (!data.contains(BALANCE_KEY)) {
-    data.putInt(BALANCE_KEY, STARTING_BALANCE)
+  const id = playerBalanceId(player)
+  if (balances[id] == null) {
+    let startingBalance = STARTING_BALANCE
+    const oldData = player.persistentData
+    if (oldData.contains(BALANCE_KEY)) {
+      const oldBalance = oldData.getInt(BALANCE_KEY)
+      if (oldBalance >= 0 && oldBalance <= MAX_BALANCE) startingBalance = oldBalance
+    }
+    balances[id] = startingBalance
+    saveBalances()
   }
-  return data.getInt(BALANCE_KEY)
+  return Number(balances[id])
 }
 
 function setBalance(player, cents) {
-  player.persistentData.putInt(BALANCE_KEY, cents)
+  balances[playerBalanceId(player)] = cents
+  saveBalances()
 }
 
 function formatMoney(cents) {

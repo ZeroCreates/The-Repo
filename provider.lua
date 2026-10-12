@@ -7,6 +7,7 @@ local NEXT_STATUSES = {
     preparing = { "shipping", "cancelled" },
     shipping = { "cancelled" },
 }
+local orderMonitor
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -97,6 +98,9 @@ local function openModems()
         if peripheral.getType(name) == "modem" then
             if not rednet.isOpen(name) then rednet.open(name) end
             found = true
+        elseif peripheral.getType(name) == "monitor" and not orderMonitor then
+            orderMonitor = peripheral.wrap(name)
+            orderMonitor.setTextScale(0.5)
         end
     end
     if not found then error("Attach a modem before starting the provider page.") end
@@ -189,56 +193,120 @@ local function refreshProducts()
     return response.products or {}
 end
 
-local function showOrders(orders, page, errorMessage)
-    drawHeader("PROVIDER CONSOLE", "LIVE ORDERS  /  REDNET ORDER SYSTEM")
-    sectionTitle(4, "ACTIVE ORDERS  |  " .. #orders)
-    local visibleOrders = {}
-    local firstRow = 5
+local function drawOrderMonitor(orders, errorMessage)
+    if not orderMonitor then return end
 
-    if errorMessage then
-        writeAt(2, 6, errorMessage, colors.red)
-    elseif #orders == 0 then
-        writeAt(2, 6, "No active orders right now.", colors.lightGray)
-    else
-        local _, height = term.getSize()
-        local perPage = math.max(1, math.floor((height - 8) / 3))
-        local pageCount = math.max(1, math.ceil(#orders / perPage))
-        page = math.max(1, math.min(page, pageCount))
-        local first = (page - 1) * perPage + 1
-        local last = math.min(#orders, first + perPage - 1)
-
-        for index = first, last do
-            local order = orders[index]
-            local y = firstRow + (index - first) * 3
-            table.insert(visibleOrders, { order = order, firstRow = y })
-            local statusColor = order.status == "shipping" and colors.lime
-                or (order.status == "preparing" and colors.orange or colors.yellow)
-            writeAt(2, y, order.reference or string.format("ORD-%06d", order.id), colors.cyan)
-            writeAt(18, y, order.status:upper(), statusColor)
-            local width = term.getSize()
-            writeAt(width - 9, y, money(order.total), colors.white)
-            local summary = {}
-            for _, item in ipairs(order.items) do
-                table.insert(summary, item.quantity .. "x " .. item.name)
-            end
-            writeAt(2, y + 1, table.concat(summary, ", "), colors.lightGray)
-            writeAt(2, y + 2, "DELIVER TO: " .. (order.deliveryAddress or "ADDRESS NOT SET"), colors.yellow)
-        end
-        writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
+    local width, height = orderMonitor.getSize()
+    local function line(row, text, foreground, background)
+        if row < 1 or row > height then return end
+        orderMonitor.setCursorPos(1, row)
+        orderMonitor.setTextColor(foreground or colors.white)
+        orderMonitor.setBackgroundColor(background or colors.black)
+        orderMonitor.write(tostring(text):sub(1, width))
+        orderMonitor.setBackgroundColor(colors.black)
     end
 
+    orderMonitor.setBackgroundColor(colors.black)
+    orderMonitor.setTextColor(colors.white)
+    orderMonitor.clear()
+    line(1, string.rep(" ", width), colors.white, colors.cyan)
+    line(1, " PROVIDER ORDERS  |  " .. #orders .. " ACTIVE", colors.white, colors.cyan)
+
+    if errorMessage then
+        line(3, "SERVER CONNECTION ERROR", colors.red)
+        line(4, errorMessage, colors.lightGray)
+        return
+    end
+    if #orders == 0 then
+        line(3, "No active orders. Waiting for orders...", colors.lightGray)
+        return
+    end
+
+    local row = 3
+    for index = #orders, 1, -1 do
+        local order = orders[index]
+        if row + 2 > height then break end
+        local statusColor = order.status == "shipping" and colors.lime
+            or (order.status == "preparing" and colors.orange or colors.yellow)
+        line(row, (order.reference or string.format("ORD-%06d", order.id))
+            .. "  " .. order.status:upper() .. "  " .. money(order.total), statusColor)
+        local summary = {}
+        for _, item in ipairs(order.items) do
+            table.insert(summary, item.quantity .. "x " .. item.name)
+        end
+        line(row + 1, table.concat(summary, ", "), colors.lightGray)
+        line(row + 2, "TO " .. (order.deliveryAddress or "ADDRESS NOT SET"), colors.yellow)
+        row = row + 3
+    end
+end
+
+local function showOrders(orders, page, errorMessage)
+    local function render()
+        drawHeader("PROVIDER CONSOLE", "LIVE ORDERS  /  REDNET ORDER SYSTEM")
+        sectionTitle(4, "ACTIVE ORDERS  |  " .. #orders)
+        local visibleOrders = {}
+        local firstRow = 5
+
+        if errorMessage then
+            writeAt(2, 6, errorMessage, colors.red)
+        elseif #orders == 0 then
+            writeAt(2, 6, "No active orders right now.", colors.lightGray)
+        else
+            local _, height = term.getSize()
+            local perPage = math.max(1, math.floor((height - 8) / 3))
+            local pageCount = math.max(1, math.ceil(#orders / perPage))
+            page = math.max(1, math.min(page, pageCount))
+            local first = (page - 1) * perPage + 1
+            local last = math.min(#orders, first + perPage - 1)
+
+            for index = first, last do
+                local order = orders[index]
+                local y = firstRow + (index - first) * 3
+                table.insert(visibleOrders, { order = order, firstRow = y })
+                local statusColor = order.status == "shipping" and colors.lime
+                    or (order.status == "preparing" and colors.orange or colors.yellow)
+                writeAt(2, y, order.reference or string.format("ORD-%06d", order.id), colors.cyan)
+                writeAt(18, y, order.status:upper(), statusColor)
+                local width = term.getSize()
+                writeAt(width - 9, y, money(order.total), colors.white)
+                local summary = {}
+                for _, item in ipairs(order.items) do
+                    table.insert(summary, item.quantity .. "x " .. item.name)
+                end
+                writeAt(2, y + 1, table.concat(summary, ", "), colors.lightGray)
+                writeAt(2, y + 2, "DELIVER TO: " .. (order.deliveryAddress or "ADDRESS NOT SET"), colors.yellow)
+            end
+            writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
+        end
+        return visibleOrders
+    end
+
+    local visibleOrders = render()
     local buttons = drawChoices("p products|n/v pages|r refresh|q quit")
+    local refreshTimer = os.startTimer(5)
     while true do
-        local event, button, x, y = os.pullEvent()
-        if event == "mouse_click" and button == 1 then
+        local event, eventId, x, y = os.pullEvent()
+        if event == "timer" and eventId == refreshTimer then
+            local freshOrders, refreshError = refreshOrders()
+            if freshOrders then
+                orders = freshOrders
+                errorMessage = nil
+            else
+                errorMessage = refreshError
+            end
+            drawOrderMonitor(orders, errorMessage)
+            visibleOrders = render()
+            buttons = drawChoices("p products|n/v pages|r refresh|q quit")
+            refreshTimer = os.startTimer(5)
+        elseif event == "mouse_click" and eventId == 1 then
             for _, choice in ipairs(buttons) do
                 if y == choice.row and x >= choice.left and x <= choice.right then
-                    return choice.key, page
+                    return choice.key, page, nil, orders
                 end
             end
             for _, entry in ipairs(visibleOrders) do
                 if y >= entry.firstRow and y <= entry.firstRow + 2 then
-                    return "order", page, entry.order
+                    return "order", page, entry.order, orders
                 end
             end
         end
@@ -449,6 +517,7 @@ local printedReceipts = {}
 while true do
     local orders, orderError = refreshOrders()
     orders = orders or {}
+    drawOrderMonitor(orders, orderError)
 
     if not peripheral.find("printer") then
         printedReceipts = {}
@@ -462,8 +531,9 @@ while true do
         end
     end
 
-    local choice, shownOrderPage, selectedOrder = showOrders(orders, orderPage, orderError)
+    local choice, shownOrderPage, selectedOrder, currentOrders = showOrders(orders, orderPage, orderError)
     orderPage = shownOrderPage or orderPage
+    orders = currentOrders or orders
     if choice == "order" then
         showOrderActions(selectedOrder)
     elseif choice == "p" then
