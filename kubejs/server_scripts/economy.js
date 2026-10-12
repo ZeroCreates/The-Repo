@@ -3,8 +3,23 @@ const MAX_BALANCE = 2000000000
 const BALANCE_KEY = 'kubejs_economy_balance_cents'
 const NOTE_TAG = 'kubejs_economy_note'
 const NOTE_SIGNATURE = 'the_repo_economy_note_v1'
+const CURRENCY_TAG = 'kubejs_economy_currency'
+const CURRENCY_SIGNATURE = 'the_repo_economy_currency_v1'
 const BALANCES_FILE = 'kubejs/data/economy_balances.json'
 const REDEEMABLES_FILE = 'kubejs/data/economy_redeemables.json'
+const CURRENCY_DENOMINATIONS = [
+  { kind: 'bill', cents: 10000, item: 'kubejs:bill_100', legacyItem: 'minecraft:paper', label: '$100 Bill' },
+  { kind: 'bill', cents: 5000, item: 'kubejs:bill_50', legacyItem: 'minecraft:paper', label: '$50 Bill' },
+  { kind: 'bill', cents: 2000, item: 'kubejs:bill_20', legacyItem: 'minecraft:paper', label: '$20 Bill' },
+  { kind: 'bill', cents: 1000, item: 'kubejs:bill_10', legacyItem: 'minecraft:paper', label: '$10 Bill' },
+  { kind: 'bill', cents: 500, item: 'kubejs:bill_5', legacyItem: 'minecraft:paper', label: '$5 Bill' },
+  { kind: 'bill', cents: 100, item: 'kubejs:bill_1', legacyItem: 'minecraft:paper', label: '$1 Bill' },
+  { kind: 'coin', cents: 50, item: 'kubejs:coin_50', legacyItem: 'minecraft:diamond', label: '50¢ Coin' },
+  { kind: 'coin', cents: 25, item: 'kubejs:coin_25', legacyItem: 'minecraft:diamond', label: '25¢ Coin' },
+  { kind: 'coin', cents: 10, item: 'kubejs:coin_10', legacyItem: 'minecraft:diamond', label: '10¢ Coin' },
+  { kind: 'coin', cents: 5, item: 'kubejs:coin_5', legacyItem: 'minecraft:diamond', label: '5¢ Coin' },
+  { kind: 'coin', cents: 1, item: 'kubejs:coin_1', legacyItem: 'minecraft:diamond', label: '1¢ Coin' }
+]
 let balances = JsonIO.read(BALANCES_FILE) || {}
 const savedRedeemableItems = JsonIO.read(REDEEMABLES_FILE)
 let redeemableItems = savedRedeemableItems || {}
@@ -45,6 +60,25 @@ function formatMoney(cents) {
   const dollars = Math.floor(cents / 100)
   const remainder = cents % 100
   return '$' + dollars + '.' + (remainder < 10 ? '0' : '') + remainder
+}
+
+function createCurrencyItem(denomination, count) {
+  const itemData = '{' + CURRENCY_TAG
+    + ':{signature:"' + CURRENCY_SIGNATURE + '",kind:"' + denomination.kind
+    + '",amount:' + denomination.cents + '}}'
+  return Item.of(denomination.item + itemData, count)
+    .withCustomName(Text.of(denomination.label))
+}
+
+function giveCurrency(player, cents) {
+  let remaining = cents
+  CURRENCY_DENOMINATIONS.forEach(denomination => {
+    const count = Math.floor(remaining / denomination.cents)
+    if (count > 0) {
+      player.give(createCurrencyItem(denomination, count))
+      remaining %= denomination.cents
+    }
+  })
 }
 
 function readAmountCents(value, allowZero) {
@@ -94,11 +128,7 @@ ServerEvents.commandRegistry(event => {
           }
 
           setBalance(player, balance - cents)
-          const noteData = '{' + NOTE_TAG + ':{signature:"' + NOTE_SIGNATURE
-            + '",amount:' + cents + '}}'
-          const note = Item.of('minecraft:paper' + noteData)
-            .withCustomName(Text.of(formatMoney(cents) + ' Money Note'))
-          player.give(note)
+          giveCurrency(player, cents)
           player.tell('Withdrew ' + formatMoney(cents) + '.')
           return 1
         })
@@ -185,8 +215,36 @@ ServerEvents.commandRegistry(event => {
 ItemEvents.rightClicked(event => {
   const player = event.player
   const item = event.item
-  if (item.id === 'minecraft:paper') {
-    const customData = item.getCustomData()
+  const itemId = String(item.id)
+
+  const customData = item.getCustomData()
+  const currencyData = customData && customData[CURRENCY_TAG]
+  const denomination = CURRENCY_DENOMINATIONS.find(entry => entry.item === itemId)
+  const legacyDenomination = currencyData && currencyData.signature === CURRENCY_SIGNATURE
+    ? CURRENCY_DENOMINATIONS.find(entry =>
+      entry.kind === currencyData.kind && entry.cents === Number(currencyData.amount)
+        && entry.legacyItem === itemId)
+    : null
+  const redeemedDenomination = denomination || legacyDenomination
+  if (redeemedDenomination) {
+    const cents = redeemedDenomination.cents
+
+    const balance = getBalance(player)
+    if (balance + cents > MAX_BALANCE) {
+      player.tell('Your balance is too high to redeem this bill or coin.')
+      event.cancel()
+      return
+    }
+
+    item.shrink(1)
+    setBalance(player, balance + cents)
+    player.tell('Redeemed ' + redeemedDenomination.label + ' for ' + formatMoney(cents)
+      + '. Balance: ' + formatMoney(balance + cents))
+    event.cancel()
+    return
+  }
+
+  if (itemId === 'minecraft:paper') {
     const data = customData && customData[NOTE_TAG]
     if (data && data.signature === NOTE_SIGNATURE) {
       const cents = Number(data.amount)
@@ -209,7 +267,7 @@ ItemEvents.rightClicked(event => {
     }
   }
 
-  const cents = Number(redeemableItems[item.id])
+  const cents = Number(redeemableItems[itemId])
   if (isNaN(cents) || cents < 1 || cents % 1 !== 0) return
   const balance = getBalance(player)
   if (balance + cents > MAX_BALANCE) {
@@ -218,7 +276,7 @@ ItemEvents.rightClicked(event => {
   }
 
   setBalance(player, balance + cents)
-  player.tell('Redeemed 1 ' + item.id + ' for ' + formatMoney(cents)
+  player.tell('Redeemed 1 ' + itemId + ' for ' + formatMoney(cents)
     + '. Balance: ' + formatMoney(balance + cents))
   item.shrink(1)
   event.cancel()
