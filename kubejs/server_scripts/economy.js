@@ -153,16 +153,8 @@ function sendCommandMessage(source, message) {
 }
 
 function getMoneyNoteData(item) {
-  const roots = [item.nbt, item.tags]
-  for (let index = 0; index < roots.length; index++) {
-    const root = roots[index]
-    if (!root) continue
-    if (typeof root.getCompound === 'function'
-        && typeof root.contains === 'function' && root.contains(NOTE_TAG)) {
-      return root.getCompound(NOTE_TAG)
-    }
-    if (root[NOTE_TAG]) return root[NOTE_TAG]
-  }
+  const root = item.nbt
+  if (root[NOTE_TAG]) return root[NOTE_TAG]
   return null
 }
 
@@ -479,6 +471,7 @@ function redeemHeldItem(event) {
 
   if (itemId === 'minecraft:paper') {
     var data = getMoneyNoteData(item)
+    console.log('Money note data:', data)
     if (data && readMoneyNoteString(data, 'signature') === NOTE_SIGNATURE) {
       var noteCents = Number(readMoneyNoteAmount(data))
       if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > MAX_BALANCE) {
