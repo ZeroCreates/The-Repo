@@ -3,6 +3,7 @@ const MAX_BALANCE = 2000000000
 const BALANCE_KEY = 'kubejs_economy_balance_cents'
 const NOTE_TAG = 'kubejs_economy_note'
 const NOTE_SIGNATURE = 'the_repo_economy_note_v1'
+const DATA_COMPONENTS = Java.loadClass('net.minecraft.core.component.DataComponents')
 const CURRENCY_TAG = 'kubejs_economy_currency'
 const CURRENCY_SIGNATURE = 'the_repo_economy_currency_v1'
 const BALANCES_FILE = 'kubejs/data/economy_balances.json'
@@ -152,10 +153,26 @@ function sendCommandMessage(source, message) {
   source.sendSuccess(() => Text.of(message), false)
 }
 
+function notifyEconomyAdmins(player, message) {
+  const auditMessage = '[Economy] ' + message
+  console.info(auditMessage)
+  try {
+    const onlinePlayers = player.getServer().getPlayerList().getPlayers()
+    for (let index = 0; index < onlinePlayers.size(); index++) {
+      const admin = onlinePlayers.get(index)
+      if (admin.hasPermissions(2)) admin.sendSystemMessage(Text.of(auditMessage))
+    }
+  } catch (error) {
+    console.warn('Could not send economy admin notification: ' + error)
+  }
+}
+
 function getMoneyNoteData(item) {
-  const root = item.nbt
-  if (root[NOTE_TAG]) return root[NOTE_TAG]
-  return null
+  const customData = item.get(DATA_COMPONENTS.CUSTOM_DATA)
+  if (!customData) return null
+  const root = customData.copyTag()
+  if (!root.contains(NOTE_TAG)) return null
+  return root.getCompound(NOTE_TAG)
 }
 
 function readMoneyNoteString(data, key) {
@@ -364,6 +381,8 @@ ServerEvents.commandRegistry(event => {
 
               player.give(createMoneyNote(cents))
               player.tell('Created a money note worth ' + formatMoney(cents) + '.')
+              notifyEconomyAdmins(player, player.username + ' created a money note worth '
+                + formatMoney(cents) + '.')
               return 1
             })
           )
@@ -450,7 +469,8 @@ function redeemHeldItem(event) {
   const denomination = CURRENCY_DENOMINATIONS.find(entry => entry.item === itemId)
   const redeemedDenomination = denomination
   if (redeemedDenomination) {
-    var billCents = redeemedDenomination.cents
+    var billCount = player.isShiftKeyDown() ? Number(item.count) : 1
+    var billCents = redeemedDenomination.cents * billCount
 
     var balance = getBalance(player)
     if (balance + billCents > MAX_BALANCE) {
@@ -460,18 +480,19 @@ function redeemHeldItem(event) {
     }
     if (rejectCooldown(player, event, 'redeem')) return
 
-    item.shrink(1)
+    item.shrink(billCount)
     setBalance(player, balance + billCents)
     startCooldown(player, 'redeem')
-    player.tell('Redeemed ' + redeemedDenomination.label + ' for ' + formatMoney(billCents)
+    player.tell('Redeemed ' + billCount + ' ' + redeemedDenomination.label + '(s) for ' + formatMoney(billCents)
       + '. Balance: ' + formatMoney(balance + billCents))
+    notifyEconomyAdmins(player, player.username + ' redeemed ' + billCount + ' '
+      + redeemedDenomination.label + '(s) worth ' + formatMoney(billCents) + '.')
     event.cancel()
     return
   }
 
   if (itemId === 'minecraft:paper') {
     var data = getMoneyNoteData(item)
-    console.log('Money note data:', data)
     if (data && readMoneyNoteString(data, 'signature') === NOTE_SIGNATURE) {
       var noteCents = Number(readMoneyNoteAmount(data))
       if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > MAX_BALANCE) {
@@ -479,17 +500,22 @@ function redeemHeldItem(event) {
         return
       }
 
+      var noteCount = player.isShiftKeyDown() ? Number(item.count) : 1
+      var totalNoteCents = noteCents * noteCount
       var balance = getBalance(player)
-      if (balance + noteCents > MAX_BALANCE) {
+      if (balance + totalNoteCents > MAX_BALANCE) {
         player.tell('Your balance is too high to redeem this note.')
         return
       }
       if (rejectCooldown(player, event, 'redeem')) return
 
-      item.shrink(1)
-      setBalance(player, balance + noteCents)
+      item.shrink(noteCount)
+      setBalance(player, balance + totalNoteCents)
       startCooldown(player, 'redeem')
-      player.tell('Redeemed ' + formatMoney(noteCents) + '. Balance: ' + formatMoney(balance + noteCents))
+      player.tell('Redeemed ' + noteCount + ' money note(s) worth ' + formatMoney(totalNoteCents)
+        + '. Balance: ' + formatMoney(balance + totalNoteCents))
+      notifyEconomyAdmins(player, player.username + ' redeemed ' + noteCount + ' money note(s) worth '
+        + formatMoney(totalNoteCents) + '.')
       event.cancel()
       return
     }
