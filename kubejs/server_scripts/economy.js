@@ -152,6 +152,28 @@ function sendCommandMessage(source, message) {
   source.sendSuccess(() => Text.of(message), false)
 }
 
+function getMoneyNoteData(item) {
+  const roots = [item.nbt, item.tags]
+  for (let index = 0; index < roots.length; index++) {
+    const root = roots[index]
+    if (!root) continue
+    if (typeof root.getCompound === 'function'
+        && typeof root.contains === 'function' && root.contains(NOTE_TAG)) {
+      return root.getCompound(NOTE_TAG)
+    }
+    if (root[NOTE_TAG]) return root[NOTE_TAG]
+  }
+  return null
+}
+
+function readMoneyNoteString(data, key) {
+  return typeof data.getString === 'function' ? data.getString(key) : data[key]
+}
+
+function readMoneyNoteAmount(data) {
+  return typeof data.getInt === 'function' ? data.getInt('amount') : data.amount
+}
+
 PlayerEvents.loggedIn(event => {
   getBalance(event.player)
   getSavingsAccount(event.player)
@@ -456,11 +478,9 @@ function redeemHeldItem(event) {
   }
 
   if (itemId === 'minecraft:paper') {
-    const itemNbt = item.nbt
-    if (itemNbt && itemNbt.contains(NOTE_TAG)) {
-      const data = itemNbt.getCompound(NOTE_TAG)
-      if (data.getString('signature') !== NOTE_SIGNATURE) return
-      var noteCents = data.getInt('amount')
+    const data = getMoneyNoteData(item)
+    if (data && readMoneyNoteString(data, 'signature') === NOTE_SIGNATURE) {
+      var noteCents = Number(readMoneyNoteAmount(data))
       if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > MAX_BALANCE) {
         player.tell('This money note is invalid.')
         return
