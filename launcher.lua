@@ -599,6 +599,8 @@ local function refreshApps()
 
     local appDirectory = fs.combine(homeDirectory, "apps")
     fs.makeDir(appDirectory)
+    local desktopDirectory = fs.combine(homeDirectory, "desktop")
+    fs.makeDir(desktopDirectory)
 
     local migrationErrors = {}
     for _, name in ipairs(fs.list(homeDirectory)) do
@@ -628,6 +630,7 @@ local function refreshApps()
         end
     end
     addAppsFrom(appDirectory, false)
+    addAppsFrom(desktopDirectory, false)
     addAppsFrom(homeDirectory, true)
     if settings.alphabetical then
         table.sort(otherPaths, function(first, second)
@@ -1066,6 +1069,16 @@ local function launchSelected()
     local ok, result
     if isInHomeDirectory(app.path) then
         ok, result = pcall(runHomeProgram, app.path, homeDirectory)
+    elseif app.path == SYSTEM_FILE_BROWSER_PATH then
+        local fileBrowserEnvironment = {}
+        for name, value in pairs(_ENV) do fileBrowserEnvironment[name] = value end
+        fileBrowserEnvironment.runProfileProgram = function(path, ...)
+            if type(path) ~= "string" or not isInHomeDirectory(path) then
+                error("Only programs in the active profile home can be run here.", 0)
+            end
+            return runHomeProgram(path, ...)
+        end
+        ok, result = pcall(nativeOs.run, fileBrowserEnvironment, app.path, homeDirectory)
     else
         ok, result = pcall(nativeOs.run, _ENV, app.path, homeDirectory)
     end

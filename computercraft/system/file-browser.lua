@@ -2,10 +2,11 @@ local requestedHome = ...
 local normalizedHome = type(requestedHome) == "string" and requestedHome:gsub("^/+", "")
 local homeDirectory = normalizedHome and normalizedHome:match("^users/[%w_-]+$")
     and normalizedHome or "users/default"
-local currentDirectory = homeDirectory
+local currentDirectory = fs.combine(homeDirectory, "desktop")
 local currentRoot = homeDirectory
 local diskMounts = {}
 fs.makeDir(homeDirectory)
+fs.makeDir(currentDirectory)
 local entries = {}
 local selected = 1
 local firstVisible = 1
@@ -177,10 +178,16 @@ local function draw()
     local rowCount = visibleRows(height)
     local topButtons = {
         { label = "NEW FILE", action = "create" },
-        { label = "NEW FOLDER", action = "create-folder" },
+        { label = "FOLDER", action = "create-folder" },
         { label = "EDIT", action = "edit" },
         { label = "OPEN", action = "open" },
     }
+    local selectedEntry = entries[selected]
+    if selectedEntry and not selectedEntry.isDirectory
+        and selectedEntry.path:lower():match("%.lua$")
+        and isWithinRoot(selectedEntry.path, homeDirectory) then
+        table.insert(topButtons, { label = "RUN", action = "run" })
+    end
     local bottomButtons
     if currentDirectory == homeDirectory then
         bottomButtons = {
@@ -266,6 +273,30 @@ local function editSelected()
         message = "The edit command did not complete successfully."
     else
         message = "Returned from editing " .. entry.name .. "."
+    end
+    loadTheme()
+    refreshEntries()
+end
+
+local function runSelected()
+    local entry = entries[selected]
+    if not entry or entry.isDirectory or not entry.path:lower():match("%.lua$")
+        or not isWithinRoot(entry.path, homeDirectory) then
+        message = "Select a Lua file in your home directory to run."
+        return
+    end
+    if type(runProfileProgram) ~= "function" then
+        message = "The launcher could not provide the profile-safe program runner."
+        return
+    end
+
+    local ok, result = pcall(runProfileProgram, "/" .. entry.path, homeDirectory)
+    if not ok then
+        message = "Could not run " .. entry.name .. ": " .. tostring(result)
+    elseif result == false then
+        message = "The program did not complete successfully."
+    else
+        message = "Returned from " .. entry.name .. "."
     end
     loadTheme()
     refreshEntries()
@@ -602,6 +633,8 @@ while true do
                 editSelected()
             elseif action == "open" then
                 openSelected()
+            elseif action == "run" then
+                runSelected()
             end
         elseif button == 1 and y == height - 1 then
             local action = buttonAt(bottomButtons, x)
