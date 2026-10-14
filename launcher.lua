@@ -859,6 +859,8 @@ local function runHomeProgram(programPath, ...)
     end
 
     local function createEnvironment(parent, runningProgram)
+        term.clear()
+        term.setCursorPos(1, 1)
         local environment = {}
         for name, value in pairs(_ENV) do environment[name] = value end
         if type(parent) == "table" then
