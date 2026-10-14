@@ -496,12 +496,10 @@ end
 local function waitForReturn()
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.lightGray)
+    term.setCursorPos(1, 1)
+    term.clear()
     print("")
-    print("Click anywhere to return to the launcher.")
-    while true do
-        local event = os.pullEventRaw()
-        if event == "mouse_click" then return end
-    end
+    print("Exit the program and returning to the launcher.")
 end
 
 local function updateSelected()
