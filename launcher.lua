@@ -1981,15 +1981,15 @@ local function notificationReceiver()
         end
 
         openNotificationModems()
-        local event, eventId, senderId, payload, protocol = os.pullEventRaw()
+        local event, eventValue, payload, protocol = os.pullEventRaw()
         if event == "timer" then
-            if eventId == activeNotificationPopupTimer then
+            if eventValue == activeNotificationPopupTimer then
                 if activeNotificationPopup then
                     activeNotificationPopup.setVisible(false)
                     activeNotificationPopup = nil
                 end
                 activeNotificationPopupTimer = nil
-            elseif eventId == refreshTimer then
+            elseif eventValue == refreshTimer then
                 refreshTimer = os.startTimer(1)
             end
         elseif event == "rednet_message" then
