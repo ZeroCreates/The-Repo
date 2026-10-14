@@ -3,11 +3,19 @@ local NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
 local SERVER_NAME = "email_server"
 local TIMEOUT = 5
 local ACCOUNT_PATH = ".email-account.json"
+local STORED_ACCOUNT_PATH = "email/account.json"
 local notifications = require("notifications")
+local storageLoaded, storage = pcall(require, "storage")
+if not storageLoaded or type(storage) ~= "table"
+    or type(storage.read) ~= "function" or type(storage.write) ~= "function"
+    or type(storage.delete) ~= "function" then
+    storage = nil
+end
 local requestedHome = ...
 local profileHome = type(requestedHome) == "string" and requestedHome:gsub("/+$", "")
 local mouseEnabled = false
 local account
+local currentFolder = "Inbox"
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -201,6 +209,22 @@ local function completeEmailAddress(value)
 end
 
 local function saveAccount(data)
+    if storage then
+        local saved, saveError = storage.write(STORED_ACCOUNT_PATH, data)
+        if not saved then
+            return false, "Could not save account details to private storage: "
+                .. tostring(saveError or "unknown storage error")
+        end
+        if fs.exists(ACCOUNT_PATH) then
+            local ok, deleteError = pcall(fs.delete, ACCOUNT_PATH)
+            if not ok then
+                return false, "Account was saved to private storage, but the old profile copy could not be removed: "
+                    .. tostring(deleteError)
+            end
+        end
+        return true
+    end
+
     local file = fs.open(ACCOUNT_PATH, "w")
     if not file then return false, "Could not save account details in this profile." end
     file.write(textutils.serializeJSON(data))
@@ -208,17 +232,81 @@ local function saveAccount(data)
     return true
 end
 
-local function loadAccount()
+local function isValidAccount(data)
+    return type(data) == "table" and type(data.email) == "string"
+        and type(data.password) == "string"
+end
+
+local function loadLegacyAccount()
     if not fs.exists(ACCOUNT_PATH) then return nil end
     local file = fs.open(ACCOUNT_PATH, "r")
     if not file then error("Could not open the saved email account.") end
     local contents = file.readAll()
     file.close()
     local ok, data = pcall(textutils.unserializeJSON, contents)
-    if not ok or type(data) ~= "table" or type(data.email) ~= "string" or type(data.password) ~= "string" then
+    if not ok or not isValidAccount(data) then
         error("Saved email account data is invalid. Remove .email-account.json from your profile to sign in again.")
     end
     return data
+end
+
+local function loadAccount()
+    if storage then
+        local data, storageError = storage.read(STORED_ACCOUNT_PATH)
+        if data ~= nil then
+            if not isValidAccount(data) then
+                error("Saved email account data in private storage is invalid.")
+            end
+            return data
+        end
+        if storageError and storageError ~= "Stored data was not found." then
+            error("Could not load the saved email account from private storage: " .. storageError)
+        end
+    end
+
+    local legacyAccount = loadLegacyAccount()
+    if legacyAccount and storage then
+        local saved, saveError = storage.write(STORED_ACCOUNT_PATH, legacyAccount)
+        if not saved then
+            notice("ACCOUNT STORAGE", "Using the existing profile copy. Could not migrate it to private storage: "
+                .. tostring(saveError or "unknown storage error"))
+        else
+            local deleted, deleteError = pcall(fs.delete, ACCOUNT_PATH)
+            if not deleted then
+                notice("ACCOUNT STORAGE", "Account moved to private storage, but the old profile copy remains: "
+                    .. tostring(deleteError))
+            end
+        end
+    end
+    return legacyAccount
+end
+
+local function deleteSavedAccount()
+    if storage then
+        local deleted, deleteError = storage.delete(STORED_ACCOUNT_PATH)
+        if not deleted and deleteError ~= "Stored data was not found." then
+            return false, "Could not remove account details from private storage: "
+                .. tostring(deleteError or "unknown storage error")
+        end
+    end
+    if fs.exists(ACCOUNT_PATH) then
+        local deleted, deleteError = pcall(fs.delete, ACCOUNT_PATH)
+        if not deleted then
+            return false, "Could not remove account details from this profile: " .. tostring(deleteError)
+        end
+    end
+    return true
+end
+
+local function signOut()
+    local deleted, deleteError = deleteSavedAccount()
+    if not deleted then
+        notice("SIGN OUT", deleteError)
+        return false
+    end
+    account = nil
+    currentFolder = "Inbox"
+    return true
 end
 
 local function formatTime(timestamp)
@@ -620,7 +708,6 @@ if account then
     if not subscribed then notice("EMAIL NOTIFICATIONS", subscriptionError) end
 end
 
-local currentFolder = "Inbox"
 while true do
     if account then
         local action, selectedFolder = inbox(currentFolder)
@@ -641,18 +728,14 @@ while true do
             elseif homeAction == "compose" then
                 compose()
             elseif homeAction == "signout" then
-                account = nil
-                currentFolder = "Inbox"
-                if fs.exists(ACCOUNT_PATH) then fs.delete(ACCOUNT_PATH) end
+                signOut()
             elseif homeAction == "quit" then
                 return
             end
         elseif action == "compose" then
             compose()
         elseif action == "signout" then
-            account = nil
-            currentFolder = "Inbox"
-            if fs.exists(ACCOUNT_PATH) then fs.delete(ACCOUNT_PATH) end
+            signOut()
         elseif action == "quit" then
             return
         end
