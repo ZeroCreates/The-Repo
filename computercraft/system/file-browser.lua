@@ -9,7 +9,9 @@ fs.makeDir(homeDirectory)
 local entries = {}
 local selected = 1
 local firstVisible = 1
-local message = "Click an item to select; click again or use Open. Drop files to upload."
+local message = "Ctrl+C copy, Ctrl+X cut, Ctrl+V paste. Drop files to upload."
+local clipboard
+local controlHeld = false
 local themeIndex = 1
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
@@ -194,7 +196,14 @@ local function draw()
     term.setBackgroundColor(colors.black)
     term.setCursorPos(2, 2)
     term.setTextColor(colors.lightGray)
-    term.write(("Path: " .. currentDirectory):sub(1, math.max(0, width - 2)))
+    local displayPath
+    if currentRoot == homeDirectory then
+        displayPath = currentDirectory == homeDirectory and "home/"
+            or "home/" .. currentDirectory:sub(#homeDirectory + 2)
+    else
+        displayPath = currentDirectory
+    end
+    term.write(("Path: " .. displayPath):sub(1, math.max(0, width - 2)))
 
     local lastVisible = math.min(#entries, firstVisible + rowCount - 1)
     for index = firstVisible, lastVisible do
@@ -402,6 +411,69 @@ local function deleteSelected()
     message = "Deleted " .. entry.name .. "."
 end
 
+local function copyOrCutSelected(mode)
+    local entry = entries[selected]
+    if not entry or entry.name == ".." or entry.diskRoot or entry.returnHome
+        or not isWithinRoot(entry.path, currentRoot) or entry.path == currentRoot then
+        message = "Select a file or folder first."
+        return
+    end
+
+    clipboard = {
+        path = entry.path,
+        name = entry.name,
+        isDirectory = entry.isDirectory,
+        root = currentRoot,
+        mode = mode,
+    }
+    message = (mode == "cut" and "Cut " or "Copied ") .. entry.name .. ". Navigate to a folder and press Ctrl+V."
+end
+
+local function pasteClipboard()
+    if not clipboard then
+        message = "Nothing to paste. Select a file or folder and press Ctrl+C or Ctrl+X first."
+        return
+    end
+
+    refreshDiskMounts()
+    if (clipboard.root ~= homeDirectory and not isMountedDisk(clipboard.root))
+        or not isWithinRoot(clipboard.path, clipboard.root)
+        or not fs.exists("/" .. clipboard.path) then
+        clipboard = nil
+        message = "The copied or cut file is no longer available."
+        return
+    end
+
+    local destination = fs.combine(currentDirectory, clipboard.name)
+    local absoluteSource = "/" .. clipboard.path
+    local absoluteDestination = "/" .. destination
+    if not isWithinRoot(destination, currentRoot) or destination == currentRoot then
+        message = "That paste location is outside the current root."
+        return
+    end
+    if fs.exists(absoluteDestination) then
+        message = "Cannot paste: " .. clipboard.name .. " already exists here."
+        return
+    end
+    if clipboard.isDirectory
+        and (currentDirectory == clipboard.path
+            or currentDirectory:sub(1, #clipboard.path + 1) == clipboard.path .. "/") then
+        message = "A folder cannot be pasted into itself or one of its subfolders."
+        return
+    end
+
+    local operation = clipboard.mode == "cut" and fs.move or fs.copy
+    local ok, err = pcall(operation, absoluteSource, absoluteDestination)
+    if not ok then
+        message = "Could not paste " .. clipboard.name .. ": " .. tostring(err)
+        return
+    end
+
+    if clipboard.mode == "cut" then clipboard = nil end
+    refreshEntries()
+    message = "Pasted " .. fs.getName(destination) .. " into " .. currentDirectory .. "."
+end
+
 local function saveTransferredFile(source)
     local name = source.getName()
     local fileName = fs.getName(name)
@@ -491,7 +563,21 @@ refreshEntries()
 while true do
     local topButtons, bottomButtons = draw()
     local event, button, x, y = os.pullEventRaw()
-    if event == "mouse_click" then
+    if event == "key" then
+        if button == keys.leftCtrl or button == keys.rightCtrl then
+            controlHeld = true
+        elseif controlHeld and button == keys.c then
+            copyOrCutSelected("copy")
+        elseif controlHeld and button == keys.x then
+            copyOrCutSelected("cut")
+        elseif controlHeld and button == keys.v then
+            pasteClipboard()
+        end
+    elseif event == "key_up" then
+        if button == keys.leftCtrl or button == keys.rightCtrl then
+            controlHeld = false
+        end
+    elseif event == "mouse_click" then
         local _, height = term.getSize()
         local index = firstVisible + y - 3
         if button == 1 and y >= 3 and y < 3 + visibleRows(height)
