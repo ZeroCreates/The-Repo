@@ -1,5 +1,6 @@
-const STARTING_BALANCE = 5000
-const MAX_BALANCE = 2000000000
+const DEFAULT_STARTING_BALANCE = 5000
+const DEFAULT_MAX_BALANCE = 2000000000
+const HARD_MAX_BALANCE = 2000000000
 const BALANCE_KEY = 'kubejs_economy_balance_cents'
 const NOTE_TAG = 'kubejs_economy_note'
 const NOTE_SIGNATURE = 'the_repo_economy_note_v1'
@@ -9,8 +10,13 @@ const CURRENCY_SIGNATURE = 'the_repo_economy_currency_v1'
 const BALANCES_FILE = 'kubejs/data/economy_balances.json'
 const REDEEMABLES_FILE = 'kubejs/data/economy_redeemables.json'
 const ACCOUNTS_FILE = 'kubejs/data/economy_accounts.json'
-const INTEREST_WEEK_TICKS = 7 * 24000
-const COOLDOWNS_MS = { withdraw: 5000, bank: 5000, redeem: 1000 }
+const SETTINGS_FILE = 'kubejs/data/economy_settings.json'
+const DEFAULT_INTEREST_INTERVAL_HOURS = 24
+const MAX_INTEREST_INTERVAL_HOURS = 24 * 365
+const DEFAULT_DAILY_INTEREST_BASIS_POINTS = 100
+const MAX_DAILY_INTEREST_BASIS_POINTS = 10000
+const DEFAULT_MINIMUM_INTEREST_BALANCE_CENTS = 100
+const DEFAULT_COOLDOWNS_MS = { withdraw: 5000, bank: 5000, redeem: 1000 }
 const CURRENCY_DENOMINATIONS = [
   { kind: 'bill', cents: 10000, item: 'kubejs:bill_100', legacyItem: 'minecraft:paper', label: '$100 Bill' },
   { kind: 'bill', cents: 5000, item: 'kubejs:bill_50', legacyItem: 'minecraft:paper', label: '$50 Bill' },
@@ -26,6 +32,62 @@ const CURRENCY_DENOMINATIONS = [
 ]
 let balances = JsonIO.read(BALANCES_FILE) || {}
 let accounts = JsonIO.read(ACCOUNTS_FILE) || {}
+let economySettings = JsonIO.read(SETTINGS_FILE)
+if (!economySettings || typeof economySettings !== 'object' || Array.isArray(economySettings)) {
+  economySettings = {}
+}
+let startingBalanceCents = Number(economySettings.startingBalanceCents)
+if (!isFinite(startingBalanceCents) || startingBalanceCents < 0
+    || startingBalanceCents > HARD_MAX_BALANCE || startingBalanceCents % 1 !== 0) {
+  startingBalanceCents = DEFAULT_STARTING_BALANCE
+  economySettings.startingBalanceCents = startingBalanceCents
+}
+let maxBalanceCents = Number(economySettings.maxBalanceCents)
+if (!isFinite(maxBalanceCents) || maxBalanceCents < 1
+    || maxBalanceCents > HARD_MAX_BALANCE || maxBalanceCents % 1 !== 0
+    || startingBalanceCents > maxBalanceCents) {
+  maxBalanceCents = DEFAULT_MAX_BALANCE
+  economySettings.maxBalanceCents = maxBalanceCents
+}
+let dailyInterestBasisPoints = Number(economySettings.dailyInterestBasisPoints)
+if (isNaN(dailyInterestBasisPoints) || dailyInterestBasisPoints < 0
+    || dailyInterestBasisPoints > MAX_DAILY_INTEREST_BASIS_POINTS
+    || dailyInterestBasisPoints % 1 !== 0) {
+  dailyInterestBasisPoints = DEFAULT_DAILY_INTEREST_BASIS_POINTS
+  economySettings.dailyInterestBasisPoints = dailyInterestBasisPoints
+}
+let interestIntervalHours = Number(economySettings.interestIntervalHours)
+if (!isFinite(interestIntervalHours) || interestIntervalHours < 1
+    || interestIntervalHours > MAX_INTEREST_INTERVAL_HOURS || interestIntervalHours % 1 !== 0) {
+  interestIntervalHours = DEFAULT_INTEREST_INTERVAL_HOURS
+  economySettings.interestIntervalHours = interestIntervalHours
+}
+let minimumInterestBalanceCents = Number(economySettings.minimumInterestBalanceCents)
+if (!isFinite(minimumInterestBalanceCents) || minimumInterestBalanceCents < 1
+    || minimumInterestBalanceCents > maxBalanceCents || minimumInterestBalanceCents % 1 !== 0) {
+  minimumInterestBalanceCents = DEFAULT_MINIMUM_INTEREST_BALANCE_CENTS
+  economySettings.minimumInterestBalanceCents = minimumInterestBalanceCents
+}
+const savedCooldowns = economySettings.cooldownsMs
+  && typeof economySettings.cooldownsMs === 'object'
+  && !Array.isArray(economySettings.cooldownsMs)
+  ? economySettings.cooldownsMs
+  : {}
+let cooldownsMs = {}
+Object.keys(DEFAULT_COOLDOWNS_MS).forEach(action => {
+  const savedCooldown = Number(savedCooldowns[action])
+  cooldownsMs[action] = isFinite(savedCooldown) && savedCooldown >= 0
+    && savedCooldown <= 3600000 && savedCooldown % 1 === 0
+    ? savedCooldown
+    : DEFAULT_COOLDOWNS_MS[action]
+})
+economySettings.startingBalanceCents = startingBalanceCents
+economySettings.maxBalanceCents = maxBalanceCents
+economySettings.dailyInterestBasisPoints = dailyInterestBasisPoints
+economySettings.interestIntervalHours = interestIntervalHours
+economySettings.minimumInterestBalanceCents = minimumInterestBalanceCents
+economySettings.cooldownsMs = cooldownsMs
+JsonIO.write(SETTINGS_FILE, economySettings)
 let actionCooldowns = {}
 const savedRedeemableItems = JsonIO.read(REDEEMABLES_FILE)
 let redeemableItems = savedRedeemableItems || {}
@@ -45,11 +107,11 @@ function saveBalances() {
 function getBalance(player) {
   const id = playerBalanceId(player)
   if (balances[id] == null) {
-    let startingBalance = STARTING_BALANCE
+    let startingBalance = startingBalanceCents
     const oldData = player.persistentData
     if (oldData.contains(BALANCE_KEY)) {
       const oldBalance = oldData.getInt(BALANCE_KEY)
-      if (oldBalance >= 0 && oldBalance <= MAX_BALANCE) startingBalance = oldBalance
+      if (oldBalance >= 0 && oldBalance <= maxBalanceCents) startingBalance = oldBalance
     }
     balances[id] = startingBalance
     saveBalances()
@@ -61,32 +123,56 @@ function saveAccounts() {
   JsonIO.write(ACCOUNTS_FILE, accounts)
 }
 
+function saveEconomySettings() {
+  economySettings.startingBalanceCents = startingBalanceCents
+  economySettings.maxBalanceCents = maxBalanceCents
+  economySettings.dailyInterestBasisPoints = dailyInterestBasisPoints
+  economySettings.interestIntervalHours = interestIntervalHours
+  economySettings.minimumInterestBalanceCents = minimumInterestBalanceCents
+  economySettings.cooldownsMs = cooldownsMs
+  JsonIO.write(SETTINGS_FILE, economySettings)
+}
+
+function formatInterestRate() {
+  return (dailyInterestBasisPoints / 100).toFixed(2).replace(/\.?0+$/, '')
+}
+
+function formatInterestInterval() {
+  return interestIntervalHours + ' real-life hour(s)'
+}
+
+function formatCooldown(action) {
+  return (cooldownsMs[action] / 1000).toFixed(3).replace(/\.?0+$/, '')
+}
+
 function getSavingsAccount(player) {
   const id = playerBalanceId(player)
-  const gameTime = Number(player.level.dayTime)
+  const now = Date.now()
   let account = accounts[id]
   if (!account || typeof account !== 'object') {
-    account = { savings: 0, lastInterestAt: gameTime, hidden: false }
+    account = { savings: 0, lastInterestAtMs: now, hidden: false }
     accounts[id] = account
   }
 
-  account.savings = Math.max(0, Math.min(MAX_BALANCE, Math.floor(Number(account.savings) || 0)))
+  account.savings = Math.max(0, Math.min(maxBalanceCents, Math.floor(Number(account.savings) || 0)))
   account.hidden = account.hidden === true
   account.username = String(player.username)
-  let lastInterestAt = Number(account.lastInterestAt)
-  if (isNaN(gameTime) || gameTime < 0) return account
-  if (isNaN(lastInterestAt) || lastInterestAt < 0 || lastInterestAt > gameTime) {
-    lastInterestAt = gameTime
+  let lastInterestAt = Number(account.lastInterestAtMs)
+  if (isNaN(lastInterestAt) || lastInterestAt < 0 || lastInterestAt > now) {
+    lastInterestAt = now
   }
-  const completedWeeks = Math.floor((gameTime - lastInterestAt) / INTEREST_WEEK_TICKS)
-  if (completedWeeks > 0) {
-    for (let week = 0; week < completedWeeks && account.savings < MAX_BALANCE; week++) {
-      account.savings = Math.min(MAX_BALANCE, account.savings + Math.floor(account.savings / 100))
+  const interestIntervalMs = interestIntervalHours * 60 * 60 * 1000
+  const completedIntervals = Math.floor((now - lastInterestAt) / interestIntervalMs)
+  if (completedIntervals > 0 && dailyInterestBasisPoints > 0) {
+    for (let interval = 0; interval < completedIntervals
+        && account.savings >= minimumInterestBalanceCents
+        && account.savings < maxBalanceCents; interval++) {
+      const interest = Math.floor(account.savings * dailyInterestBasisPoints / 10000)
+      if (interest < 1) break
+      account.savings = Math.min(maxBalanceCents, account.savings + interest)
     }
-    account.lastInterestAt = lastInterestAt + completedWeeks * INTEREST_WEEK_TICKS
-  } else {
-    account.lastInterestAt = lastInterestAt
   }
+  account.lastInterestAtMs = lastInterestAt + completedIntervals * interestIntervalMs
   saveAccounts()
   return account
 }
@@ -109,7 +195,7 @@ function cooldownSecondsRemaining(player, action) {
 
 function startCooldown(player, action) {
   const key = playerBalanceId(player) + ':' + action
-  actionCooldowns[key] = Date.now() + COOLDOWNS_MS[action]
+  actionCooldowns[key] = Date.now() + cooldownsMs[action]
 }
 
 function rejectCooldown(player, event, action) {
@@ -145,7 +231,7 @@ function giveCurrency(player, cents) {
 
 function readAmountCents(value, allowZero) {
   if (isNaN(value) || value < 0 || (!allowZero && value === 0)
-      || value > MAX_BALANCE / 100) return null
+      || value > maxBalanceCents / 100) return null
   return Math.round(value * 100)
 }
 
@@ -255,7 +341,8 @@ ServerEvents.commandRegistry(event => {
         if (!player) return 0
         const account = getSavingsAccount(player)
         player.tell('Checking: ' + formatMoney(getBalance(player))
-          + ' | Savings: ' + formatMoney(account.savings) + ' | Interest: 1% per in-game week')
+          + ' | Savings: ' + formatMoney(account.savings) + ' | Interest: '
+          + formatInterestRate() + '% every ' + formatInterestInterval())
         return 1
       })
       .then(Commands.literal('savings')
@@ -263,7 +350,8 @@ ServerEvents.commandRegistry(event => {
           const player = context.source.player
           if (!player) return 0
           const account = getSavingsAccount(player)
-          player.tell('Savings: ' + formatMoney(account.savings) + ' | Interest: 1% per in-game week')
+          player.tell('Savings: ' + formatMoney(account.savings) + ' | Interest: '
+            + formatInterestRate() + '% every ' + formatInterestInterval())
           return 1
         })
         .then(Commands.literal('deposit')
@@ -274,7 +362,7 @@ ServerEvents.commandRegistry(event => {
               if (rejectCooldown(player, null, 'bank')) return 0
               const cents = readAmountCents(Arguments.DOUBLE.getResult(context, 'amount'), false)
               if (cents == null || cents < 1) {
-                player.tell('Enter a deposit amount from $0.01 to $20,000,000.00.')
+                player.tell('Enter a deposit amount from $0.01 to ' + formatMoney(maxBalanceCents) + '.')
                 return 0
               }
               const checking = getBalance(player)
@@ -283,7 +371,7 @@ ServerEvents.commandRegistry(event => {
                 player.tell('Insufficient checking balance. Balance: ' + formatMoney(checking))
                 return 0
               }
-              if (account.savings + cents > MAX_BALANCE) {
+              if (account.savings + cents > maxBalanceCents) {
                 player.tell('Your savings balance would exceed the account limit.')
                 return 0
               }
@@ -304,7 +392,7 @@ ServerEvents.commandRegistry(event => {
               if (rejectCooldown(player, null, 'bank')) return 0
               const cents = readAmountCents(Arguments.DOUBLE.getResult(context, 'amount'), false)
               if (cents == null || cents < 1) {
-                player.tell('Enter a withdrawal amount from $0.01 to $20,000,000.00.')
+                player.tell('Enter a withdrawal amount from $0.01 to ' + formatMoney(maxBalanceCents) + '.')
                 return 0
               }
               const checking = getBalance(player)
@@ -313,7 +401,7 @@ ServerEvents.commandRegistry(event => {
                 player.tell('Insufficient savings. Savings: ' + formatMoney(account.savings))
                 return 0
               }
-              if (checking + cents > MAX_BALANCE) {
+              if (checking + cents > maxBalanceCents) {
                 player.tell('Your checking balance would exceed the account limit.')
                 return 0
               }
@@ -364,6 +452,156 @@ ServerEvents.commandRegistry(event => {
       )
       .then(Commands.literal('admin')
         .requires(source => source.hasPermission(2))
+        .then(Commands.literal('settings')
+          .executes(context => {
+            sendCommandMessage(context.source, 'Economy settings:')
+            sendCommandMessage(context.source, 'Starting balance: ' + formatMoney(startingBalanceCents))
+            sendCommandMessage(context.source, 'Maximum balance: ' + formatMoney(maxBalanceCents))
+            sendCommandMessage(context.source, 'Savings interest: ' + formatInterestRate()
+              + '% every ' + formatInterestInterval())
+            sendCommandMessage(context.source, 'Minimum savings for interest: '
+              + formatMoney(minimumInterestBalanceCents))
+            sendCommandMessage(context.source, 'Cooldowns (seconds): withdraw '
+              + formatCooldown('withdraw') + ', bank ' + formatCooldown('bank')
+              + ', redeem ' + formatCooldown('redeem'))
+            return 1
+          })
+        )
+        .then(Commands.literal('startingbalance')
+          .then(Commands.argument('amount', Arguments.DOUBLE.create(event))
+            .executes(context => {
+              const cents = readAmountCents(Arguments.DOUBLE.getResult(context, 'amount'), true)
+              if (cents == null) {
+                sendCommandMessage(context.source, 'Enter a starting balance from $0.00 to '
+                  + formatMoney(maxBalanceCents) + '.')
+                return 0
+              }
+              startingBalanceCents = cents
+              saveEconomySettings()
+              sendCommandMessage(context.source, 'New players will start with '
+                + formatMoney(startingBalanceCents) + '.')
+              return 1
+            })
+          )
+        )
+        .then(Commands.literal('maxbalance')
+          .then(Commands.argument('amount', Arguments.DOUBLE.create(event))
+            .executes(context => {
+              const amount = Arguments.DOUBLE.getResult(context, 'amount')
+              const cents = Math.round(amount * 100)
+              if (!isFinite(amount) || amount < 0.01 || amount > HARD_MAX_BALANCE / 100
+                  || Math.abs(amount * 100 - cents) > 0.000001) {
+                sendCommandMessage(context.source, 'Enter a maximum balance from $0.01 to '
+                  + formatMoney(HARD_MAX_BALANCE) + ' with at most 2 decimal places.')
+                return 0
+              }
+              if (cents < startingBalanceCents) {
+                sendCommandMessage(context.source, 'Maximum balance cannot be below the starting balance of '
+                  + formatMoney(startingBalanceCents) + '.')
+                return 0
+              }
+              if (cents < minimumInterestBalanceCents) {
+                sendCommandMessage(context.source, 'Maximum balance cannot be below the minimum savings balance for interest of '
+                  + formatMoney(minimumInterestBalanceCents) + '.')
+                return 0
+              }
+              for (const id of Object.keys(balances)) {
+                if (Number(balances[id]) > cents) {
+                  sendCommandMessage(context.source, "Maximum balance cannot be lower than a player's current checking balance.")
+                  return 0
+                }
+              }
+              for (const id of Object.keys(accounts)) {
+                if (accounts[id] && Number(accounts[id].savings) > cents) {
+                  sendCommandMessage(context.source, "Maximum balance cannot be lower than a player's current savings balance.")
+                  return 0
+                }
+              }
+              maxBalanceCents = cents
+              saveEconomySettings()
+              sendCommandMessage(context.source, 'Maximum account balance set to '
+                + formatMoney(maxBalanceCents) + '.')
+              return 1
+            })
+          )
+        )
+        .then(Commands.literal('cooldown')
+          .then(Commands.argument('action', Arguments.STRING.create(event))
+            .then(Commands.argument('seconds', Arguments.DOUBLE.create(event))
+              .executes(context => {
+                const action = Arguments.STRING.getResult(context, 'action').toLowerCase()
+                const seconds = Arguments.DOUBLE.getResult(context, 'seconds')
+                const milliseconds = Math.round(seconds * 1000)
+                if (cooldownsMs[action] == null) {
+                  sendCommandMessage(context.source, 'Choose a cooldown action: withdraw, bank, or redeem.')
+                  return 0
+                }
+                if (!isFinite(seconds) || seconds < 0 || seconds > 3600
+                    || Math.abs(seconds * 1000 - milliseconds) > 0.000001) {
+                  sendCommandMessage(context.source, 'Enter a cooldown from 0 to 3600 seconds with at most 3 decimal places.')
+                  return 0
+                }
+                cooldownsMs[action] = milliseconds
+                saveEconomySettings()
+                sendCommandMessage(context.source, action + ' cooldown set to '
+                  + formatCooldown(action) + ' seconds.')
+                return 1
+              })
+            )
+          )
+        )
+        .then(Commands.literal('interest')
+          .then(Commands.argument('percent', Arguments.DOUBLE.create(event))
+            .executes(context => {
+              const percent = Arguments.DOUBLE.getResult(context, 'percent')
+              const basisPoints = Math.round(percent * 100)
+              if (!isFinite(percent) || percent < 0 || percent > 100
+                  || Math.abs(percent * 100 - basisPoints) > 0.000001) {
+                sendCommandMessage(context.source, 'Enter an interest rate from 0% to 100% with at most 2 decimal places.')
+                return 0
+              }
+              dailyInterestBasisPoints = basisPoints
+              saveEconomySettings()
+              sendCommandMessage(context.source, 'Savings interest set to '
+                + formatInterestRate() + '% every ' + formatInterestInterval() + '.')
+              return 1
+            })
+          )
+        )
+        .then(Commands.literal('interestinterval')
+          .then(Commands.argument('hours', Arguments.INTEGER.create(event))
+            .executes(context => {
+              const hours = Arguments.INTEGER.getResult(context, 'hours')
+              if (hours < 1 || hours > MAX_INTEREST_INTERVAL_HOURS) {
+                sendCommandMessage(context.source, 'Enter an interest interval from 1 to '
+                  + MAX_INTEREST_INTERVAL_HOURS + ' hours.')
+                return 0
+              }
+              interestIntervalHours = hours
+              saveEconomySettings()
+              sendCommandMessage(context.source, 'Savings interest will be applied every '
+                + formatInterestInterval() + '.')
+              return 1
+            })
+          )
+        )
+        .then(Commands.literal('interestminimum')
+          .then(Commands.argument('amount', Arguments.DOUBLE.create(event))
+            .executes(context => {
+              const cents = readAmountCents(Arguments.DOUBLE.getResult(context, 'amount'), false)
+              if (cents == null || cents < 1) {
+                sendCommandMessage(context.source, 'Enter a minimum savings balance from $0.01 to '
+                  + formatMoney(maxBalanceCents) + '.')
+                return 0
+              }
+              minimumInterestBalanceCents = cents
+              saveEconomySettings()
+              sendCommandMessage(context.source, 'Savings must hold at least '
+                + formatMoney(minimumInterestBalanceCents) + ' to earn interest.')
+              return 1
+            })
+          )
+        )
         .then(Commands.literal('moneynote')
           .then(Commands.argument('amount', Arguments.DOUBLE.create(event))
             .executes(context => {
@@ -375,7 +613,7 @@ ServerEvents.commandRegistry(event => {
 
               const cents = readAmountCents(Arguments.DOUBLE.getResult(context, 'amount'), false)
               if (cents == null || cents < 1) {
-                player.tell('Enter an amount from $0.01 to $20,000,000.00.')
+                player.tell('Enter an amount from $0.01 to ' + formatMoney(maxBalanceCents) + '.')
                 return 0
               }
 
@@ -394,7 +632,7 @@ ServerEvents.commandRegistry(event => {
                 const target = Arguments.PLAYER.getResult(context, 'player')
                 const cents = readAmountCents(Arguments.DOUBLE.getResult(context, 'amount'), true)
                 if (cents == null) {
-                  sendCommandMessage(context.source, 'Enter an amount from $0.00 to $20,000,000.00.')
+                  sendCommandMessage(context.source, 'Enter an amount from $0.00 to ' + formatMoney(maxBalanceCents) + '.')
                   return 0
                 }
                 setBalance(target, cents)
@@ -473,7 +711,7 @@ function redeemHeldItem(event) {
     var billCents = redeemedDenomination.cents * billCount
 
     var balance = getBalance(player)
-    if (balance + billCents > MAX_BALANCE) {
+    if (balance + billCents > maxBalanceCents) {
       player.tell('Your balance is too high to redeem this bill or coin.')
       event.cancel()
       return
@@ -495,7 +733,7 @@ function redeemHeldItem(event) {
     var data = getMoneyNoteData(item)
     if (data && readMoneyNoteString(data, 'signature') === NOTE_SIGNATURE) {
       var noteCents = Number(readMoneyNoteAmount(data))
-      if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > MAX_BALANCE) {
+      if (isNaN(noteCents) || noteCents < 1 || noteCents % 1 !== 0 || noteCents > maxBalanceCents) {
         player.tell('This money note is invalid.')
         return
       }
@@ -503,7 +741,7 @@ function redeemHeldItem(event) {
       var noteCount = player.isShiftKeyDown() ? Number(item.count) : 1
       var totalNoteCents = noteCents * noteCount
       var balance = getBalance(player)
-      if (balance + totalNoteCents > MAX_BALANCE) {
+      if (balance + totalNoteCents > maxBalanceCents) {
         player.tell('Your balance is too high to redeem this note.')
         return
       }
@@ -524,7 +762,7 @@ function redeemHeldItem(event) {
   var redeemableCents = Number(redeemableItems[itemId])
   if (isNaN(redeemableCents) || redeemableCents < 1 || redeemableCents % 1 !== 0) return
   var balance = getBalance(player)
-  if (balance + redeemableCents > MAX_BALANCE) {
+  if (balance + redeemableCents > maxBalanceCents) {
     player.tell('Your balance is too high to redeem this item.')
     return
   }
