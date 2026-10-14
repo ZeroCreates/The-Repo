@@ -1770,8 +1770,6 @@ local function uninstallLauncher()
 end
 
 local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
-local EMAIL_PROTOCOL = "launcher_email_v1"
-local EMAIL_NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
 local MARKET_PROTOCOL = "order_system_v1"
 local MARKET_NOTIFICATION_CONTROL_PROTOCOL = "launcher_market_notifications_v1"
 local function showNotificationPopup(notification)
@@ -1874,27 +1872,6 @@ local function loadMarketFollows(profilePath)
     return follows
 end
 
-local function loadEmailAccount(profilePath)
-    local account, err = readJSONFile(nativeFs.combine(profilePath, ".email-account.json"))
-    if not account then
-        if err then showNotificationPopup({
-            source = "Email",
-            title = "Notification setup",
-            message = err,
-        }) end
-        return nil
-    end
-    if type(account.email) ~= "string" or type(account.password) ~= "string" then
-        showNotificationPopup({
-            source = "Email",
-            title = "Notification setup",
-            message = "Saved email account details are invalid.",
-        })
-        return nil
-    end
-    return account
-end
-
 local function loadNotificationListeners(profilePath)
     local configPath, pathError = notificationConfigPath(profilePath)
     if not configPath then
@@ -1945,17 +1922,6 @@ end
 
 local function sendNotificationSubscriptions(profilePath, computerId)
     openNotificationModems()
-    local emailAccount = loadEmailAccount(profilePath)
-    if emailAccount then
-        local serverId = rednet.lookup(EMAIL_PROTOCOL, "email_server")
-        if serverId then
-            rednet.send(serverId, {
-                type = "subscribe",
-                email = emailAccount.email,
-                password = emailAccount.password,
-            }, EMAIL_NOTIFICATION_CONTROL_PROTOCOL)
-        end
-    end
 
     local followedOrders = loadMarketFollows(profilePath)
     if type(followedOrders) ~= "table" then return end
@@ -2000,10 +1966,7 @@ local function notificationReceiver()
         if protocol == NOTIFICATION_PROTOCOL
             and type(payload) == "table" and payload.type == "notification" then
             local show = true
-            if payload.source == "Email" then
-                local savedAccount = homeDirectory and loadEmailAccount(homeDirectory)
-                show = savedAccount ~= nil and savedAccount.email == payload.user
-            elseif payload.source ~= "Market"
+            if payload.source ~= "Email" and payload.source ~= "Market"
                 and type(payload.user) == "string" and currentUser then
                 show = payload.user == currentUser
             end
