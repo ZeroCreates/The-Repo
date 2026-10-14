@@ -608,6 +608,7 @@ local function placeOrder(cart)
         end
     else
         deliveryAddress = userData.deliveryAddress
+        showNotice("Save Address Used", "Your Recent Address is being used to deliver to")
     end
     drawHeader("ORDER REVIEW", "CONFIRM THE DELIVERY ADDRESS BEFORE PLACING")
     sectionTitle(4, "DELIVER TO")
