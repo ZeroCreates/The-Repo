@@ -8,7 +8,12 @@ local FOLLOWED_ORDERS_FILE_STORED = "market/"..FOLLOWED_ORDERS_FILE
 local USERDATA_FILE = "market-userdata.json"
 local USERDATA_FILE_STORED = "market/"..USERDATA_FILE
 local MARKET_USER = "Market customer"
-local notifications = require("notifications")
+local notificationsLoaded, notifications = pcall(require, "notifications")
+if not notificationsLoaded or type(notifications) ~= "table"
+    or type(notifications.read) ~= "function" or type(notifications.write) ~= "function"
+    or type(notifications.delete) ~= "function" then
+    notifications = nil
+end
 local storageLoaded, storage = pcall(require, "storage")
 if not storageLoaded or type(storage) ~= "table"
     or type(storage.read) ~= "function" or type(storage.write) ~= "function"
@@ -277,6 +282,9 @@ local function saveKnownOrderStatus(order)
 end
 
 local function promptFollowOrder(order)
+    if not notifications then
+        return
+    end
     if type(order.customerId) ~= "number" or order.customerId ~= os.getComputerID() then
         return
     end
