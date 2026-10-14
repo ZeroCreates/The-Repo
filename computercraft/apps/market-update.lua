@@ -4,7 +4,7 @@ local CONFIG_NAME = "order-system.cfg"
 local ROLE_FILES = {
     server = {
         name = "market-server.lua",
-        source = "computercraft/apps/market-server.lua",
+        source = "market-server.lua",
     },
     provider = {
         name = "market-provider.lua",
