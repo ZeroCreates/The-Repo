@@ -107,12 +107,14 @@ local function draw()
     if currentDirectory == homeDirectory then
         bottomButtons = {
             { label = "HOME", action = "home" },
+            { label = "DELETE", action = "delete" },
             { label = "EXIT", action = "exit" },
         }
     else
         bottomButtons = {
             { label = "UP", action = "up" },
             { label = "HOME", action = "home" },
+            { label = "DELETE", action = "delete" },
             { label = "EXIT", action = "exit" },
         }
     end
@@ -289,6 +291,56 @@ local function confirmUploadOverwrite(path)
     end
 end
 
+local function confirmDelete(path)
+    local width, height = term.getSize()
+    local buttons = {
+        { label = "CANCEL", action = false },
+        { label = "DELETE", action = true },
+    }
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.yellow)
+    print("Delete " .. path .. "?")
+    print("Folders and their contents will be removed.")
+    term.setTextColor(colors.white)
+    drawButtons(buttons, height - 1, width)
+    while true do
+        local event, button, x, y = os.pullEventRaw()
+        if event == "mouse_click" and button == 1 and y == height - 1 then
+            for _, choice in ipairs(buttons) do
+                if x >= choice.left and x <= choice.right then return choice.action end
+            end
+        end
+    end
+end
+
+local function deleteSelected()
+    local entry = entries[selected]
+    if not entry or entry.name == ".." then
+        message = "Select a file or folder to delete."
+        return
+    end
+    if entry.path == homeDirectory
+        or entry.path:sub(1, #homeDirectory + 1) ~= homeDirectory .. "/" then
+        message = "That location cannot be deleted."
+        return
+    end
+    if not confirmDelete(entry.path) then
+        message = "Deletion cancelled."
+        return
+    end
+
+    local ok, err = pcall(fs.delete, entry.path)
+    if not ok then
+        message = "Could not delete " .. entry.name .. ": " .. tostring(err)
+        return
+    end
+    refreshEntries()
+    message = "Deleted " .. entry.name .. "."
+end
+
 local function saveTransferredFile(source)
     local name = source.getName()
     local fileName = fs.getName(name)
@@ -396,6 +448,8 @@ while true do
                 selected = 1
                 refreshEntries()
                 message = "Returned to your home directory."
+            elseif action == "delete" then
+                deleteSelected()
             elseif action == "exit" then
                 return
             end
