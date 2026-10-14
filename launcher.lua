@@ -499,7 +499,8 @@ local function waitForReturn()
     term.setCursorPos(1, 1)
     term.clear()
     print("")
-    print("Exit the program and returning to the launcher.")
+    print("Exiting the program and returning to the launcher.")
+    sleep(1)
 end
 
 local function updateSelected()
