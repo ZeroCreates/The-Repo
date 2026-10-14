@@ -15,6 +15,8 @@ local screen = "apps"
 local selectedSetting = 1
 local currentUser
 local homeDirectory
+local profilePasswords = {}
+local authorizedProfiles = {}
 local USER_ROOT = "/users"
 local SYSTEM_DIRECTORY = "/.launcher"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
@@ -263,8 +265,9 @@ end
 
 local function chooseUser()
     fs.makeDir(USER_ROOT)
-    local profilePasswords, passwordError = loadProfilePasswords()
-    if not profilePasswords then error(passwordError, 0) end
+    local loadedPasswords, passwordError = loadProfilePasswords()
+    if not loadedPasswords then error(passwordError, 0) end
+    profilePasswords = loadedPasswords
     local userSelected = 1
     local userFirstVisible = 1
     local profileMessage = ""
@@ -387,6 +390,7 @@ local function chooseUser()
         end
         currentUser = username
         homeDirectory = path
+        authorizedProfiles = {}
         return true
     end
 
@@ -452,7 +456,7 @@ local function chooseUser()
         end
         term.setCursorPos(2, height - 2)
         term.setTextColor(colors.yellow)
-        term.write(("Password prompts only gate launcher access; files are not isolated."):sub(1, math.max(0, width - 2)))
+        term.write(("Launcher sandbox is best-effort; cross-profile access needs a password."):sub(1, math.max(0, width - 2)))
 
         local buttons = {}
         if currentUser then
@@ -489,6 +493,7 @@ local function chooseUser()
                     if authenticate(username) then
                         currentUser = username
                         homeDirectory = fs.combine(USER_ROOT, currentUser)
+                        authorizedProfiles = {}
                         return true
                     end
                 end
@@ -503,6 +508,53 @@ local function chooseUser()
             end
         end
     end
+end
+
+local function authorizeProfileAccess(username)
+    if type(username) ~= "string" or not username:match("^[%w_-]+$") then
+        return false, "Invalid profile name."
+    end
+    if username == currentUser or authorizedProfiles[username] then return true end
+
+    local profilePath = fs.combine(USER_ROOT, username)
+    if not fs.isDir(profilePath) then return false, "That profile does not exist." end
+
+    local expected = profilePasswords[username]
+    if type(expected) ~= "string" or expected == "" then
+        return false, "This profile has no password. Set one before accessing it."
+    end
+
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.cyan)
+    print("PROFILE ACCESS REQUIRED")
+    term.setTextColor(colors.white)
+    print("Enter the password for " .. username .. " to continue.")
+    write("Password: ")
+    local entered = read("*")
+    if entered ~= expected then
+        term.setTextColor(colors.yellow)
+        print("Incorrect password. Access denied.")
+        sleep(1)
+        return false, "Incorrect password for " .. username .. "."
+    end
+
+    authorizedProfiles[username] = true
+    return true
+end
+
+local function listOtherProfiles()
+    local profiles = {}
+    for _, username in ipairs(fs.list(USER_ROOT)) do
+        if username ~= currentUser and username:match("^[%w_-]+$")
+            and fs.isDir(fs.combine(USER_ROOT, username)) then
+            table.insert(profiles, username)
+        end
+    end
+    table.sort(profiles, function(first, second) return first:lower() < second:lower() end)
+    return profiles
 end
 
 local function loadCatalogNames()
@@ -850,7 +902,16 @@ local function runHomeProgram(programPath, ...)
     end
 
     local function physicalPath(path)
-        return nativeFs.combine(homeDirectory, normalizeVirtualPath(path))
+        local normalizedPath = normalizeVirtualPath(path)
+        if type(path) == "string" and path:sub(1, 1) == "/" then
+            local username, profilePath = normalizedPath:match("^users/([%w_-]+)/*(.*)$")
+            if username then
+                local authorized, accessError = authorizeProfileAccess(username)
+                if not authorized then error(accessError, 0) end
+                return nativeFs.combine(USER_ROOT, username, profilePath)
+            end
+        end
+        return nativeFs.combine(homeDirectory, normalizedPath)
     end
 
     local function virtualAbsolute(path)
@@ -918,12 +979,21 @@ local function runHomeProgram(programPath, ...)
             sandboxFs.find = function(pattern)
                 local results = {}
                 local physicalHome = nativeFs.combine(homeDirectory, "")
+                local normalizedPattern = normalizeVirtualPath(pattern)
+                local targetUsername = normalizedPattern:match("^users/([%w_-]+)/")
+                    or normalizedPattern:match("^users/([%w_-]+)$")
+                local physicalProfileRoot = targetUsername
+                    and nativeFs.combine(USER_ROOT, targetUsername)
                 for _, found in ipairs(nativeFs.find(physicalPath(pattern))) do
                     local normalizedFound = found:gsub("^/+", "")
                     if normalizedFound == physicalHome then
                         table.insert(results, "/")
                     elseif normalizedFound:sub(1, #physicalHome + 1) == physicalHome .. "/" then
                         table.insert(results, "/" .. normalizedFound:sub(#physicalHome + 2))
+                    elseif physicalProfileRoot
+                        and (normalizedFound == physicalProfileRoot
+                            or normalizedFound:sub(1, #physicalProfileRoot + 1) == physicalProfileRoot .. "/") then
+                        table.insert(results, "/" .. normalizedFound)
                     end
                 end
                 return results
@@ -937,9 +1007,10 @@ local function runHomeProgram(programPath, ...)
                 local completionDirectory = normalizeVirtualPath(
                     baseDirectory .. (pathDirectory ~= "" and "/" .. pathDirectory or "")
                 )
+                local physicalDirectory = physicalPath("/" .. completionDirectory)
                 local completions = nativeFs.complete(
                     name,
-                    nativeFs.combine(homeDirectory, completionDirectory),
+                    physicalDirectory,
                     includeFiles,
                     includeDirs
                 )
@@ -1078,7 +1149,10 @@ local function launchSelected()
             end
             return runHomeProgram(path, ...)
         end
-        ok, result = pcall(nativeOs.run, _ENV, app.path, homeDirectory, runProfileProgram)
+        ok, result = pcall(
+            nativeOs.run, _ENV, app.path, homeDirectory,
+            runProfileProgram, listOtherProfiles, authorizeProfileAccess
+        )
     else
         ok, result = pcall(nativeOs.run, _ENV, app.path, homeDirectory)
     end

@@ -1,9 +1,11 @@
-local requestedHome, runProfileProgram = ...
+local requestedHome, runProfileProgram, listOtherProfiles, authorizeProfileAccess = ...
 local normalizedHome = type(requestedHome) == "string" and requestedHome:gsub("^/+", "")
 local homeDirectory = normalizedHome and normalizedHome:match("^users/[%w_-]+$")
     and normalizedHome or "users/default"
+local profilesDirectory = "users"
 local currentDirectory = fs.combine(homeDirectory, "desktop")
 local currentRoot = homeDirectory
+local authorizedProfileRoot
 local diskMounts = {}
 fs.makeDir(homeDirectory)
 fs.makeDir(currentDirectory)
@@ -41,6 +43,14 @@ end
 
 local function displayPath(path)
     local normalizedPath = path:gsub("^/+", "")
+    if authorizedProfileRoot and isWithinRoot(normalizedPath, authorizedProfileRoot) then
+        local username = authorizedProfileRoot:match("^users/([%w_-]+)$")
+        if username then
+            local suffix = normalizedPath == authorizedProfileRoot
+                and "" or normalizedPath:sub(#authorizedProfileRoot + 2)
+            return "H@" .. username .. "://" .. suffix
+        end
+    end
     if normalizedPath == homeDirectory then return "H://" end
     if isWithinRoot(normalizedPath, homeDirectory) then
         return "H://" .. normalizedPath:sub(#homeDirectory + 2)
@@ -49,6 +59,14 @@ local function displayPath(path)
 end
 
 local function displayMessage(text)
+    if authorizedProfileRoot then
+        local username = authorizedProfileRoot:match("^users/([%w_-]+)$")
+        if username then
+            local profilePattern = authorizedProfileRoot:gsub("([^%w])", "%%%1")
+            text = text:gsub(profilePattern .. "/", "H@" .. username .. "://")
+                :gsub(profilePattern, "H@" .. username .. "://")
+        end
+    end
     local homePattern = homeDirectory:gsub("([^%w])", "%%%1")
     return (text:gsub(homePattern .. "/", "H://"):gsub(homePattern, "H://"))
 end
@@ -98,15 +116,37 @@ end
 
 local function refreshEntries()
     refreshDiskMounts()
-    if currentRoot ~= homeDirectory and not isMountedDisk(currentRoot) then
+    if currentRoot ~= homeDirectory and currentRoot ~= profilesDirectory
+        and currentRoot ~= authorizedProfileRoot and not isMountedDisk(currentRoot) then
         currentDirectory = homeDirectory
         currentRoot = homeDirectory
+        authorizedProfileRoot = nil
         message = "The disk was removed. Returned to your home directory."
     end
 
     local updated = {}
     if currentDirectory ~= currentRoot then
         table.insert(updated, { name = "..", path = parentDirectory(currentDirectory), isDirectory = true })
+    elseif currentRoot == profilesDirectory then
+        table.insert(updated, {
+            name = "..",
+            path = homeDirectory,
+            isDirectory = true,
+            returnHome = true,
+        })
+        if type(listOtherProfiles) == "function" then
+            for _, username in ipairs(listOtherProfiles()) do
+                if type(username) == "string" and username:match("^[%w_-]+$") then
+                    table.insert(updated, {
+                        name = username,
+                        path = fs.combine(profilesDirectory, username),
+                        isDirectory = true,
+                        profileRoot = true,
+                        username = username,
+                    })
+                end
+            end
+        end
     elseif currentRoot ~= homeDirectory then
         table.insert(updated, {
             name = "..",
@@ -115,6 +155,12 @@ local function refreshEntries()
             returnHome = true,
         })
     else
+        table.insert(updated, {
+            name = "[Other Users]",
+            path = profilesDirectory,
+            isDirectory = true,
+            profilesRoot = true,
+        })
         for _, mount in ipairs(diskMounts) do
             table.insert(updated, {
                 name = "[Disk] " .. mount.path,
@@ -125,13 +171,15 @@ local function refreshEntries()
         end
     end
 
-    for _, name in ipairs(fs.list(currentDirectory)) do
-        local path = fs.combine(currentDirectory, name)
-        table.insert(updated, {
-            name = name,
-            path = path,
-            isDirectory = fs.isDir(path),
-        })
+    if currentRoot ~= profilesDirectory then
+        for _, name in ipairs(fs.list(currentDirectory)) do
+            local path = fs.combine(currentDirectory, name)
+            table.insert(updated, {
+                name = name,
+                path = path,
+                isDirectory = fs.isDir(path),
+            })
+        end
     end
 
     table.sort(updated, function(first, second)
@@ -427,7 +475,7 @@ end
 
 local function deleteSelected()
     local entry = entries[selected]
-    if not entry or entry.name == ".." then
+    if not entry or entry.name == ".." or entry.profilesRoot or entry.profileRoot then
         message = "Select a file or folder to delete."
         return
     end
@@ -452,6 +500,7 @@ end
 local function copyOrCutSelected(mode)
     local entry = entries[selected]
     if not entry or entry.name == ".." or entry.diskRoot or entry.returnHome
+        or entry.profilesRoot or entry.profileRoot
         or not isWithinRoot(entry.path, currentRoot) or entry.path == currentRoot then
         message = "Select a file or folder first."
         return
@@ -570,6 +619,7 @@ local function openSelected()
     if entry.diskRoot then
         currentRoot = entry.path
         currentDirectory = entry.path
+        authorizedProfileRoot = nil
         selected = 1
         refreshEntries()
         message = "Opened disk " .. displayPath(entry.path) .. "."
@@ -578,9 +628,36 @@ local function openSelected()
     if entry.returnHome then
         currentRoot = homeDirectory
         currentDirectory = homeDirectory
+        authorizedProfileRoot = nil
         selected = 1
         refreshEntries()
         message = "Returned to your home directory."
+        return
+    end
+    if entry.profilesRoot then
+        currentRoot = profilesDirectory
+        currentDirectory = profilesDirectory
+        selected = 1
+        refreshEntries()
+        message = "Choose a profile and enter its password."
+        return
+    end
+    if entry.profileRoot then
+        if type(authorizeProfileAccess) ~= "function" then
+            message = "The launcher could not authenticate access to other profiles."
+            return
+        end
+        local authorized, accessError = authorizeProfileAccess(entry.username)
+        if not authorized then
+            message = accessError or "Profile access denied."
+            return
+        end
+        authorizedProfileRoot = entry.path
+        currentRoot = entry.path
+        currentDirectory = entry.path
+        selected = 1
+        refreshEntries()
+        message = "Opened " .. entry.name .. "'s home directory."
         return
     end
     if not isWithinRoot(entry.path, currentRoot) then
@@ -651,6 +728,7 @@ while true do
             elseif action == "home" then
                 currentDirectory = homeDirectory
                 currentRoot = homeDirectory
+                authorizedProfileRoot = nil
                 selected = 1
                 refreshEntries()
                 message = "Returned to your home directory."
