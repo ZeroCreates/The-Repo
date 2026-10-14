@@ -382,7 +382,7 @@ local function showDeliveryDetails(order)
     local width, height = term.getSize()
     writeAt(2, 5, "PAYMENT REF: "
         .. (order.reference or string.format("ORD-%06d", order.id)), colors.cyan)
-    local address = order.deliveryAddress or "No address was saved. Update and restart server.lua."
+    local address = order.deliveryAddress or "No address was saved. Update and restart market-server.lua."
     local lineWidth = math.max(1, width - 3)
     local row = 6
     for start = 1, #address, lineWidth do

@@ -1,5 +1,7 @@
 local LAUNCHER_NAME = "launcher.lua"
-local DOWNLOADER_PATH = "/app-downloader.lua"
+local SYSTEM_APP_DIRECTORY = "/.launcher/apps"
+local DOWNLOADER_PATH = SYSTEM_APP_DIRECTORY .. "/app-downloader.lua"
+local SYSTEM_FILE_BROWSER_PATH = SYSTEM_APP_DIRECTORY .. "/file-browser.lua"
 local REPOSITORY_BASE_URL = "https://raw.githubusercontent.com/ZeroCreates/The-Repo/main/"
 local apps = {}
 local selected = 1
@@ -13,6 +15,7 @@ local homeDirectory
 local USER_ROOT = "/users"
 local SYSTEM_DIRECTORY = "/.launcher"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
+local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local LEGACY_SETTINGS_PATH = "/.launcher-settings.json"
 local THEMES = {
     { name = "Ocean", accent = colors.cyan, highlight = colors.blue },
@@ -24,10 +27,6 @@ local settings = {
     theme = 1,
     showPath = true,
     alphabetical = true,
-}
-
-local preferredApps = {
-    { path = "app-downloader.lua", name = "App Downloader" },
 }
 
 local function isLuaFile(path)
@@ -89,13 +88,64 @@ local function saveSettings()
     return true
 end
 
+local function loadProfilePasswords()
+    if not fs.exists(PROFILE_PASSWORDS_PATH) then return {} end
+    local file = fs.open(PROFILE_PASSWORDS_PATH, "r")
+    if not file then
+        return nil, "Could not read profile passwords from " .. PROFILE_PASSWORDS_PATH .. "."
+    end
+    local contents = file.readAll()
+    file.close()
+    local ok, passwords = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(passwords) ~= "table" then
+        return nil, "Profile password data is invalid. Refusing to bypass profile passwords."
+    end
+    for username, password in pairs(passwords) do
+        if type(username) ~= "string" or not username:match("^[%w_-]+$")
+            or type(password) ~= "string" then
+            return nil, "Profile password data is invalid. Refusing to bypass profile passwords."
+        end
+    end
+    return passwords
+end
+
+local function saveProfilePasswords(passwords)
+    fs.makeDir(SYSTEM_DIRECTORY)
+    local temporary = PROFILE_PASSWORDS_PATH .. ".tmp"
+    local backup = PROFILE_PASSWORDS_PATH .. ".bak"
+    if fs.exists(temporary) then fs.delete(temporary) end
+    if fs.exists(backup) then fs.delete(backup) end
+    local file = fs.open(temporary, "w")
+    if not file then return false, "Could not create " .. temporary .. "." end
+    file.write(textutils.serializeJSON(passwords))
+    file.close()
+
+    if fs.exists(PROFILE_PASSWORDS_PATH) then
+        local backedUp, backupError = pcall(fs.move, PROFILE_PASSWORDS_PATH, backup)
+        if not backedUp then
+            fs.delete(temporary)
+            return false, "Could not back up profile passwords: " .. tostring(backupError)
+        end
+    end
+    local moved, moveError = pcall(fs.move, temporary, PROFILE_PASSWORDS_PATH)
+    if not moved then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        if fs.exists(backup) then fs.move(backup, PROFILE_PASSWORDS_PATH) end
+        return false, "Could not save profile passwords: " .. tostring(moveError)
+    end
+    if fs.exists(backup) then fs.delete(backup) end
+    return true
+end
+
 local function installDownloader()
-    if fs.exists(DOWNLOADER_PATH) then return true end
+    if fs.exists(DOWNLOADER_PATH) and fs.exists(SYSTEM_FILE_BROWSER_PATH) then return true end
     if not http or not http.get then
         return false, "Enable the ComputerCraft HTTP API to download the app downloader."
     end
 
-    local ok, response, requestError = pcall(http.get, REPOSITORY_BASE_URL .. "app-downloader.lua")
+    local ok, response, requestError = pcall(
+        http.get, REPOSITORY_BASE_URL .. "computercraft/system/app-downloader.lua"
+    )
     if not ok then return false, "Downloader request failed: " .. tostring(response) end
     if not response then
         return false, "Downloader request failed: " .. tostring(requestError or "HTTP request failed.")
@@ -114,17 +164,29 @@ local function installDownloader()
     end
 
     local temporary = DOWNLOADER_PATH .. ".download-tmp"
+    local backup = DOWNLOADER_PATH .. ".download-bak"
+    fs.makeDir(SYSTEM_APP_DIRECTORY)
     if fs.exists(temporary) then fs.delete(temporary) end
+    if fs.exists(backup) then fs.delete(backup) end
     local file = fs.open(temporary, "w")
     if not file then return false, "Could not create " .. temporary .. "." end
     file.write(contents)
     file.close()
 
+    if fs.exists(DOWNLOADER_PATH) then
+        local backedUp, backupError = pcall(fs.move, DOWNLOADER_PATH, backup)
+        if not backedUp then
+            fs.delete(temporary)
+            return false, "Could not back up the app downloader: " .. tostring(backupError)
+        end
+    end
     local moved, moveError = pcall(fs.move, temporary, DOWNLOADER_PATH)
     if not moved then
         if fs.exists(temporary) then fs.delete(temporary) end
+        if fs.exists(backup) then fs.move(backup, DOWNLOADER_PATH) end
         return false, "Could not install the app downloader: " .. tostring(moveError)
     end
+    if fs.exists(backup) then fs.delete(backup) end
     return true
 end
 
@@ -200,9 +262,69 @@ end
 
 local function chooseUser()
     fs.makeDir(USER_ROOT)
+    local profilePasswords, passwordError = loadProfilePasswords()
+    if not profilePasswords then error(passwordError, 0) end
     local userSelected = 1
     local userFirstVisible = 1
     local profileMessage = ""
+
+    local function askPasswordOption()
+        local width, height = term.getSize()
+        local buttons = {
+            { label = "NO PASSWORD", action = "none" },
+            { label = "SET PASSWORD", action = "set" },
+            { label = "CANCEL", action = "cancel" },
+        }
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1, 1)
+        term.setTextColor(colors.cyan)
+        print("PROFILE PASSWORD")
+        term.setTextColor(colors.lightGray)
+        print("This password only gates access through the launcher.")
+        print("It is saved unencrypted; other programs can read profile files.")
+        local slotWidth = math.max(1, math.floor(width / #buttons))
+        for index, option in ipairs(buttons) do
+            local left = (index - 1) * slotWidth + 1
+            local buttonWidth = index == #buttons and width - left + 1 or slotWidth
+            term.setCursorPos(left, height)
+            term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
+            term.setTextColor(colors.white)
+            term.write(("[" .. option.label .. "]"):sub(1, buttonWidth))
+            option.left = left
+            option.right = left + buttonWidth - 1
+        end
+        while true do
+            local event, button, x, y = os.pullEventRaw()
+            if event == "mouse_click" and button == 1 and y == height then
+                for _, option in ipairs(buttons) do
+                    if x >= option.left and x <= option.right then
+                        if option.action == "none" then return false end
+                        if option.action == "set" then return true end
+                        return nil
+                    end
+                end
+            end
+        end
+    end
+
+    local function authenticate(username)
+        local expected = profilePasswords[username]
+        if not expected then return true end
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1, 1)
+        term.setTextColor(colors.cyan)
+        print("PROFILE LOCKED")
+        term.setTextColor(colors.white)
+        write("Password for " .. username .. ": ")
+        local entered = read("*")
+        if entered == expected then return true end
+        profileMessage = "Incorrect password. Try again."
+        return false
+    end
 
     local function createProfile()
         term.setBackgroundColor(colors.black)
@@ -220,9 +342,50 @@ local function chooseUser()
             profileMessage = "That profile already exists. Select it from the list."
             return false
         end
+        local setPassword = askPasswordOption()
+        if setPassword == nil then
+            profileMessage = "Profile creation cancelled."
+            return false
+        end
+        local password
+        if setPassword then
+            term.setBackgroundColor(colors.black)
+            term.setTextColor(colors.white)
+            term.clear()
+            term.setCursorPos(1, 1)
+            print("Set a profile password")
+            write("Password: ")
+            password = read("*")
+            if password == "" then
+                profileMessage = "Password cannot be empty."
+                return false
+            end
+            write("Confirm password: ")
+            if read("*") ~= password then
+                profileMessage = "Passwords did not match."
+                return false
+            end
+        end
+
+        local created, createError = pcall(fs.makeDir, path)
+        if not created then
+            profileMessage = "Could not create profile: " .. tostring(createError)
+            return false
+        end
+        if password then
+            profilePasswords[username] = password
+        else
+            profilePasswords[username] = nil
+        end
+        local saved, saveError = saveProfilePasswords(profilePasswords)
+        if not saved then
+            profilePasswords[username] = nil
+            pcall(fs.delete, path)
+            profileMessage = saveError
+            return false
+        end
         currentUser = username
         homeDirectory = path
-        fs.makeDir(homeDirectory)
         return true
     end
 
@@ -288,7 +451,7 @@ local function chooseUser()
         end
         term.setCursorPos(2, height - 2)
         term.setTextColor(colors.yellow)
-        term.write(("Profiles have no password and are not security-isolated."):sub(1, math.max(0, width - 2)))
+        term.write(("Password prompts only gate launcher access; files are not isolated."):sub(1, math.max(0, width - 2)))
 
         local buttons = {}
         if currentUser then
@@ -321,9 +484,12 @@ local function chooseUser()
                 local wasSelected = userSelected == index
                 userSelected = index
                 if wasSelected then
-                    currentUser = users[userSelected]
-                    homeDirectory = fs.combine(USER_ROOT, currentUser)
-                    return true
+                    local username = users[userSelected]
+                    if authenticate(username) then
+                        currentUser = username
+                        homeDirectory = fs.combine(USER_ROOT, currentUser)
+                        return true
+                    end
                 end
             elseif y == height then
                 for _, profileButton in ipairs(buttons) do
@@ -417,14 +583,16 @@ end
 local function refreshApps()
     local available = {}
     local catalogNames = loadCatalogNames()
-    for _, app in ipairs(preferredApps) do
-        local rootPath = "/" .. app.path
-        if fs.exists(rootPath) and isLuaFile(rootPath) then
+
+    fs.makeDir(SYSTEM_APP_DIRECTORY)
+    for _, name in ipairs(fs.list(SYSTEM_APP_DIRECTORY)) do
+        local path = fs.combine(SYSTEM_APP_DIRECTORY, name)
+        if isLuaFile(path) and not available[path] then
             table.insert(available, {
-                path = rootPath,
-                name = catalogNames[app.path] or app.name,
+                path = path,
+                name = catalogNames[name] or displayName(name),
             })
-            available[app.path] = true
+            available[path] = true
         end
     end
 
@@ -755,8 +923,24 @@ if migrateLegacySettings and saveSettings() then
 end
 chooseUser()
 local downloaded, downloadMessage = installDownloader()
-refreshApps()
+local systemAppsInstalled = false
+local systemAppInstallMessage
 if downloaded then
+    local ok, result = pcall(os.run, _ENV, DOWNLOADER_PATH, "install-system", homeDirectory)
+    if ok and result ~= false then
+        systemAppsInstalled = true
+    else
+        systemAppInstallMessage = ok
+            and "Could not automatically install system apps."
+            or "Could not run system app installation: " .. tostring(result)
+    end
+end
+refreshApps()
+if systemAppInstallMessage then
+    message = systemAppInstallMessage
+elseif downloaded and systemAppsInstalled then
+    message = "System apps are ready."
+elseif downloaded then
     message = "App downloader is ready."
 else
     message = downloadMessage

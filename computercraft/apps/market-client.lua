@@ -424,7 +424,7 @@ local function placeOrder(cart)
     if not response.order or response.order.deliveryAddress ~= deliveryAddress then
         local orderId = response.order and response.order.id or "unknown"
         showNotice("SERVER NEEDS UPDATE", "Order #" .. orderId
-            .. " was accepted, but the server did not save its address. Update and restart server.lua.")
+            .. " was accepted, but the server did not save its address. Update and restart market-server.lua.")
         return
     end
     local printed, printError = printOrderReceipt(response.order)

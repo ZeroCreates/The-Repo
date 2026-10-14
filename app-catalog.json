@@ -1,8 +1,9 @@
 [
   {
     "name": "App Downloader",
-    "source": "app-downloader.lua",
+    "source": "computercraft/system/app-downloader.lua",
     "file": "app-downloader.lua",
+    "scope": "system",
     "description": "Download and update ComputerCraft apps"
   },
   {
@@ -31,8 +32,9 @@
   },
   {
     "name": "File Browser",
-    "source": "computercraft/apps/file-browser.lua",
+    "source": "computercraft/system/file-browser.lua",
     "file": "file-browser.lua",
+    "scope": "system",
     "description": "Browse files and edit them with the built-in editor"
   },
   {
@@ -42,6 +44,12 @@
     "description": "Run Lua expressions and statements interactively"
   },
   {
+    "name": "Market Provider",
+    "source": "computercraft/apps/market-provider.lua",
+    "file": "market-provider.lua",
+    "description": "Manage provider products and orders"
+  },
+  {
     "name": "Notes",
     "source": "computercraft/apps/notes.lua",
     "file": "notes.lua",
@@ -49,8 +57,8 @@
   },
   {
     "name": "The Market",
-    "source": "client.lua",
-    "file": "market.lua",
+    "source": "computercraft/apps/market-client.lua",
+    "file": "market-client.lua",
     "description": "Allows users to shop for items that are available for sale in the market"
   }
 ]

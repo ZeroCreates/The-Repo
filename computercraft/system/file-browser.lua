@@ -3,6 +3,8 @@ local normalizedHome = type(requestedHome) == "string" and requestedHome:gsub("^
 local homeDirectory = normalizedHome and normalizedHome:match("^users/[%w_-]+$")
     and normalizedHome or "users/default"
 local currentDirectory = homeDirectory
+local currentRoot = homeDirectory
+local diskMounts = {}
 fs.makeDir(homeDirectory)
 local entries = {}
 local selected = 1
@@ -30,20 +32,80 @@ local function loadTheme()
     end
 end
 
+local function isWithinRoot(path, root)
+    return path == root or path:sub(1, #root + 1) == root .. "/"
+end
+
+local function refreshDiskMounts()
+    local mounted = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        local ok, peripheralType = pcall(peripheral.getType, name)
+        if ok and peripheralType == "drive" then
+            local wrapped, drive = pcall(peripheral.wrap, name)
+            if wrapped and drive and type(drive.getMountPath) == "function" then
+                local mountOk, mountPath = pcall(drive.getMountPath)
+                if mountOk and type(mountPath) == "string" then
+                    mountPath = mountPath:gsub("^/+", ""):gsub("/+$", "")
+                    if mountPath:match("^[%w_%-]+$") then
+                        mounted[mountPath] = { name = name, path = mountPath }
+                    end
+                end
+            end
+        end
+    end
+
+    diskMounts = {}
+    for _, mount in pairs(mounted) do
+        table.insert(diskMounts, mount)
+    end
+    table.sort(diskMounts, function(first, second)
+        return first.path:lower() < second.path:lower()
+    end)
+end
+
+local function isMountedDisk(path)
+    for _, mount in ipairs(diskMounts) do
+        if mount.path == path then return true end
+    end
+    return false
+end
+
 local function parentDirectory(path)
-    if path == homeDirectory then return homeDirectory end
+    if path == currentRoot then return currentRoot end
     local parent = path:match("^(.*)/[^/]+$")
-    if not parent or parent == "" or parent ~= homeDirectory
-        and parent:sub(1, #homeDirectory + 1) ~= homeDirectory .. "/" then
-        return homeDirectory
+    if not parent or parent == "" or not isWithinRoot(parent, currentRoot) then
+        return currentRoot
     end
     return parent
 end
 
 local function refreshEntries()
+    refreshDiskMounts()
+    if currentRoot ~= homeDirectory and not isMountedDisk(currentRoot) then
+        currentDirectory = homeDirectory
+        currentRoot = homeDirectory
+        message = "The disk was removed. Returned to your home directory."
+    end
+
     local updated = {}
-    if currentDirectory ~= homeDirectory then
+    if currentDirectory ~= currentRoot then
         table.insert(updated, { name = "..", path = parentDirectory(currentDirectory), isDirectory = true })
+    elseif currentRoot ~= homeDirectory then
+        table.insert(updated, {
+            name = "..",
+            path = homeDirectory,
+            isDirectory = true,
+            returnHome = true,
+        })
+    else
+        for _, mount in ipairs(diskMounts) do
+            table.insert(updated, {
+                name = "[Disk] " .. mount.path,
+                path = mount.path,
+                isDirectory = true,
+                diskRoot = true,
+            })
+        end
     end
 
     for _, name in ipairs(fs.list(currentDirectory)) do
@@ -170,8 +232,8 @@ local function editSelected()
         message = "Select a file to edit."
         return
     end
-    if entry.path:sub(1, #homeDirectory + 1) ~= homeDirectory .. "/" then
-        message = "That file is outside your home directory."
+    if not isWithinRoot(entry.path, currentRoot) or entry.path == currentRoot then
+        message = "That file is outside the current location."
         return
     end
 
@@ -322,8 +384,7 @@ local function deleteSelected()
         message = "Select a file or folder to delete."
         return
     end
-    if entry.path == homeDirectory
-        or entry.path:sub(1, #homeDirectory + 1) ~= homeDirectory .. "/" then
+    if entry.path == currentRoot or not isWithinRoot(entry.path, currentRoot) then
         message = "That location cannot be deleted."
         return
     end
@@ -361,13 +422,11 @@ local function saveTransferredFile(source)
 
     local contents = source.readAll()
     source.close()
-    local username = homeDirectory:match("^users/([%w_-]+)$") or "default"
-    local cacheDirectory = fs.combine("/.launcher/cache", username)
-    fs.makeDir(cacheDirectory)
-    local temporary = fs.combine(cacheDirectory, fileName .. ".upload-tmp")
-    local backup = fs.combine(cacheDirectory, fileName .. ".upload-bak")
-    if fs.exists(temporary) then fs.delete(temporary) end
-    if fs.exists(backup) then fs.delete(backup) end
+    local temporary = fs.combine(currentDirectory, fileName .. ".upload-tmp")
+    local backup = fs.combine(currentDirectory, fileName .. ".upload-bak")
+    if fs.exists(temporary) or fs.exists(backup) then
+        return false, "Skipped " .. fileName .. " because an upload recovery file already exists."
+    end
 
     local output = fs.open(temporary, "wb")
     if not output then return false, "Could not create " .. temporary .. "." end
@@ -398,9 +457,24 @@ local function openSelected()
         message = "This directory is empty."
         return
     end
-    if entry.path ~= homeDirectory
-        and entry.path:sub(1, #homeDirectory + 1) ~= homeDirectory .. "/" then
-        message = "That location is outside your home directory."
+    if entry.diskRoot then
+        currentRoot = entry.path
+        currentDirectory = entry.path
+        selected = 1
+        refreshEntries()
+        message = "Opened disk " .. entry.path .. "."
+        return
+    end
+    if entry.returnHome then
+        currentRoot = homeDirectory
+        currentDirectory = homeDirectory
+        selected = 1
+        refreshEntries()
+        message = "Returned to your home directory."
+        return
+    end
+    if not isWithinRoot(entry.path, currentRoot) then
+        message = "That location is outside the current location."
         return
     end
     if entry.isDirectory then
@@ -439,12 +513,18 @@ while true do
         elseif button == 1 and y == height - 1 then
             local action = buttonAt(bottomButtons, x)
             if action == "up" and currentDirectory ~= homeDirectory then
-                currentDirectory = parentDirectory(currentDirectory)
+                if currentDirectory == currentRoot then
+                    currentRoot = homeDirectory
+                    currentDirectory = homeDirectory
+                else
+                    currentDirectory = parentDirectory(currentDirectory)
+                end
                 selected = 1
                 refreshEntries()
                 message = "Opened " .. currentDirectory .. "."
             elseif action == "home" then
                 currentDirectory = homeDirectory
+                currentRoot = homeDirectory
                 selected = 1
                 refreshEntries()
                 message = "Returned to your home directory."
@@ -454,6 +534,8 @@ while true do
                 return
             end
         end
+    elseif event == "peripheral" or event == "peripheral_detach" then
+        refreshEntries()
     elseif event == "file_transfer" then
         local transferredFiles = button.getFiles()
         local uploaded, failures = 0, {}

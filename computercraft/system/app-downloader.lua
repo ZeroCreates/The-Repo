@@ -4,6 +4,7 @@ local RAW_BASE_URL = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .
 local CATALOG_PATH = "app-catalog.json"
 local USER_ROOT = "/users/"
 local SYSTEM_DIRECTORY = "/.launcher"
+local SYSTEM_APP_DIRECTORY = SYSTEM_DIRECTORY .. "/apps"
 local CACHE_DIRECTORY = SYSTEM_DIRECTORY .. "/cache"
 local homeDirectory = USER_ROOT .. "default"
 local appDirectory = homeDirectory .. "/apps"
@@ -81,6 +82,7 @@ local function loadCatalog()
             or not entry.file:match("^[%w][%w_.%-]*%.lua$")
             or not entry.source:match("^[%w_./%-]+%.lua$")
             or entry.source:find("..", 1, true)
+            or entry.scope ~= nil and entry.scope ~= "system"
             or seenFiles[entry.file] then
             return nil, "Invalid app entry in " .. CATALOG_PATH .. "."
         end
@@ -247,6 +249,7 @@ local function setHomeDirectory(path)
     appDirectory = homeDirectory .. "/apps"
     APP_NAMES_PATH = SYSTEM_DIRECTORY .. "/app-catalog-names.json"
     fs.makeDir(SYSTEM_DIRECTORY)
+    fs.makeDir(SYSTEM_APP_DIRECTORY)
     fs.makeDir(CACHE_DIRECTORY)
     local legacyNamesPath = homeDirectory .. "/.app-catalog-names.json"
     if fs.exists(legacyNamesPath) then
@@ -319,7 +322,9 @@ local function downloadApp(app)
         return
     end
 
-    local destination = fs.combine(appDirectory, app.file)
+    local destinationDirectory = app.scope == "system" and SYSTEM_APP_DIRECTORY or appDirectory
+    fs.makeDir(destinationDirectory)
+    local destination = fs.combine(destinationDirectory, app.file)
     if not confirmOverwrite(destination) then
         message = "Download cancelled."
         return
@@ -361,7 +366,8 @@ local function updateApp(app)
         message = "Select an app to update."
         return
     end
-    local installedPath = fs.combine(appDirectory, app.file)
+    local destinationDirectory = app.scope == "system" and SYSTEM_APP_DIRECTORY or appDirectory
+    local installedPath = fs.combine(destinationDirectory, app.file)
     if not fs.exists(installedPath) then
         message = app.name .. " is not installed yet. Use Download first."
         return
@@ -370,7 +376,10 @@ local function updateApp(app)
 end
 
 local mode, target, requestedHome = ...
-if mode ~= "update" then
+if mode == "install-system" then
+    requestedHome = target
+    target = nil
+elseif mode ~= "update" then
     requestedHome = mode
     mode = nil
 end
@@ -386,11 +395,91 @@ if not catalog then
         printError(catalogError)
         return
     end
+    if mode == "install-system" then error(catalogError, 0) end
     apps = {}
     message = catalogError
 else
     apps = catalog
     message = "Loaded " .. #apps .. " app(s) from GitHub."
+end
+
+if mode == "install-system" then
+    local installed, failures = 0, {}
+    for _, app in ipairs(apps) do
+        if app.scope == "system" then
+            local destination = fs.combine(SYSTEM_APP_DIRECTORY, app.file)
+            if not fs.exists(destination) then
+                downloadApp(app)
+                if fs.exists(destination) then
+                    installed = installed + 1
+                else
+                    table.insert(failures, message)
+                end
+            end
+        end
+    end
+    if #failures > 0 then
+        error("Some system apps could not be installed: " .. table.concat(failures, " "), 0)
+    end
+
+    local migrationFailures = {}
+    for _, profile in ipairs(fs.list(USER_ROOT)) do
+        if profile:match("^[%w_-]+$") then
+            local profileHome = fs.combine(USER_ROOT, profile)
+            local profileApps = fs.combine(profileHome, "apps")
+            if fs.isDir(profileHome) then
+                for _, app in ipairs(apps) do
+                    if app.scope == "system" then
+                        local systemPath = fs.combine(SYSTEM_APP_DIRECTORY, app.file)
+                        local legacyCopies = {
+                            { path = fs.combine(profileApps, app.file), suffix = "" },
+                            { path = fs.combine(profileHome, app.file), suffix = ".root.bak" },
+                        }
+                        if fs.exists(systemPath) then
+                            for _, legacy in ipairs(legacyCopies) do
+                                local legacyPath = legacy.path
+                                if fs.exists(legacyPath) then
+                                    local backupDirectory = fs.combine(
+                                        fs.combine(SYSTEM_DIRECTORY, "legacy-apps"), profile
+                                    )
+                                    local backupPath = fs.combine(backupDirectory, app.file .. legacy.suffix)
+                                    if fs.exists(backupPath) then
+                                        table.insert(migrationFailures, profile .. "/" .. app.file
+                                            .. " was left in place because a backup already exists.")
+                                    else
+                                        fs.makeDir(backupDirectory)
+                                        local moved, moveError = pcall(fs.move, legacyPath, backupPath)
+                                        if not moved then
+                                            table.insert(migrationFailures, profile .. "/" .. app.file
+                                                .. ": " .. tostring(moveError))
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if #migrationFailures > 0 then
+        error("Some old system-app copies could not be moved: "
+            .. table.concat(migrationFailures, " "), 0)
+    end
+    local legacyRootDownloader = "/app-downloader.lua"
+    if fs.exists(legacyRootDownloader) then
+        local legacyDirectory = fs.combine(SYSTEM_DIRECTORY, "legacy-apps")
+        local legacyPath = fs.combine(legacyDirectory, "app-downloader.root.lua")
+        if not fs.exists(legacyPath) then
+            fs.makeDir(legacyDirectory)
+            local moved, moveError = pcall(fs.move, legacyRootDownloader, legacyPath)
+            if not moved then
+                error("Could not move old root app-downloader.lua: " .. tostring(moveError), 0)
+            end
+        end
+    end
+    print("Installed " .. installed .. " system app(s).")
+    return
 end
 
 if mode == "update" then
