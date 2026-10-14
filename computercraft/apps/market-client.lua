@@ -10,7 +10,7 @@ local USERDATA_FILE_STORED = "market/"..USERDATA_FILE
 local MARKET_USER = "Market customer"
 local notificationsLoaded, notifications = pcall(require, "notifications")
 if not notificationsLoaded or type(notifications) ~= "table"
-    or type(notifications.send) ~= "function" or type(notifications.write) ~= "function"
+    or type(notifications.send) ~= "function" or type(notifications.request) ~= "function"
     or type(notifications.listen) ~= "function" or type(notifications.unlisten) ~= "function"then
     notifications = nil
 end
