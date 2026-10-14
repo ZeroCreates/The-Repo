@@ -32,9 +32,16 @@ local function loadCatalog()
 
     local contents, err = request(RAW_BASE_URL .. CATALOG_PATH)
     if not contents then return nil, err end
+    contents = contents:gsub("^\239\187\191", "")
+    if not textutils or type(textutils.unserializeJSON) ~= "function" then
+        return nil, "This ComputerCraft version does not support JSON parsing."
+    end
     local ok, entries = pcall(textutils.unserializeJSON, contents)
-    if not ok or type(entries) ~= "table" then
-        return nil, "Could not parse " .. CATALOG_PATH .. "."
+    if not ok then
+        return nil, "Could not parse " .. CATALOG_PATH .. ": " .. tostring(entries)
+    end
+    if type(entries) ~= "table" then
+        return nil, CATALOG_PATH .. " must contain a JSON array of apps."
     end
 
     local catalog, seenFiles = {}, {}
@@ -65,7 +72,7 @@ local function loadCatalog()
 end
 
 local function visibleAppRows(height)
-    return math.max(1, math.floor((height - 6) / 2))
+    return math.max(1, height - 6)
 end
 
 local function draw()
@@ -89,7 +96,7 @@ local function draw()
 
     local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
     for index = firstVisible, lastVisible do
-        local row = (index - firstVisible) * 2 + 3
+        local row = index - firstVisible + 3
         term.setCursorPos(2, row)
         if index == selected then
             term.setBackgroundColor(term.isColor() and colors.blue or colors.gray)
@@ -100,11 +107,12 @@ local function draw()
             term.setTextColor(colors.white)
             term.write(("  " .. apps[index].name):sub(1, math.max(0, width - 2)))
         end
-        term.setCursorPos(4, row + 1)
-        term.setTextColor(colors.lightGray)
-        term.write(apps[index].description:sub(1, math.max(0, width - 4)))
     end
 
+    term.setCursorPos(2, height - 3)
+    term.setTextColor(colors.lightGray)
+    local description = apps[selected] and apps[selected].description or "No apps available."
+    term.write(description:sub(1, math.max(0, width - 2)))
     term.setCursorPos(2, height - 2)
     term.setTextColor(colors.yellow)
     term.write(message:sub(1, math.max(0, width - 2)))
