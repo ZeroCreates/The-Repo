@@ -3,6 +3,9 @@ local SYSTEM_APP_DIRECTORY = "/.launcher/apps"
 local DOWNLOADER_PATH = SYSTEM_APP_DIRECTORY .. "/app-downloader.lua"
 local SYSTEM_FILE_BROWSER_PATH = SYSTEM_APP_DIRECTORY .. "/file-browser.lua"
 local REPOSITORY_BASE_URL = "https://raw.githubusercontent.com/ZeroCreates/The-Repo/main/"
+local nativeFs = fs
+local nativeOs = os
+local nativeRequire = require
 local apps = {}
 local selected = 1
 local firstVisible = 1
@@ -802,6 +805,250 @@ local function updateSelected()
     message = "Returned from the app downloader."
 end
 
+local function isInHomeDirectory(path)
+    local normalizedPath = path:gsub("^/+", ""):gsub("/+$", "")
+    local normalizedHome = homeDirectory:gsub("^/+", ""):gsub("/+$", "")
+    return normalizedPath == normalizedHome
+        or normalizedPath:sub(1, #normalizedHome + 1) == normalizedHome .. "/"
+end
+
+local function runHomeProgram(programPath, ...)
+    local normalizedHome = homeDirectory:gsub("^/+", ""):gsub("/+$", "")
+    local normalizedProgram = programPath:gsub("^/+", ""):gsub("/+$", "")
+    local virtualProgram
+    if normalizedProgram == normalizedHome then
+        virtualProgram = ""
+    elseif normalizedProgram:sub(1, #normalizedHome + 1) == normalizedHome .. "/" then
+        virtualProgram = normalizedProgram:sub(#normalizedHome + 2)
+    else
+        error("The program is outside the active profile home.", 0)
+    end
+
+    local virtualDirectory = ""
+    local function normalizeVirtualPath(path)
+        if type(path) ~= "string" then
+            error("Filesystem paths must be strings.", 0)
+        end
+
+        local segments = {}
+        if path:sub(1, 1) ~= "/" and virtualDirectory ~= "" then
+            for segment in virtualDirectory:gmatch("[^/]+") do
+                table.insert(segments, segment)
+            end
+        end
+        for segment in path:gmatch("[^/]+") do
+            if segment == ".." then
+                if #segments > 0 then table.remove(segments) end
+            elseif segment ~= "." then
+                table.insert(segments, segment)
+            end
+        end
+        return table.concat(segments, "/")
+    end
+
+    local function physicalPath(path)
+        return nativeFs.combine(homeDirectory, normalizeVirtualPath(path))
+    end
+
+    local function virtualAbsolute(path)
+        local normalized = normalizeVirtualPath(path)
+        return normalized == "" and "/" or "/" .. normalized
+    end
+
+    local function createEnvironment(parent, runningProgram)
+        local environment = {}
+        for name, value in pairs(_ENV) do environment[name] = value end
+        if type(parent) == "table" then
+            for name, value in pairs(parent) do environment[name] = value end
+        end
+
+        local sandboxFs = {}
+        sandboxFs.combine = function(...)
+            local parts = { ... }
+            local joined = ""
+            for index, part in ipairs(parts) do
+                if type(part) ~= "string" then
+                    error("Filesystem paths must be strings.", 0)
+                end
+                if index == 1 then
+                    joined = part
+                elseif joined == "" then
+                    joined = part
+                else
+                    joined = joined .. "/" .. part
+                end
+            end
+            return virtualAbsolute(joined)
+        end
+        sandboxFs.getName = function(path)
+            return nativeFs.getName(normalizeVirtualPath(path))
+        end
+        sandboxFs.getDir = function(path)
+            local directory = nativeFs.getDir(normalizeVirtualPath(path))
+            return directory == "" and "/" or "/" .. directory
+        end
+
+        local pathFunctions = {
+            "exists", "isDir", "list", "makeDir", "delete", "getSize",
+            "getFreeSpace", "getDrive", "isDriveRoot", "isReadOnly",
+            "getCapacity", "attributes", "open",
+        }
+        for _, name in ipairs(pathFunctions) do
+            if type(nativeFs[name]) == "function" then
+                local nativeFunction = nativeFs[name]
+                sandboxFs[name] = function(path, ...)
+                    return nativeFunction(physicalPath(path), ...)
+                end
+            end
+        end
+        for _, name in ipairs({ "move", "copy" }) do
+            if type(nativeFs[name]) == "function" then
+                local nativeFunction = nativeFs[name]
+                sandboxFs[name] = function(source, destination, ...)
+                    return nativeFunction(physicalPath(source), physicalPath(destination), ...)
+                end
+            end
+        end
+        if type(nativeFs.find) == "function" then
+            sandboxFs.find = function(pattern)
+                local results = {}
+                local physicalHome = nativeFs.combine(homeDirectory, "")
+                for _, found in ipairs(nativeFs.find(physicalPath(pattern))) do
+                    local normalizedFound = found:gsub("^/+", "")
+                    if normalizedFound == physicalHome then
+                        table.insert(results, "/")
+                    elseif normalizedFound:sub(1, #physicalHome + 1) == physicalHome .. "/" then
+                        table.insert(results, "/" .. normalizedFound:sub(#physicalHome + 2))
+                    end
+                end
+                return results
+            end
+        end
+        if type(nativeFs.complete) == "function" then
+            sandboxFs.complete = function(path, location, includeFiles, includeDirs)
+                local pathDirectory = nativeFs.getDir(path)
+                local name = nativeFs.getName(path)
+                local baseDirectory = path:sub(1, 1) == "/" and "/" or (location or virtualDirectory)
+                local completionDirectory = normalizeVirtualPath(
+                    baseDirectory .. (pathDirectory ~= "" and "/" .. pathDirectory or "")
+                )
+                local completions = nativeFs.complete(
+                    name,
+                    nativeFs.combine(homeDirectory, completionDirectory),
+                    includeFiles,
+                    includeDirs
+                )
+                local prefix = pathDirectory ~= "" and pathDirectory .. "/" or ""
+                local result = {}
+                for _, completion in ipairs(completions) do
+                    table.insert(result, prefix .. completion)
+                end
+                return result
+            end
+        end
+
+        local sandboxOs = {}
+        for name, value in pairs(nativeOs) do sandboxOs[name] = value end
+        sandboxOs.loadAPI = nil
+        sandboxOs.unloadAPI = nil
+        local currentEnvironment = environment
+        sandboxOs.run = function(parent, path, ...)
+            local virtualPath = normalizeVirtualPath(path)
+            local target = nativeFs.combine(homeDirectory, virtualPath)
+            if not nativeFs.exists(target) or nativeFs.isDir(target) then return false end
+            local parentEnvironment = type(parent) == "table" and parent or currentEnvironment
+            local child = createEnvironment(parentEnvironment, virtualPath)
+            return nativeOs.run(child, target, ...)
+        end
+
+        local sandboxShell
+        sandboxShell = {
+            dir = function() return virtualDirectory end,
+            setDir = function(path)
+                local target = physicalPath(path)
+                if not nativeFs.isDir(target) then return false end
+                virtualDirectory = normalizeVirtualPath(path)
+                return true
+            end,
+            getRunningProgram = function() return virtualAbsolute(runningProgram) end,
+            resolveProgram = function(path)
+                if type(path) ~= "string" then return nil end
+                local target = normalizeVirtualPath(path)
+                local candidates = { target }
+                if not path:find("/", 1, true) then
+                    table.insert(candidates, normalizeVirtualPath("apps/" .. path))
+                end
+                for _, candidate in ipairs(candidates) do
+                    local resolved = nativeFs.combine(homeDirectory, candidate)
+                    if nativeFs.exists(resolved) and not nativeFs.isDir(resolved) then
+                        return candidate == "" and "/" or "/" .. candidate
+                    end
+                end
+                return nil
+            end,
+            run = function(path, ...)
+                local resolved = sandboxShell.resolveProgram(path)
+                if not resolved then return false end
+                return sandboxOs.run(currentEnvironment, resolved, ...)
+            end,
+            execute = function(path, ...)
+                return sandboxShell.run(path, ...)
+            end,
+            path = function() return "." end,
+        }
+
+        environment.fs = sandboxFs
+        environment.os = sandboxOs
+        environment.shell = sandboxShell
+        environment._G = environment
+        environment.debug = nil
+        environment.package = nil
+        environment.require = function(moduleName)
+            if moduleName ~= "cc.pretty" or type(nativeRequire) ~= "function" then
+                error("Only the built-in cc.pretty module is available to profile apps.", 2)
+            end
+            return nativeRequire(moduleName)
+        end
+        environment.loadfile = nil
+        environment.dofile = nil
+        environment.loadstring = nil
+        environment.getfenv = nil
+        environment.setfenv = nil
+        environment.io = nil
+        environment.help = nil
+        environment.settings = nil
+        environment.multishell = nil
+        if type(environment.paintutils) == "table" then
+            local safePaintutils = {}
+            for name, value in pairs(environment.paintutils) do safePaintutils[name] = value end
+            if type(environment.paintutils.loadImage) == "function" then
+                local nativeLoadImage = environment.paintutils.loadImage
+                safePaintutils.loadImage = function(path)
+                    return nativeLoadImage(physicalPath(path))
+                end
+            end
+            environment.paintutils = safePaintutils
+        end
+        if type(environment.cc) == "table" then
+            local safeCc = {}
+            for name, value in pairs(environment.cc) do
+                if name ~= "require" and name ~= "internal" then safeCc[name] = value end
+            end
+            environment.cc = safeCc
+        end
+        if type(load) == "function" then
+            local nativeLoad = load
+            environment.load = function(chunk, chunkName, mode, chunkEnvironment)
+                return nativeLoad(chunk, chunkName, mode, chunkEnvironment or environment)
+            end
+        end
+        return environment
+    end
+
+    local environment = createEnvironment(_ENV, virtualProgram)
+    return nativeOs.run(environment, nativeFs.combine(homeDirectory, virtualProgram), ...)
+end
+
 local function launchSelected()
     local app = apps[selected]
     if not app then
@@ -816,7 +1063,12 @@ local function launchSelected()
 
     local previousDirectory = shell.dir()
     shell.setDir(homeDirectory)
-    local ok, result = pcall(os.run, _ENV, app.path, homeDirectory)
+    local ok, result
+    if isInHomeDirectory(app.path) then
+        ok, result = pcall(runHomeProgram, app.path, homeDirectory)
+    else
+        ok, result = pcall(nativeOs.run, _ENV, app.path, homeDirectory)
+    end
     shell.setDir(previousDirectory)
     term.clear()
     term.setCursorPos(1, 1)
@@ -982,16 +1234,16 @@ while true do
                     return
                 end
             end
-        elseif y >= 5 and y <= 9 then
+        elseif y >= 5 and y <= 8 then
             selectedSetting = y - 4
             if selectedSetting == 1 then
                 local direction = x <= math.floor(select(1, term.getSize()) / 2) and -1 or 1
                 changeSetting(direction)
-            elseif selectedSetting == 2 or selectedSetting == 3 then
+            elseif selectedSetting == 2 then
                 changeSetting(1)
-            elseif selectedSetting == 4 then
+            elseif selectedSetting == 3 then
                 updateLauncher()
-            elseif selectedSetting == 5 then
+            elseif selectedSetting == 4 then
                 uninstallLauncher()
             end
         elseif y == height - 1 and buttonAt(secondButtons, x) == "back" then
