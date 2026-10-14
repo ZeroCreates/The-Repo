@@ -1,7 +1,11 @@
 local PROTOCOL = "order_system_v1"
+local CONTROL_PROTOCOL = "launcher_market_notifications_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
+local FOLLOWED_ORDERS_FILE = "market-followed-orders.json"
+local MARKET_USER = "Market customer"
 local mouseEnabled = false
+local followedOrders = {}
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -108,6 +112,90 @@ local function openModems()
     end
     if not found then error("Attach a modem before starting the ordering page.") end
     mouseEnabled = term.isColor()
+end
+
+local function loadFollowedOrders()
+    followedOrders = {}
+    if not fs.exists(FOLLOWED_ORDERS_FILE) then return end
+    local file = fs.open(FOLLOWED_ORDERS_FILE, "r")
+    if not file then return end
+    local contents = file.readAll()
+    file.close()
+    local ok, saved = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(saved) ~= "table" then return end
+    for _, entry in ipairs(saved) do
+        if type(entry) == "table" and type(entry.orderId) == "number"
+            and entry.orderId % 1 == 0 and type(entry.status) == "string" then
+            followedOrders[entry.orderId] = { orderId = entry.orderId, status = entry.status }
+        end
+    end
+end
+
+local function saveFollowedOrders()
+    local saved = {}
+    for _, entry in pairs(followedOrders) do
+        table.insert(saved, { orderId = entry.orderId, status = entry.status })
+    end
+    table.sort(saved, function(left, right) return left.orderId < right.orderId end)
+    local file = fs.open(FOLLOWED_ORDERS_FILE, "w")
+    if not file then return false end
+    file.write(#saved == 0 and "[]" or textutils.serializeJSON(saved))
+    file.close()
+    return true
+end
+
+local function sendFollowControl(message)
+    local serverId = rednet.lookup(CONTROL_PROTOCOL, SERVER_NAME)
+    if not serverId then return false end
+    message.user = MARKET_USER
+    rednet.send(serverId, message, CONTROL_PROTOCOL)
+    return true
+end
+
+local function registerFollowedOrders()
+    for orderId in pairs(followedOrders) do
+        sendFollowControl({ type = "watch_order", orderId = orderId })
+    end
+end
+
+local function saveKnownOrderStatus(order)
+    local followed = followedOrders[order.id]
+    if followed and followed.status ~= order.status then
+        local previousStatus = followed.status
+        followed.status = order.status
+        if not saveFollowedOrders() then followed.status = previousStatus end
+    end
+end
+
+local function promptFollowOrder(order)
+    if type(order.customerId) ~= "number" or order.customerId ~= os.getComputerID() then
+        return
+    end
+    local following = followedOrders[order.id] ~= nil
+    drawHeader("ORDER NOTIFICATIONS", "FOLLOW STATUS CHANGES FOR THIS ORDER")
+    writeAt(2, 5, "Order #" .. order.id .. " is " .. order.status:upper() .. ".", colors.white)
+    writeAt(2, 6, following and "You are following this order." or "You are not following this order.", colors.lightGray)
+    local choice = readChoice(following and "u unfollow|b back" or "f follow|b back")
+    if choice == "f" and not following then
+        followedOrders[order.id] = { orderId = order.id, status = order.status }
+        if saveFollowedOrders() then
+            sendFollowControl({ type = "watch_order", orderId = order.id })
+            showNotice("FOLLOWING ORDER", "You will be notified when this order's status changes.")
+        else
+            followedOrders[order.id] = nil
+            showNotice("FOLLOW NOT SAVED", "Could not save your followed order.")
+        end
+    elseif choice == "u" and following then
+        local savedEntry = followedOrders[order.id]
+        followedOrders[order.id] = nil
+        if saveFollowedOrders() then
+            sendFollowControl({ type = "unwatch_order", orderId = order.id })
+            showNotice("UNFOLLOWED ORDER", "Status notifications are disabled for this order.")
+        else
+            followedOrders[order.id] = savedEntry
+            showNotice("UNFOLLOW NOT SAVED", "Could not save your followed orders.")
+        end
+    end
 end
 
 local function request(message)
@@ -432,6 +520,7 @@ local function placeOrder(cart)
         showNotice("ORDER SAVED, PRINT FAILED", tostring(printError))
     end
     showOrder(response.order)
+    promptFollowOrder(response.order)
 end
 
 local function checkStatus()
@@ -448,7 +537,11 @@ local function checkStatus()
         showNotice("ORDER NOT FOUND", err)
         return
     end
+    if response.order.customerId == os.getComputerID() then
+        saveKnownOrderStatus(response.order)
+    end
     showOrder(response.order)
+    promptFollowOrder(response.order)
     if response.order.status ~= "shipping" then return end
 
     drawHeader("DELIVERY CONFIRMATION", "ONLY CONFIRM AFTER THE ORDER ARRIVES")
@@ -469,9 +562,13 @@ local function checkStatus()
         return
     end
     showOrder(completed.order)
+    saveKnownOrderStatus(completed.order)
+    promptFollowOrder(completed.order)
 end
 
 openModems()
+loadFollowedOrders()
+registerFollowedOrders()
 local cart = {}
 local page = 1
 while true do

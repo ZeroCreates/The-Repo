@@ -6,6 +6,9 @@ local REPOSITORY_BASE_URL = "https://raw.githubusercontent.com/ZeroCreates/The-R
 local nativeFs = fs
 local nativeOs = os
 local nativeRequire = require
+local nativeTerm = term.current()
+local nativeParallel = parallel
+local nativeWindow = window
 local apps = {}
 local selected = 1
 local firstVisible = 1
@@ -15,6 +18,8 @@ local screen = "apps"
 local selectedSetting = 1
 local currentUser
 local homeDirectory
+local notificationConfigRevision = 0
+local apiNotificationQueue = {}
 local profilePasswords = {}
 local profileAdmins = {}
 local authorizedProfiles = {}
@@ -1053,6 +1058,129 @@ local function runHomeProgram(programPath, ...)
         return normalized == "" and "/" or "/" .. normalized
     end
 
+    local function createNotificationsModule()
+        local configPath = nativeFs.combine(homeDirectory, "notification-listeners.json")
+        local reservedProtocols = {
+            launcher_notifications_v1 = true,
+            launcher_email_v1 = true,
+            launcher_email_notifications_v1 = true,
+            launcher_market_notifications_v1 = true,
+            order_system_v1 = true,
+        }
+
+        local function loadConfig()
+            if not nativeFs.exists(configPath) then return { listeners = {} } end
+            local file = nativeFs.open(configPath, "r")
+            if not file then return nil, "Could not open notification listener settings." end
+            local contents = file.readAll()
+            file.close()
+            local ok, config = pcall(textutils.unserializeJSON, contents)
+            if not ok or type(config) ~= "table" or type(config.listeners) ~= "table" then
+                return nil, "Notification listener settings are invalid."
+            end
+            return config
+        end
+
+        local function saveConfig(config)
+            local temporary = configPath .. ".tmp"
+            local backup = configPath .. ".bak"
+            local file = nativeFs.open(temporary, "w")
+            if not file then return false, "Could not create notification listener settings." end
+            file.write(textutils.serializeJSON(config))
+            file.close()
+            if nativeFs.exists(backup) then nativeFs.delete(backup) end
+            if nativeFs.exists(configPath) then
+                local backedUp, backupError = pcall(nativeFs.move, configPath, backup)
+                if not backedUp then
+                    nativeFs.delete(temporary)
+                    return false, "Could not back up notification settings: " .. tostring(backupError)
+                end
+            end
+            local moved, moveError = pcall(nativeFs.move, temporary, configPath)
+            if not moved then
+                if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
+                if nativeFs.exists(backup) then nativeFs.move(backup, configPath) end
+                return false, "Could not save notification settings: " .. tostring(moveError)
+            end
+            if nativeFs.exists(backup) then nativeFs.delete(backup) end
+            notificationConfigRevision = notificationConfigRevision + 1
+            return true
+        end
+
+        local api = {}
+        function api.listen(protocol, titleField, messageField, name)
+            if type(protocol) ~= "string" or #protocol < 1 or #protocol > 64
+                or not protocol:match("^[%w_.%-]+$") then
+                return false, "Protocol must be 1 to 64 letters, numbers, dots, dashes, or underscores."
+            end
+            if reservedProtocols[protocol] then
+                return false, "That protocol is reserved for a built-in launcher service."
+            end
+            if type(titleField) ~= "string" or not titleField:match("^[%w_]+$") then
+                return false, "Title field must be a table key containing letters, numbers, or underscores."
+            end
+            if #titleField > 32 then
+                return false, "Title field must be no longer than 32 characters."
+            end
+            if type(messageField) ~= "string" or #messageField > 32
+                or not messageField:match("^[%w_]+$") then
+                return false, "Message field must be a table key containing letters, numbers, or underscores."
+            end
+            name = name == nil and protocol or name
+            if type(name) ~= "string" or #name < 1 or #name > 32 then
+                return false, "Notification name must be 1 to 32 characters."
+            end
+
+            local config, loadError = loadConfig()
+            if not config then return false, loadError end
+            for _, listener in ipairs(config.listeners) do
+                if type(listener) == "table" and listener.protocol == protocol then
+                    return false, "A listener for that protocol already exists."
+                end
+            end
+            table.insert(config.listeners, {
+                name = name,
+                protocol = protocol,
+                titleField = titleField,
+                messageField = messageField,
+            })
+            return saveConfig(config)
+        end
+
+        function api.unlisten(protocol)
+            if type(protocol) ~= "string" then return false, "Protocol must be a string." end
+            local config, loadError = loadConfig()
+            if not config then return false, loadError end
+            for index, listener in ipairs(config.listeners) do
+                if type(listener) == "table" and listener.protocol == protocol then
+                    table.remove(config.listeners, index)
+                    return saveConfig(config)
+                end
+            end
+            return false, "No listener is registered for that protocol."
+        end
+
+        function api.notify(title, message, source)
+            if (type(title) ~= "string" and type(title) ~= "number")
+                or (type(message) ~= "string" and type(message) ~= "number") then
+                return false, "Notification title and message must be strings or numbers."
+            end
+            if #tostring(title) > 256 or #tostring(message) > 2000 then
+                return false, "Notification title or message is too long."
+            end
+            table.insert(apiNotificationQueue, {
+                type = "notification",
+                source = type(source) == "string" and source or "App",
+                user = currentUser,
+                title = title,
+                message = message,
+            })
+            return true
+        end
+
+        return api
+    end
+
     local function createEnvironment(parent, runningProgram)
         term.clear()
         term.setCursorPos(1, 1)
@@ -1210,12 +1338,17 @@ local function runHomeProgram(programPath, ...)
         environment.fs = sandboxFs
         environment.os = sandboxOs
         environment.shell = sandboxShell
+        local notificationsModule = createNotificationsModule()
+        environment.notifications = notificationsModule
         environment._G = environment
         environment.debug = nil
         environment.package = nil
         environment.require = function(moduleName)
+            if moduleName == "notifications" then
+                return notificationsModule
+            end
             if moduleName ~= "cc.pretty" or type(nativeRequire) ~= "function" then
-                error("Only the built-in cc.pretty module is available to profile apps.", 2)
+                error("Only the notifications and built-in cc.pretty modules are available to profile apps.", 2)
             end
             return nativeRequire(moduleName)
         end
@@ -1384,11 +1517,228 @@ local function uninstallLauncher()
     while true do os.pullEventRaw() end
 end
 
+local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
+local EMAIL_PROTOCOL = "launcher_email_v1"
+local EMAIL_NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
+local MARKET_PROTOCOL = "order_system_v1"
+local MARKET_NOTIFICATION_CONTROL_PROTOCOL = "launcher_market_notifications_v1"
+
+local function readJSONFile(path)
+    if not nativeFs.exists(path) or nativeFs.isDir(path) then return nil end
+    local file = nativeFs.open(path, "r")
+    if not file then return nil, "Could not read " .. path .. "." end
+    local contents = file.readAll()
+    file.close()
+    local ok, value = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(value) ~= "table" then
+        return nil, "Invalid JSON data in " .. path .. "."
+    end
+    return value
+end
+
+local function showNotificationPopup(notification)
+    if not nativeWindow or not nativeTerm then return end
+    local width, height = nativeTerm.getSize()
+    if width < 12 or height < 4 then return end
+
+    local popupWidth = math.min(width, 34)
+    local popupHeight = math.min(height, 4)
+    local popupX = width - popupWidth + 1
+    local function popupText(value)
+        return tostring(value):gsub("%c", " ")
+    end
+    local popup = nativeWindow.create(nativeTerm, popupWidth, popupHeight, popupX, 1, false)
+    popup.setBackgroundColor(colors.black)
+    popup.setTextColor(colors.white)
+    popup.clear()
+    popup.setCursorPos(1, 1)
+    popup.setBackgroundColor(colors.cyan)
+    popup.write(string.rep(" ", popupWidth))
+    popup.setCursorPos(2, 1)
+    popup.write(popupText(notification.title or "Notification"):sub(1, popupWidth - 2))
+    popup.setBackgroundColor(colors.black)
+    popup.setCursorPos(2, 2)
+    popup.write(popupText(notification.source or "System"):sub(1, popupWidth - 2))
+    popup.setCursorPos(2, 3)
+    popup.write(popupText(notification.message or ""):sub(1, popupWidth - 2))
+    popup.setVisible(true)
+    sleep(4)
+    popup.setVisible(false)
+end
+
+local function openNotificationModems()
+    for _, name in ipairs(peripheral.getNames()) do
+        if peripheral.getType(name) == "modem" and not rednet.isOpen(name) then
+            rednet.open(name)
+        end
+    end
+end
+
+local function loadMarketFollows(profilePath)
+    local follows, err = readJSONFile(nativeFs.combine(profilePath, "market-followed-orders.json"))
+    if not follows then
+        if err then showNotificationPopup({
+            source = "Market",
+            title = "Notification setup",
+            message = err,
+        }) end
+        return {}
+    end
+    return follows
+end
+
+local function loadEmailAccount(profilePath)
+    local account, err = readJSONFile(nativeFs.combine(profilePath, ".email-account.json"))
+    if not account then
+        if err then showNotificationPopup({
+            source = "Email",
+            title = "Notification setup",
+            message = err,
+        }) end
+        return nil
+    end
+    if type(account.email) ~= "string" or type(account.password) ~= "string" then
+        showNotificationPopup({
+            source = "Email",
+            title = "Notification setup",
+            message = "Saved email account details are invalid.",
+        })
+        return nil
+    end
+    return account
+end
+
+local function loadNotificationListeners(profilePath)
+    local config, err = readJSONFile(nativeFs.combine(profilePath, "notification-listeners.json"))
+    if not config then
+        if err then
+            showNotificationPopup({
+                source = "Notifications",
+                title = "Listener settings",
+                message = err,
+            })
+        end
+        return {}
+    end
+    if type(config.listeners) ~= "table" then
+        showNotificationPopup({
+            source = "Notifications",
+            title = "Listener settings",
+            message = "Listener settings need a listeners array.",
+        })
+        return {}
+    end
+
+    local listeners = {}
+    for _, listener in ipairs(config.listeners) do
+        if type(listener) == "table" and type(listener.name) == "string"
+            and type(listener.protocol) == "string"
+            and type(listener.titleField) == "string"
+            and type(listener.messageField) == "string" then
+            table.insert(listeners, listener)
+        else
+            showNotificationPopup({
+                source = "Notifications",
+                title = "Listener settings",
+                message = "A listener entry is invalid and was ignored.",
+            })
+        end
+    end
+    return listeners
+end
+
+local function sendNotificationSubscriptions(profilePath, computerId)
+    openNotificationModems()
+    local emailAccount = loadEmailAccount(profilePath)
+    if emailAccount then
+        local serverId = rednet.lookup(EMAIL_PROTOCOL, "email_server")
+        if serverId then
+            rednet.send(serverId, {
+                type = "subscribe",
+                email = emailAccount.email,
+                password = emailAccount.password,
+            }, EMAIL_NOTIFICATION_CONTROL_PROTOCOL)
+        end
+    end
+
+    local followedOrders = loadMarketFollows(profilePath)
+    if type(followedOrders) ~= "table" then return end
+    local serverId = rednet.lookup(MARKET_PROTOCOL, "order_server")
+    if not serverId then return end
+    for _, followed in ipairs(followedOrders) do
+        if type(followed) == "table" and type(followed.orderId) == "number" then
+            rednet.send(serverId, {
+                type = "watch_order",
+                orderId = followed.orderId,
+                computerId = computerId,
+            }, MARKET_NOTIFICATION_CONTROL_PROTOCOL)
+        end
+    end
+end
+
+local function notificationReceiver()
+    local lastProfilePath
+    local nextSubscriptionSync = 0
+    local computerId = os.getComputerID()
+    local activeListeners = {}
+    local loadedConfigRevision = -1
+
+    while true do
+        local now = os.clock()
+        if homeDirectory and (homeDirectory ~= lastProfilePath
+            or now >= nextSubscriptionSync
+            or loadedConfigRevision ~= notificationConfigRevision) then
+            lastProfilePath = homeDirectory
+            nextSubscriptionSync = now + 30
+            activeListeners = loadNotificationListeners(homeDirectory)
+            sendNotificationSubscriptions(homeDirectory, computerId)
+            loadedConfigRevision = notificationConfigRevision
+        end
+
+        while #apiNotificationQueue > 0 do
+            showNotificationPopup(table.remove(apiNotificationQueue, 1))
+        end
+
+        openNotificationModems()
+        local _, payload, protocol = rednet.receive(nil, 1)
+        if protocol == NOTIFICATION_PROTOCOL
+            and type(payload) == "table" and payload.type == "notification" then
+            local show = true
+            if payload.source == "Email" then
+                local savedAccount = homeDirectory and loadEmailAccount(homeDirectory)
+                show = savedAccount ~= nil and savedAccount.email == payload.user
+            elseif payload.source ~= "Market"
+                and type(payload.user) == "string" and currentUser then
+                show = payload.user == currentUser
+            end
+            if show then showNotificationPopup(payload) end
+        elseif type(payload) == "table" then
+            for _, listener in ipairs(activeListeners) do
+                if listener.protocol == protocol then
+                    local title = payload[listener.titleField]
+                    local body = payload[listener.messageField]
+                    local titleType, bodyType = type(title), type(body)
+                    if (titleType == "string" or titleType == "number")
+                        and (bodyType == "string" or bodyType == "number") then
+                        showNotificationPopup({
+                            source = listener.name,
+                            title = title,
+                            message = body,
+                        })
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function launcherMain()
 local migrateLegacySettings = not fs.exists(SETTINGS_PATH) and fs.exists(LEGACY_SETTINGS_PATH)
 loadSettings()
 if migrateLegacySettings and saveSettings() then
     fs.delete(LEGACY_SETTINGS_PATH)
 end
+
 chooseUser()
 local downloaded, downloadMessage = installDownloader()
 local systemAppsInstalled = false
@@ -1403,6 +1753,7 @@ if downloaded then
             or "Could not run system app installation: " .. tostring(result)
     end
 end
+
 refreshApps()
 if systemAppInstallMessage then
     message = systemAppInstallMessage
@@ -1473,3 +1824,7 @@ while true do
         end
     end
 end
+
+end
+
+nativeParallel.waitForAny(launcherMain, notificationReceiver)

@@ -1,4 +1,6 @@
 local PROTOCOL = "order_system_v1"
+local CONTROL_PROTOCOL = "launcher_market_notifications_v1"
+local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
 local SERVER_NAME = "order_server"
 local DATA_FILE = "orders.db"
 local BACKUP_FILE = "orders.db.bak"
@@ -7,6 +9,7 @@ local PRODUCTS_FILE = "products.db"
 local PRODUCTS_BACKUP_FILE = "products.db.bak"
 local PRODUCTS_TEMP_FILE = "products.db.tmp"
 local state
+local followersByOrder = {}
 
 local ALLOWED_TRANSITIONS = {
     waiting = { preparing = true, cancelled = true },
@@ -149,6 +152,59 @@ local function findOrder(orderId)
     end
 end
 
+local function handleControlMessage(senderId, message)
+    local orderId = message.orderId
+    local order = type(orderId) == "number" and orderId % 1 == 0 and findOrder(orderId)
+    local success, responseMessage = false, "Invalid order or request."
+
+    if order and order.customerId == senderId then
+        if message.type == "watch_order" then
+            local user = type(message.user) == "string" and message.user or "Market customer"
+            user = user:match("^%s*(.-)%s*$")
+            if user == "" then user = "Market customer" end
+            followersByOrder[orderId] = followersByOrder[orderId] or {}
+            followersByOrder[orderId][senderId] = { user = user:sub(1, 32) }
+            success, responseMessage = true, "Order notifications enabled."
+        elseif message.type == "unwatch_order" then
+            local followers = followersByOrder[orderId]
+            if followers then
+                followers[senderId] = nil
+                if next(followers) == nil then followersByOrder[orderId] = nil end
+            end
+            success, responseMessage = true, "Order notifications disabled."
+        else
+            responseMessage = "Unknown Market notification control request."
+        end
+    elseif order then
+        responseMessage = "You can only follow your own orders."
+    end
+
+    rednet.send(senderId, {
+        type = "watch_order_ack",
+        orderId = type(orderId) == "number" and orderId or nil,
+        success = success,
+        message = responseMessage,
+    }, CONTROL_PROTOCOL)
+end
+
+local function notifyOrderStatusChange(order, previousStatus)
+    if order.status == previousStatus then return end
+    local followers = followersByOrder[order.id]
+    if not followers then return end
+    local title = "Order #" .. order.id .. " updated"
+    local message = "Your order " .. (order.reference or ("#" .. order.id))
+        .. " is now " .. order.status:upper() .. "."
+    for followerId, follower in pairs(followers) do
+        rednet.send(followerId, {
+            type = "notification",
+            source = "Market",
+            title = title,
+            message = message,
+            user = follower.user or "Market customer",
+        }, NOTIFICATION_PROTOCOL)
+    end
+end
+
 local function generateOrderId()
     local minId = 100000
     local maxId = 999999
@@ -266,9 +322,11 @@ local function completeOrder(senderId, message)
         return sendError(senderId, "You can complete the order after it is marked shipping.")
     end
 
+    local previousStatus = order.status
     order.status = "completed"
     order.updatedAt = os.epoch("utc")
     saveState()
+    notifyOrderStatusChange(order, previousStatus)
     rednet.send(senderId, { type = "order_completed", order = order }, PROTOCOL)
 end
 
@@ -391,9 +449,11 @@ local function updateOrder(senderId, message)
     if not ALLOWED_TRANSITIONS[order.status] or not ALLOWED_TRANSITIONS[order.status][message.status] then
         return sendError(senderId, "That status change is not allowed for this order.")
     end
+    local previousStatus = order.status
     order.status = message.status
     order.updatedAt = os.epoch("utc")
     saveState()
+    notifyOrderStatusChange(order, previousStatus)
     rednet.send(senderId, { type = "status_updated", order = order }, PROTOCOL)
 end
 
@@ -466,33 +526,38 @@ openModems()
 state = loadState()
 saveState()
 rednet.host(PROTOCOL, SERVER_NAME)
+rednet.host(CONTROL_PROTOCOL, SERVER_NAME)
 drawDashboard()
 
 while true do
-    local senderId, message = rednet.receive(PROTOCOL, 1)
+    local senderId, message, receivedProtocol = rednet.receive(nil, 1)
     if senderId then
-        if type(message) ~= "table" then
-            sendError(senderId, "Invalid request.")
-        elseif message.type == "place_order" then
-            createOrder(senderId, message)
-        elseif message.type == "get_order" then
-            getOrder(senderId, message)
-        elseif message.type == "complete_order" then
-            completeOrder(senderId, message)
-        elseif message.type == "provider_list" then
-            listOrders(senderId)
-        elseif message.type == "set_provider_address" then
-            setProviderAddress(senderId, message)
-        elseif message.type == "get_catalog" then
-            getCatalog(senderId)
-        elseif message.type == "get_provider_products" then
-            listProviderProducts(senderId)
-        elseif message.type == "publish_product" then
-            publishProduct(senderId, message)
-        elseif message.type == "set_status" then
-            updateOrder(senderId, message)
-        else
-            sendError(senderId, "Unknown request.")
+        if receivedProtocol == CONTROL_PROTOCOL then
+            if type(message) == "table" then handleControlMessage(senderId, message) end
+        elseif receivedProtocol == PROTOCOL then
+            if type(message) ~= "table" then
+                sendError(senderId, "Invalid request.")
+            elseif message.type == "place_order" then
+                createOrder(senderId, message)
+            elseif message.type == "get_order" then
+                getOrder(senderId, message)
+            elseif message.type == "complete_order" then
+                completeOrder(senderId, message)
+            elseif message.type == "provider_list" then
+                listOrders(senderId)
+            elseif message.type == "set_provider_address" then
+                setProviderAddress(senderId, message)
+            elseif message.type == "get_catalog" then
+                getCatalog(senderId)
+            elseif message.type == "get_provider_products" then
+                listProviderProducts(senderId)
+            elseif message.type == "publish_product" then
+                publishProduct(senderId, message)
+            elseif message.type == "set_status" then
+                updateOrder(senderId, message)
+            else
+                sendError(senderId, "Unknown request.")
+            end
         end
     end
     drawDashboard()

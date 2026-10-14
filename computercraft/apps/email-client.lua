@@ -1,4 +1,5 @@
 local PROTOCOL = "launcher_email_v1"
+local NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
 local SERVER_NAME = "email_server"
 local TIMEOUT = 5
 local ACCOUNT_PATH = ".email-account.json"
@@ -55,6 +56,26 @@ local function request(payload)
         return nil, response.message or "The email server rejected the request."
     end
     return response
+end
+
+local function subscribeForNotifications()
+    if not account then return false, "Sign in to enable email notifications." end
+    local serverId = rednet.lookup(PROTOCOL, SERVER_NAME)
+    if not serverId then
+        return false, "Email server not found; notifications are not enabled."
+    end
+
+    rednet.send(serverId, {
+        type = "subscribe",
+        email = account.email,
+        password = account.password,
+    }, NOTIFICATION_CONTROL_PROTOCOL)
+    local _, response = rednet.receive(NOTIFICATION_CONTROL_PROTOCOL, TIMEOUT, serverId)
+    if type(response) ~= "table" or response.type ~= "subscribed" then
+        local message = type(response) == "table" and response.message
+        return false, message or "Email server did not confirm the notification subscription."
+    end
+    return true
 end
 
 local function choose(title, subtitle, choices)
@@ -333,7 +354,14 @@ local function createAccount()
     end
     account = { email = response.email, password = password }
     local saved, saveError = saveAccount(account)
-    notice("CREATE ACCOUNT", saved and ("Account created: " .. account.email) or saveError)
+    if not saved then
+        notice("CREATE ACCOUNT", saveError)
+        return
+    end
+    local subscribed, subscriptionError = subscribeForNotifications()
+    notice("CREATE ACCOUNT", subscribed
+        and ("Account created: " .. account.email .. "\nEmail notifications enabled.")
+        or ("Account created: " .. account.email .. "\n" .. subscriptionError))
 end
 
 local function signIn()
@@ -350,12 +378,21 @@ local function signIn()
     end
     account = { email = response.email, password = password }
     local saved, saveError = saveAccount(account)
-    if not saved then notice("SIGN IN", saveError) end
+    if not saved then
+        notice("SIGN IN", saveError)
+        return
+    end
+    local subscribed, subscriptionError = subscribeForNotifications()
+    if not subscribed then notice("EMAIL NOTIFICATIONS", subscriptionError) end
 end
 
 if not profileHome then error("Could not determine the launcher profile home.") end
 openModems()
 account = loadAccount()
+if account then
+    local subscribed, subscriptionError = subscribeForNotifications()
+    if not subscribed then notice("EMAIL NOTIFICATIONS", subscriptionError) end
+end
 
 while true do
     if account then

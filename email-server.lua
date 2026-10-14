@@ -1,4 +1,6 @@
 local PROTOCOL = "launcher_email_v1"
+local NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
+local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
 local SERVER_NAME = "email_server"
 local DATA_DIRECTORY = "/email-server"
 local MAILBOX_PATH = DATA_DIRECTORY .. "/mailboxes.json"
@@ -198,7 +200,27 @@ local function authenticatedAccount(accounts, request)
     return email
 end
 
-local function handleRequest(mailboxes, accounts, domainAllowlist, senderId, request)
+local function unreadCount(messages)
+    local count = 0
+    for _, message in ipairs(messages) do
+        if not message.read then count = count + 1 end
+    end
+    return count
+end
+
+local function notifySubscribers(subscribers, email, title, message)
+    for computerId in pairs(subscribers[email] or {}) do
+        rednet.send(computerId, {
+            type = "notification",
+            source = "Email",
+            user = email,
+            title = title,
+            message = message,
+        }, NOTIFICATION_PROTOCOL)
+    end
+end
+
+local function handleRequest(mailboxes, accounts, domainAllowlist, subscribers, senderId, request)
     if type(request) ~= "table" or type(request.type) ~= "string" then
         return { type = "error", message = "Invalid request." }
     end
@@ -277,6 +299,12 @@ local function handleRequest(mailboxes, accounts, domainAllowlist, senderId, req
             table.remove(recipientMailbox)
             return { type = "error", message = saveError }
         end
+        notifySubscribers(
+            subscribers,
+            recipient,
+            "New email",
+            "From " .. email .. ": " .. request.subject
+        )
         return { type = "sent", id = id }
     elseif request.type == "list" then
         return { type = "inbox", messages = summarize(mailboxFor(mailboxes, email)) }
@@ -313,6 +341,35 @@ local function handleRequest(mailboxes, accounts, domainAllowlist, senderId, req
     return { type = "error", message = "Unknown email request." }
 end
 
+local function handleNotificationSubscription(accounts, mailboxes, subscribers, senderId, request)
+    if type(request) ~= "table" or request.type ~= "subscribe" then
+        return { type = "error", message = "Invalid notification subscription." }
+    end
+    local email = authenticatedAccount(accounts, request)
+    if not email then
+        return { type = "error", message = "Email address or password is incorrect." }
+    end
+
+    local accountSubscribers = subscribers[email]
+    if not accountSubscribers then
+        accountSubscribers = {}
+        subscribers[email] = accountSubscribers
+    end
+    if accountSubscribers[senderId] then return { type = "subscribed" } end
+
+    accountSubscribers[senderId] = true
+    local unread = unreadCount(mailboxFor(mailboxes, email))
+    if unread > 0 then
+        notifySubscribers(
+            { [email] = { [senderId] = true } },
+            email,
+            "Unread email",
+            "You have " .. unread .. " unread message" .. (unread == 1 and "." or "s.")
+        )
+    end
+    return { type = "subscribed" }
+end
+
 local function openModems()
     local found = false
     for _, name in ipairs(peripheral.getNames()) do
@@ -327,6 +384,7 @@ end
 local mailboxes = loadMailboxes()
 local accounts = loadAccounts()
 local domainAllowlist = loadDomainAllowlist()
+local notificationSubscribers = {}
 openModems()
 rednet.host(PROTOCOL, SERVER_NAME)
 
@@ -344,7 +402,16 @@ print("Global registration domain: riftmail.com")
 print("Stop the program to shut down the server.")
 
 while true do
-    local sender, request = rednet.receive(PROTOCOL)
-    local response = handleRequest(mailboxes, accounts, domainAllowlist, sender, request)
-    rednet.send(sender, response, PROTOCOL)
+    local sender, request, protocol = rednet.receive()
+    if protocol == PROTOCOL then
+        local response = handleRequest(
+            mailboxes, accounts, domainAllowlist, notificationSubscribers, sender, request
+        )
+        rednet.send(sender, response, PROTOCOL)
+    elseif protocol == NOTIFICATION_CONTROL_PROTOCOL then
+        local response = handleNotificationSubscription(
+            accounts, mailboxes, notificationSubscribers, sender, request
+        )
+        rednet.send(sender, response, NOTIFICATION_CONTROL_PROTOCOL)
+    end
 end
