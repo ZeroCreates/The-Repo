@@ -33,6 +33,65 @@ local function drawHeader(title, subtitle)
     writeAt(2, 2, subtitle or "", colors.lightGray)
 end
 
+local function sectionTitle(y, title)
+    local width = term.getSize()
+    writeAt(1, y, string.rep(" ", width), colors.white, colors.blue)
+    writeAt(2, y, title, colors.white, colors.blue)
+end
+
+local function drawChoices(help)
+    local width, height = term.getSize()
+    local options = {}
+    for part in help:gmatch("[^|]+") do
+        local key, label = part:match("^%s*([%w/]+)%s*(.-)%s*$")
+        if key then
+            if key:find("/") then
+                local first, second = key:match("([^/]+)/([^/]+)")
+                table.insert(options, { key = first, label = "NEXT " .. label })
+                table.insert(options, { key = second, label = "PREV " .. label })
+            else
+                table.insert(options, { key = key, label = label ~= "" and label or key })
+            end
+        end
+    end
+
+    local columns = math.min(3, #options)
+    local rows = math.ceil(#options / columns)
+    local buttons = {}
+    for index, option in ipairs(options) do
+        local row = height - rows + math.floor((index - 1) / columns)
+        local column = (index - 1) % columns
+        local left = math.floor(column * width / columns) + 1
+        local right = math.floor((column + 1) * width / columns)
+        writeAt(left, row, ("[" .. option.label .. "]"):sub(1, right - left + 1),
+            colors.black, colors.lightBlue)
+        table.insert(buttons, { key = option.key, row = row, left = left, right = right })
+    end
+    return buttons
+end
+
+local function readChoice(help)
+    if not mouseEnabled then
+        local _, height = term.getSize()
+        writeAt(2, height - 2, help, colors.lightGray)
+        writeAt(2, height - 1, "> ", colors.lime)
+        term.setCursorPos(4, height - 1)
+        return read():lower()
+    end
+
+    local buttons = drawChoices(help)
+    while true do
+        local event, button, x, y = os.pullEvent()
+        if event == "mouse_click" and button == 1 then
+            for _, choice in ipairs(buttons) do
+                if y == choice.row and x >= choice.left and x <= choice.right then
+                    return choice.key
+                end
+            end
+        end
+    end
+end
+
 local function openModems()
     local found = false
     for _, name in ipairs(peripheral.getNames()) do
@@ -73,26 +132,29 @@ end
 
 local function choose(title, subtitle, choices)
     drawHeader(title, subtitle)
-    local _, height = term.getSize()
-    local firstRow = 4
-    local lastRow = height - 1
+    local width, height = term.getSize()
+    sectionTitle(4, "SELECT AN OPTION")
+    local firstRow = 5
+    local lastRow = height - 2
     for index, choice in ipairs(choices) do
         local row = firstRow + index - 1
         if row > lastRow then break end
-        writeAt(2, row, ("[" .. index .. "] " .. choice.label), colors.white, colors.blue)
+        local background = index % 2 == 0 and colors.gray or colors.black
+        writeAt(2, row, string.rep(" ", math.max(0, width - 2)), colors.white, background)
+        writeAt(3, row, choice.label, colors.white, background)
     end
 
     if not mouseEnabled then
-        writeAt(2, height, "Choose an option by number and press Enter.", colors.lightGray)
+        writeAt(2, height - 1, "Choose an option by number and press Enter.", colors.lightGray)
         local selected = tonumber(read())
         return selected and choices[selected] and choices[selected].key
     end
 
     while true do
-        local event, button, _, y = os.pullEvent()
-        if event == "mouse_click" and button == 1 then
+        local event, button, x, y = os.pullEvent()
+        if event == "mouse_click" and button == 1 and x >= 2 then
             local index = y - firstRow + 1
-            if index >= 1 and index <= #choices and index <= lastRow - firstRow + 1 then
+            if index >= 1 and index <= #choices and y <= lastRow then
                 return choices[index].key
             end
         end
@@ -100,7 +162,8 @@ local function choose(title, subtitle, choices)
 end
 
 local function notice(title, message)
-    drawHeader(title, "EMAIL")
+    drawHeader(title, "RIFTMAIL  /  EMAIL CLIENT")
+    sectionTitle(4, "NOTICE")
     local width = term.getSize()
     local row = 5
     for line in (tostring(message) .. "\n"):gmatch("(.-)\n") do
@@ -121,10 +184,11 @@ local function notice(title, message)
 end
 
 local function readField(label, secret)
-    clearScreen()
-    writeAt(2, 2, label, colors.cyan)
-    writeAt(2, 4, "> ", colors.lime)
-    term.setCursorPos(4, 4)
+    drawHeader("RIFTMAIL", "EMAIL CLIENT  /  ACCOUNT")
+    sectionTitle(4, "INPUT")
+    writeAt(2, 6, label, colors.white)
+    writeAt(2, 8, "> ", colors.lime)
+    term.setCursorPos(4, 8)
     return read(secret and "*" or nil)
 end
 
@@ -192,60 +256,24 @@ local function displayMessage(item)
         "",
     }
     appendWrapped(lines, item.body, math.max(1, width - 4))
-    local pageSize = math.max(1, height - 7)
+    local pageSize = math.max(1, height - 9)
     local pageCount = math.max(1, math.ceil(#lines / pageSize))
     local page = 1
 
     while true do
-        drawHeader("MESSAGE", account.email)
+        drawHeader("RIFTMAIL", account.email)
+        sectionTitle(4, "MESSAGE  |  " .. item.subject)
         local firstLine = (page - 1) * pageSize + 1
         for index = firstLine, math.min(#lines, firstLine + pageSize - 1) do
-            writeAt(2, 4 + index - firstLine, lines[index], colors.white)
+            writeAt(2, 5 + index - firstLine, lines[index], colors.white)
         end
-        local buttons = {
-            { key = "previous", label = "PREV" },
-            { key = "next", label = "NEXT" },
-            { key = "move", label = "MOVE" },
-            { key = "delete", label = "DELETE" },
-            { key = "back", label = "BACK" },
-        }
-        local slotWidth = math.max(1, math.floor(width / #buttons))
-        for index, button in ipairs(buttons) do
-            local left = (index - 1) * slotWidth + 1
-            local right = index == #buttons and width or index * slotWidth
-            writeAt(left, height, ("[ " .. button.label .. " ]"):sub(1, right - left + 1),
-                colors.white, colors.blue)
-        end
-
-        if not mouseEnabled then
-            writeAt(2, height - 1, "Page " .. page .. "/" .. pageCount .. " (P/N/M/D/B)", colors.lightGray)
-            local action = read():lower()
-            if action == "b" or action == "back" then return "back" end
-            if action == "d" or action == "delete" then return "delete" end
-            if action == "m" or action == "move" then return "move" end
-            if action == "n" or action == "next" then page = math.min(pageCount, page + 1) end
-            if action == "p" or action == "prev" then page = math.max(1, page - 1) end
-        else
-            while true do
-                local event, button, x, y = os.pullEvent()
-                if event == "mouse_click" and button == 1 and y == height then
-                    local index = math.min(#buttons, math.floor((x - 1) / slotWidth) + 1)
-                    if buttons[index].key == "previous" then
-                        page = math.max(1, page - 1)
-                        break
-                    elseif buttons[index].key == "next" then
-                        page = math.min(pageCount, page + 1)
-                        break
-                    elseif buttons[index].key == "delete" then
-                        return "delete"
-                    elseif buttons[index].key == "move" then
-                        return "move"
-                    elseif buttons[index].key == "back" then
-                        return "back"
-                    end
-                end
-            end
-        end
+        writeAt(2, height - 4, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
+        local action = readChoice("p prev|n next|m move|d delete|b back")
+        if action == "b" then return "back" end
+        if action == "d" then return "delete" end
+        if action == "m" then return "move" end
+        if action == "n" then page = math.min(pageCount, page + 1) end
+        if action == "p" then page = math.max(1, page - 1) end
     end
 end
 
@@ -263,7 +291,7 @@ local function fetchCategories()
 end
 
 local function chooseFolder(categories, title)
-    local pageSize = math.max(1, select(2, term.getSize()) - 7)
+    local pageSize = math.max(1, select(2, term.getSize()) - 10)
     local page, pageCount = 1, math.max(1, math.ceil(#categories / pageSize))
     while true do
         local choices = {}
@@ -292,7 +320,7 @@ local function folders()
     while true do
         local categories, err = fetchCategories()
         if not categories then notice("FOLDERS", err); return nil end
-        local pageSize = math.max(1, select(2, term.getSize()) - 8)
+        local pageSize = math.max(1, select(2, term.getSize()) - 11)
         local pageCount = math.max(1, math.ceil(#categories / pageSize))
         page = math.min(page, pageCount)
         local choices = {}
@@ -347,41 +375,77 @@ local function inbox(category)
         return "home"
     end
 
-    local page, pageSize = 1, math.max(1, select(2, term.getSize()) - 10)
+    local _, height = term.getSize()
+    local page, pageSize = 1, math.max(1, math.floor((height - 9) / 2))
     while true do
-        local choices = {}
         local startIndex = (page - 1) * pageSize + 1
         local endIndex = math.min(#response.messages, startIndex + pageSize - 1)
-        for index = startIndex, endIndex do
-            local message = response.messages[index]
-            table.insert(choices, {
-                key = "message:" .. tostring(message.id),
-                label = string.format("%s%s | %s", message.read and "" or "* ", message.from, message.subject),
-            })
-        end
-        if #response.messages == 0 then
-            table.insert(choices, { key = "empty", label = "No messages in this folder" })
-        end
-        if page > 1 then table.insert(choices, { key = "previous", label = "Previous page" }) end
-        if endIndex < #response.messages then table.insert(choices, { key = "next", label = "Next page" }) end
-        table.insert(choices, { key = "compose", label = "Compose" })
-        table.insert(choices, { key = "folders", label = "Folders" })
-        table.insert(choices, { key = "signout", label = "Sign out" })
-        table.insert(choices, { key = "quit", label = "Quit" })
 
-        local selected = choose("EMAIL  /  " .. category:upper(),
-            account.email .. "  |  Page " .. page, choices)
-        if selected == "compose" or selected == "signout" or selected == "quit" then
-            return selected
-        elseif selected == "folders" then
-            return "folder", folders()
-        elseif selected == "empty" or not selected then
-            -- Keep the empty folder visible while the user chooses an action.
-        elseif selected == "next" then
-            page = page + 1
-        elseif selected == "previous" then
-            page = math.max(1, page - 1)
+        drawHeader("RIFTMAIL", account.email .. "  /  EMAIL CLIENT")
+        sectionTitle(4, category:upper() .. "  |  " .. #response.messages .. " MESSAGES")
+        if #response.messages == 0 then
+            writeAt(2, 6, "No messages in this folder.", colors.lightGray)
         else
+            for index = startIndex, endIndex do
+                local message = response.messages[index]
+                local y = 5 + (index - startIndex) * 2
+                local unreadMark = message.read and "" or "* "
+                writeAt(2, y, string.format("%02d  %s%s | %s",
+                    index - startIndex + 1, unreadMark, message.from, message.subject),
+                    message.read and colors.white or colors.lime)
+                writeAt(4, y + 1, message.read and "READ" or "UNREAD", colors.lightGray)
+            end
+        end
+        local pageCount = math.max(1, math.ceil(#response.messages / pageSize))
+        writeAt(2, height - 4, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
+        local help = (page > 1 and "p prev|" or "")
+            .. (endIndex < #response.messages and "n next|" or "")
+            .. "i inbox|c compose|f folders|s sign out|q quit"
+        local selected
+        if mouseEnabled then
+            local buttons = drawChoices(help)
+            while true do
+                local event, button, x, y = os.pullEvent()
+                if event == "mouse_click" and button == 1 then
+                    for _, choice in ipairs(buttons) do
+                        if y == choice.row and x >= choice.left and x <= choice.right then
+                            selected = choice.key
+                            break
+                        end
+                    end
+                    if selected then break end
+                    if y >= 5 and y < height - 4 and #response.messages > 0 then
+                        local visibleIndex = math.floor((y - 5) / 2) + 1
+                        local messageIndex = startIndex + visibleIndex - 1
+                        local message = response.messages[messageIndex]
+                        if message then
+                            selected = "message:" .. tostring(message.id)
+                            break
+                        end
+                    end
+                end
+            end
+        else
+            writeAt(2, height - 2, help, colors.lightGray)
+            writeAt(2, height - 1, "Message number or action: ", colors.lime)
+            selected = read():lower()
+            local choice = tonumber(selected)
+            if choice then
+                local message = response.messages[startIndex + choice - 1]
+                if message and startIndex + choice - 1 <= endIndex then
+                    selected = "message:" .. tostring(message.id)
+                end
+            end
+        end
+        if selected == "c" then return "compose" end
+        if selected == "f" then return "folder", folders() end
+        if selected == "i" then return "folder", "Inbox" end
+        if selected == "s" then return "signout" end
+        if selected == "q" then return "quit" end
+        if selected == "p" then page = math.max(1, page - 1) end
+        if selected == "n" then page = math.min(pageCount, page + 1) end
+
+        if type(selected) == "string" then
             local id = tonumber(selected:match("^message:(.+)$"))
             if id then
                 local full, readError = request({

@@ -1294,6 +1294,107 @@ local function runHomeProgram(programPath, ...)
         return api
     end
 
+    local function createStorageModule()
+        local storageRoot = nativeFs.combine("/.launcher/user-data", currentUser)
+
+        local function resolvePath(path)
+            if type(path) ~= "string" or #path < 1 or #path > 160
+                or path:sub(1, 1) == "/" or path:sub(-1) == "/"
+                or path:find("//", 1, true) or path:find("\\", 1, true) then
+                return nil, "Storage paths must be relative names."
+            end
+            local segments = {}
+            for segment in path:gmatch("[^/]+") do
+                if segment == "." or segment == ".." or not segment:match("^[%w_.%-]+$") then
+                    return nil, "Storage paths may contain only letters, numbers, dots, underscores, and dashes."
+                end
+                table.insert(segments, segment)
+            end
+            if #segments == 0 then return nil, "A storage name is required." end
+            return nativeFs.combine(storageRoot, table.concat(segments, "/"))
+        end
+
+        local api = {}
+        function api.read(path)
+            local target, pathError = resolvePath(path)
+            if not target then return nil, pathError end
+            if not nativeFs.exists(target) then return nil, "Stored data was not found." end
+            if nativeFs.isDir(target) then return nil, "Stored data name refers to a folder." end
+            local file = nativeFs.open(target, "r")
+            if not file then return nil, "Could not open stored data." end
+            local contents = file.readAll()
+            file.close()
+            local ok, value = pcall(textutils.unserializeJSON, contents)
+            if not ok then return nil, "Stored data is not valid JSON." end
+            return value
+        end
+
+        function api.write(path, value)
+            local target, pathError = resolvePath(path)
+            if not target then return false, pathError end
+            local serialized, contents = pcall(textutils.serializeJSON, value)
+            if not serialized or type(contents) ~= "string" then
+                return false, "Value must be serializable as JSON."
+            end
+            if nativeFs.exists(target) and nativeFs.isDir(target) then
+                return false, "Stored data name refers to a folder."
+            end
+
+            local directory = nativeFs.getDir(target)
+            if directory ~= "" then
+                local made, makeError = pcall(nativeFs.makeDir, directory)
+                if not made then return false, "Could not create storage folder: " .. tostring(makeError) end
+            end
+            local temporary = target .. ".tmp"
+            local backup = target .. ".bak"
+            local file = nativeFs.open(temporary, "w")
+            if not file then return false, "Could not create the storage staging file." end
+            file.write(contents)
+            file.close()
+
+            if nativeFs.exists(backup) then nativeFs.delete(backup) end
+            if nativeFs.exists(target) then
+                local backedUp, backupError = pcall(nativeFs.move, target, backup)
+                if not backedUp then
+                    nativeFs.delete(temporary)
+                    return false, "Could not back up stored data: " .. tostring(backupError)
+                end
+            end
+            local moved, moveError = pcall(nativeFs.move, temporary, target)
+            if not moved then
+                if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
+                if nativeFs.exists(backup) then nativeFs.move(backup, target) end
+                return false, "Could not save stored data: " .. tostring(moveError)
+            end
+            if nativeFs.exists(backup) then nativeFs.delete(backup) end
+            return true
+        end
+
+        function api.delete(path)
+            local target, pathError = resolvePath(path)
+            if not target then return false, pathError end
+            if not nativeFs.exists(target) then return false, "Stored data was not found." end
+            if nativeFs.isDir(target) then return false, "Stored data name refers to a folder." end
+            local ok, deleteError = pcall(nativeFs.delete, target)
+            if not ok then return false, "Could not delete stored data: " .. tostring(deleteError) end
+            return true
+        end
+
+        function api.list(path)
+            local target = storageRoot
+            if path ~= nil and path ~= "" then
+                local pathError
+                target, pathError = resolvePath(path)
+                if not target then return nil, pathError end
+            end
+            if not nativeFs.exists(target) then return {} end
+            if not nativeFs.isDir(target) then return nil, "Storage path is not a folder." end
+            return nativeFs.list(target)
+        end
+
+        return api
+    end
+
     local function createEnvironment(parent, runningProgram)
         term.clear()
         term.setCursorPos(1, 1)
@@ -1452,7 +1553,9 @@ local function runHomeProgram(programPath, ...)
         environment.os = sandboxOs
         environment.shell = sandboxShell
         local notificationsModule = createNotificationsModule()
+        local storageModule = createStorageModule()
         environment.notifications = notificationsModule
+        environment.storage = storageModule
         environment._G = environment
         environment.debug = nil
         environment.package = nil
@@ -1460,8 +1563,11 @@ local function runHomeProgram(programPath, ...)
             if moduleName == "notifications" then
                 return notificationsModule
             end
+            if moduleName == "storage" then
+                return storageModule
+            end
             if moduleName ~= "cc.pretty" or type(nativeRequire) ~= "function" then
-                error("Only the notifications and built-in cc.pretty modules are available to profile apps.", 2)
+                error("Only the storage, notifications, and built-in cc.pretty modules are available to profile apps.", 2)
             end
             return nativeRequire(moduleName)
         end

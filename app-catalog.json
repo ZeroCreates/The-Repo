@@ -41,7 +41,7 @@
     "source": "computercraft/system/file-browser.lua",
     "file": "file-browser.lua",
     "scope": "system",
-    "description": "Browse files and edit them with the built-in editor"
+    "description": "Browse and edit files; hold Alt to show hidden files and private data"
   },
   {
     "name": "Lua Console",

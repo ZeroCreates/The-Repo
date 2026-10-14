@@ -2,6 +2,8 @@ local requestedHome, runProfileProgram, listOtherProfiles, authorizeProfileAcces
 local normalizedHome = type(requestedHome) == "string" and requestedHome:gsub("^/+", "")
 local homeDirectory = normalizedHome and normalizedHome:match("^users/[%w_-]+$")
     and normalizedHome or "users/default"
+local username = homeDirectory:match("^users/([%w_-]+)$")
+local privateDataDirectory = "/.launcher/user-data/" .. username
 local profilesDirectory = "users"
 local currentDirectory = fs.combine(homeDirectory, "desktop")
 local currentRoot = homeDirectory
@@ -12,9 +14,10 @@ fs.makeDir(currentDirectory)
 local entries = {}
 local selected = 1
 local firstVisible = 1
-local message = "Ctrl+C copy, Ctrl+X cut, Ctrl+V paste. Drop files to upload."
+local message = "Hold ALT to show hidden files and Private Data."
 local clipboard
 local controlHeld = false
+local altHeld = false
 local themeIndex = 1
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
@@ -43,6 +46,11 @@ end
 
 local function displayPath(path)
     local normalizedPath = path:gsub("^/+", "")
+    local normalizedPrivateData = privateDataDirectory:gsub("^/+", "")
+    if normalizedPath == normalizedPrivateData then return "H://[PRIVATE DATA]" end
+    if isWithinRoot(normalizedPath, normalizedPrivateData) then
+        return "H://[PRIVATE DATA]/" .. normalizedPath:sub(#normalizedPrivateData + 2)
+    end
     if authorizedProfileRoot and isWithinRoot(normalizedPath, authorizedProfileRoot) then
         local username = authorizedProfileRoot:match("^users/([%w_-]+)$")
         if username then
@@ -59,6 +67,9 @@ local function displayPath(path)
 end
 
 local function displayMessage(text)
+    local privatePattern = privateDataDirectory:gsub("^/+", ""):gsub("([^%w])", "%%%1")
+    text = text:gsub(privatePattern .. "/", "H://[PRIVATE DATA]/")
+        :gsub(privatePattern, "H://[PRIVATE DATA]")
     if authorizedProfileRoot then
         local username = authorizedProfileRoot:match("^users/([%w_-]+)$")
         if username then
@@ -117,7 +128,8 @@ end
 local function refreshEntries()
     refreshDiskMounts()
     if currentRoot ~= homeDirectory and currentRoot ~= profilesDirectory
-        and currentRoot ~= authorizedProfileRoot and not isMountedDisk(currentRoot) then
+        and currentRoot ~= authorizedProfileRoot and currentRoot ~= privateDataDirectory
+        and not isMountedDisk(currentRoot) then
         currentDirectory = homeDirectory
         currentRoot = homeDirectory
         authorizedProfileRoot = nil
@@ -171,14 +183,25 @@ local function refreshEntries()
         end
     end
 
+    if currentRoot == homeDirectory and altHeld then
+        table.insert(updated, {
+            name = "[Private Data]",
+            path = privateDataDirectory,
+            isDirectory = true,
+            privateDataRoot = true,
+        })
+    end
+
     if currentRoot ~= profilesDirectory then
         for _, name in ipairs(fs.list(currentDirectory)) do
-            local path = fs.combine(currentDirectory, name)
-            table.insert(updated, {
-                name = name,
-                path = path,
-                isDirectory = fs.isDir(path),
-            })
+            if altHeld or name:sub(1, 1) ~= "." then
+                local path = fs.combine(currentDirectory, name)
+                table.insert(updated, {
+                    name = name,
+                    path = path,
+                    isDirectory = fs.isDir(path),
+                })
+            end
         end
     end
 
@@ -523,17 +546,18 @@ local function pasteClipboard()
     end
 
     refreshDiskMounts()
-    if (clipboard.root ~= homeDirectory and not isMountedDisk(clipboard.root))
+    if (clipboard.root ~= homeDirectory and clipboard.root ~= privateDataDirectory
+        and not isMountedDisk(clipboard.root))
         or not isWithinRoot(clipboard.path, clipboard.root)
-        or not fs.exists("/" .. clipboard.path) then
+        or not fs.exists(clipboard.path:sub(1, 1) == "/" and clipboard.path or "/" .. clipboard.path) then
         clipboard = nil
         message = "The copied or cut file is no longer available."
         return
     end
 
     local destination = fs.combine(currentDirectory, clipboard.name)
-    local absoluteSource = "/" .. clipboard.path
-    local absoluteDestination = "/" .. destination
+    local absoluteSource = clipboard.path:sub(1, 1) == "/" and clipboard.path or "/" .. clipboard.path
+    local absoluteDestination = destination:sub(1, 1) == "/" and destination or "/" .. destination
     if not isWithinRoot(destination, currentRoot) or destination == currentRoot then
         message = "That paste location is outside the current root."
         return
@@ -625,6 +649,16 @@ local function openSelected()
         message = "Opened disk " .. displayPath(entry.path) .. "."
         return
     end
+    if entry.privateDataRoot then
+        fs.makeDir(privateDataDirectory)
+        currentRoot = privateDataDirectory
+        currentDirectory = privateDataDirectory
+        authorizedProfileRoot = nil
+        selected = 1
+        refreshEntries()
+        message = "Opened private data. Keep Alt held to show hidden files."
+        return
+    end
     if entry.returnHome then
         currentRoot = homeDirectory
         currentDirectory = homeDirectory
@@ -679,7 +713,12 @@ while true do
     local topButtons, bottomButtons = draw()
     local event, button, x, y = os.pullEventRaw()
     if event == "key" then
-        if button == keys.leftCtrl or button == keys.rightCtrl then
+        if button == keys.leftAlt or button == keys.rightAlt then
+            if not altHeld then
+                altHeld = true
+                refreshEntries()
+            end
+        elseif button == keys.leftCtrl or button == keys.rightCtrl then
             controlHeld = true
         elseif controlHeld and button == keys.c then
             copyOrCutSelected("copy")
@@ -689,7 +728,12 @@ while true do
             pasteClipboard()
         end
     elseif event == "key_up" then
-        if button == keys.leftCtrl or button == keys.rightCtrl then
+        if button == keys.leftAlt or button == keys.rightAlt then
+            if altHeld then
+                altHeld = false
+                refreshEntries()
+            end
+        elseif button == keys.leftCtrl or button == keys.rightCtrl then
             controlHeld = false
         end
     elseif event == "mouse_click" then
