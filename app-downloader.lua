@@ -2,6 +2,7 @@ local OWNER_REPO = "ZeroCreates/The-Repo"
 local BRANCH = "main"
 local RAW_BASE_URL = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/"
 local CATALOG_PATH = "app-catalog.json"
+local APP_NAMES_PATH = "/.app-catalog-names.json"
 local apps = {}
 local selected = 1
 local firstVisible = 1
@@ -143,6 +144,41 @@ local function confirmOverwrite(file)
     end
 end
 
+local function saveCatalogName(fileName, appName)
+    local names = {}
+    if fs.exists(APP_NAMES_PATH) then
+        local file = fs.open(APP_NAMES_PATH, "r")
+        if not file then return false, "Could not read " .. APP_NAMES_PATH .. "." end
+        local contents = file.readAll()
+        file.close()
+        local ok, storedNames = pcall(textutils.unserializeJSON, contents)
+        if not ok or type(storedNames) ~= "table" then
+            return false, "Could not parse " .. APP_NAMES_PATH .. "."
+        end
+        names = storedNames
+    end
+    names[fileName] = appName
+
+    local temporary = APP_NAMES_PATH .. ".tmp"
+    local backup = APP_NAMES_PATH .. ".bak"
+    if fs.exists(temporary) then fs.delete(temporary) end
+    if fs.exists(backup) then fs.delete(backup) end
+    local file = fs.open(temporary, "w")
+    if not file then return false, "Could not create " .. temporary .. "." end
+    file.write(textutils.serializeJSON(names))
+    file.close()
+
+    if fs.exists(APP_NAMES_PATH) then fs.move(APP_NAMES_PATH, backup) end
+    local ok, moveError = pcall(fs.move, temporary, APP_NAMES_PATH)
+    if not ok then
+        if fs.exists(APP_NAMES_PATH) then fs.delete(APP_NAMES_PATH) end
+        if fs.exists(backup) then fs.move(backup, APP_NAMES_PATH) end
+        return false, tostring(moveError)
+    end
+    if fs.exists(backup) then fs.delete(backup) end
+    return true
+end
+
 local function downloadApp(app)
     if not app then
         message = "There are no apps available to download."
@@ -186,6 +222,11 @@ local function downloadApp(app)
         return
     end
     if fs.exists(backup) then fs.delete(backup) end
+    local nameSaved, nameError = saveCatalogName(destination, app.name)
+    if not nameSaved then
+        message = app.name .. " installed, but its catalog name could not be saved: " .. nameError
+        return
+    end
     message = app.name .. " downloaded as " .. destination .. "."
 end
 

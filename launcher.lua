@@ -61,12 +61,36 @@ local function displayName(path)
     end)
 end
 
+local function loadCatalogNames()
+    local path = "/.app-catalog-names.json"
+    if not fs.exists(path) then return {} end
+
+    local file = fs.open(path, "r")
+    if not file then return {} end
+    local contents = file.readAll()
+    file.close()
+
+    local ok, names = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(names) ~= "table" then return {} end
+    local validNames = {}
+    for fileName, appName in pairs(names) do
+        if type(fileName) == "string" and type(appName) == "string" and appName ~= "" then
+            validNames[fileName] = appName
+        end
+    end
+    return validNames
+end
+
 local function refreshApps()
     local available = {}
+    local catalogNames = loadCatalogNames()
     for _, app in ipairs(preferredApps) do
         local rootPath = "/" .. app.path
         if fs.exists(rootPath) and isLuaFile(rootPath) then
-            table.insert(available, { path = rootPath, name = app.name })
+            table.insert(available, {
+                path = rootPath,
+                name = catalogNames[app.path] or app.name,
+            })
             available[app.path] = true
         end
     end
@@ -82,7 +106,10 @@ local function refreshApps()
         return first:lower() < second:lower()
     end)
     for _, path in ipairs(otherPaths) do
-        table.insert(available, { path = "/" .. path, name = displayName(path) })
+        table.insert(available, {
+            path = "/" .. path,
+            name = catalogNames[path] or displayName(path),
+        })
     end
     apps = available
     if #apps == 0 then
