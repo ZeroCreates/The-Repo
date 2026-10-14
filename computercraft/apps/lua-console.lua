@@ -1,7 +1,64 @@
-local function printResults(results)
-    for index = 2, #results do
-        print(tostring(results[index]))
+local pretty
+local prettyLoaded, prettyModule = pcall(require, "cc.pretty")
+if prettyLoaded and type(prettyModule) == "table" then
+    pretty = prettyModule
+end
+
+local function formatValue(value, indent, ancestors)
+    local valueType = type(value)
+    if valueType == "string" then return string.format("%q", value) end
+    if valueType ~= "table" then return tostring(value) end
+    if ancestors[value] then return "{ <cycle> }" end
+    if indent >= 8 then return "{ ... }" end
+
+    ancestors[value] = true
+    local keys = {}
+    for key in pairs(value) do
+        table.insert(keys, key)
     end
+    table.sort(keys, function(first, second)
+        local firstType, secondType = type(first), type(second)
+        if firstType ~= secondType then return firstType < secondType end
+        if firstType == "number" then return first < second end
+        return tostring(first) < tostring(second)
+    end)
+
+    local entries = {}
+    for _, key in ipairs(keys) do
+        local child = value[key]
+        local formattedKey
+        if type(key) == "string" and key:match("^[%a_][%w_]*$") then
+            formattedKey = key
+        else
+            formattedKey = "[" .. formatValue(key, indent + 1, ancestors) .. "]"
+        end
+        table.insert(entries, string.rep(" ", (indent + 1) * 2)
+            .. formattedKey .. " = " .. formatValue(child, indent + 1, ancestors))
+    end
+    ancestors[value] = nil
+
+    if #entries == 0 then return "{}" end
+    return "{\n" .. table.concat(entries, ",\n") .. "\n" .. string.rep(" ", indent * 2) .. "}"
+end
+
+local function printResults(results)
+    for index = 2, results.n do
+        local value = results[index]
+        if pretty then
+            local ok, formatted = pcall(pretty.pretty, value, {
+                function_args = true,
+                function_source = true,
+            })
+            if ok then ok = pcall(pretty.print, formatted) end
+            if not ok then print(formatValue(value, 0, {})) end
+        else
+            print(formatValue(value, 0, {}))
+        end
+    end
+end
+
+local function pack(...)
+    return { n = select("#", ...), ... }
 end
 
 local function compile(source)
@@ -67,7 +124,7 @@ while true do
         if not chunk then
             printError(compileError)
         else
-            local results = { pcall(chunk) }
+            local results = pack(pcall(chunk))
             if not results[1] then
                 printError(results[2])
             else
