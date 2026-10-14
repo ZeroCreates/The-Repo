@@ -1,7 +1,7 @@
 local requestedHome = ...
-local homeDirectory = type(requestedHome) == "string"
-    and requestedHome:gsub("^/+", ""):match("^users/[%w_-]+$")
-    and ("/" .. requestedHome:gsub("^/+", "")) or "/users/default"
+local normalizedHome = type(requestedHome) == "string" and requestedHome:gsub("^/+", "")
+local homeDirectory = normalizedHome and normalizedHome:match("^users/[%w_-]+$")
+    and normalizedHome or "users/default"
 local currentDirectory = homeDirectory
 fs.makeDir(homeDirectory)
 local entries = {}
@@ -31,9 +31,12 @@ local function loadTheme()
 end
 
 local function parentDirectory(path)
-    if path == "/" then return "/" end
+    if path == homeDirectory then return homeDirectory end
     local parent = path:match("^(.*)/[^/]+$")
-    if not parent or parent == "" then return "/" end
+    if not parent or parent == "" or parent ~= homeDirectory
+        and parent:sub(1, #homeDirectory + 1) ~= homeDirectory .. "/" then
+        return homeDirectory
+    end
     return parent
 end
 
@@ -100,11 +103,19 @@ local function draw()
         { label = "EDIT", action = "edit" },
         { label = "OPEN", action = "open" },
     }
-    local bottomButtons = {
-        { label = "UP", action = "up" },
-        { label = "HOME", action = "home" },
-        { label = "EXIT", action = "exit" },
-    }
+    local bottomButtons
+    if currentDirectory == homeDirectory then
+        bottomButtons = {
+            { label = "HOME", action = "home" },
+            { label = "EXIT", action = "exit" },
+        }
+    else
+        bottomButtons = {
+            { label = "UP", action = "up" },
+            { label = "HOME", action = "home" },
+            { label = "EXIT", action = "exit" },
+        }
+    end
     if selected < firstVisible then firstVisible = selected end
     if selected >= firstVisible + rowCount then
         firstVisible = selected - rowCount + 1
@@ -298,7 +309,7 @@ local function saveTransferredFile(source)
 
     local contents = source.readAll()
     source.close()
-    local username = homeDirectory:match("^/users/([%w_-]+)$") or "default"
+    local username = homeDirectory:match("^users/([%w_-]+)$") or "default"
     local cacheDirectory = fs.combine("/.launcher/cache", username)
     fs.makeDir(cacheDirectory)
     local temporary = fs.combine(cacheDirectory, fileName .. ".upload-tmp")
@@ -333,6 +344,11 @@ local function openSelected()
     local entry = entries[selected]
     if not entry then
         message = "This directory is empty."
+        return
+    end
+    if entry.path ~= homeDirectory
+        and entry.path:sub(1, #homeDirectory + 1) ~= homeDirectory .. "/" then
+        message = "That location is outside your home directory."
         return
     end
     if entry.isDirectory then
