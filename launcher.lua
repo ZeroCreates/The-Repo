@@ -25,7 +25,6 @@ local THEMES = {
 }
 local settings = {
     theme = 1,
-    showPath = true,
     alphabetical = true,
 }
 
@@ -51,7 +50,6 @@ local function loadSettings()
     if type(saved.theme) == "number" and THEMES[saved.theme] then
         settings.theme = saved.theme
     end
-    if type(saved.showPath) == "boolean" then settings.showPath = saved.showPath end
     if type(saved.alphabetical) == "boolean" then settings.alphabetical = saved.alphabetical end
 end
 
@@ -719,7 +717,7 @@ local function draw()
         term.setCursorPos(2, height - 6)
         term.setTextColor(titleColor)
         local selectedApp = apps[selected]
-        local detail = selectedApp and (settings.showPath and selectedApp.path or "Ready to launch") or "No programs found"
+        local detail = selectedApp and "Ready to launch" or "No programs found"
         term.write(detail:sub(1, math.max(0, width - 2)))
         firstButtons = {
             { label = "UPDATE", action = "update" },
@@ -734,7 +732,6 @@ local function draw()
     else
         local options = {
             "Accent theme: " .. theme.name,
-            "Show app file paths: " .. (settings.showPath and "On" or "Off"),
             "Sort programs alphabetically: " .. (settings.alphabetical and "On" or "Off"),
             "UPDATE LAUNCHER",
             "WIPE ENTIRE COMPUTER",
@@ -837,8 +834,6 @@ local function changeSetting(direction)
     if selectedSetting == 1 then
         settings.theme = ((settings.theme - 1 + direction) % #THEMES) + 1
     elseif selectedSetting == 2 then
-        settings.showPath = not settings.showPath
-    elseif selectedSetting == 3 then
         settings.alphabetical = not settings.alphabetical
         refreshApps()
     end

@@ -38,6 +38,20 @@ local function isWithinRoot(path, root)
     return path == root or path:sub(1, #root + 1) == root .. "/"
 end
 
+local function displayPath(path)
+    local normalizedPath = path:gsub("^/+", "")
+    if normalizedPath == homeDirectory then return "H://" end
+    if isWithinRoot(normalizedPath, homeDirectory) then
+        return "H://" .. normalizedPath:sub(#homeDirectory + 2)
+    end
+    return path
+end
+
+local function displayMessage(text)
+    local homePattern = homeDirectory:gsub("([^%w])", "%%%1")
+    return (text:gsub(homePattern .. "/", "H://"):gsub(homePattern, "H://"))
+end
+
 local function refreshDiskMounts()
     local mounted = {}
     for _, name in ipairs(peripheral.getNames()) do
@@ -196,14 +210,7 @@ local function draw()
     term.setBackgroundColor(colors.black)
     term.setCursorPos(2, 2)
     term.setTextColor(colors.lightGray)
-    local displayPath
-    if currentRoot == homeDirectory then
-        displayPath = currentDirectory == homeDirectory and "home/"
-            or "home/" .. currentDirectory:sub(#homeDirectory + 2)
-    else
-        displayPath = currentDirectory
-    end
-    term.write(("Path: " .. displayPath):sub(1, math.max(0, width - 2)))
+    term.write(("Path: " .. displayPath(currentDirectory)):sub(1, math.max(0, width - 2)))
 
     local lastVisible = math.min(#entries, firstVisible + rowCount - 1)
     for index = firstVisible, lastVisible do
@@ -224,7 +231,7 @@ local function draw()
 
     term.setCursorPos(2, height - 4)
     term.setTextColor(colors.yellow)
-    term.write(message:sub(1, math.max(0, width - 2)))
+    term.write(displayMessage(message):sub(1, math.max(0, width - 2)))
     drawButtons(topButtons, height - 2, width)
     drawButtons(bottomButtons, height - 1, width)
     term.setBackgroundColor(colors.black)
@@ -269,7 +276,7 @@ local function createFile()
     term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(1, 1)
-    print("Create a file in " .. currentDirectory)
+    print("Create a file in " .. displayPath(currentDirectory))
     write("File name: ")
     local name = read()
     if name == "" then
@@ -307,7 +314,7 @@ local function createFolder()
     term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(1, 1)
-    print("Create a folder in " .. currentDirectory)
+    print("Create a folder in " .. displayPath(currentDirectory))
     write("Folder name: ")
     local name = read()
     if name == "" then
@@ -348,7 +355,7 @@ local function confirmUploadOverwrite(path)
     term.clear()
     term.setCursorPos(1, 1)
     term.setTextColor(colors.yellow)
-    print(path .. " already exists.")
+    print(displayPath(path) .. " already exists.")
     term.setTextColor(colors.white)
     print("Choose whether to replace it.")
     drawButtons(buttons, height - 1, width)
@@ -373,7 +380,7 @@ local function confirmDelete(path)
     term.clear()
     term.setCursorPos(1, 1)
     term.setTextColor(colors.yellow)
-    print("Delete " .. path .. "?")
+    print("Delete " .. displayPath(path) .. "?")
     print("Folders and their contents will be removed.")
     term.setTextColor(colors.white)
     drawButtons(buttons, height - 1, width)
@@ -471,7 +478,7 @@ local function pasteClipboard()
 
     if clipboard.mode == "cut" then clipboard = nil end
     refreshEntries()
-    message = "Pasted " .. fs.getName(destination) .. " into " .. currentDirectory .. "."
+    message = "Pasted " .. fs.getName(destination) .. " into " .. displayPath(currentDirectory) .. "."
 end
 
 local function saveTransferredFile(source)
@@ -509,7 +516,7 @@ local function saveTransferredFile(source)
         local moved, moveError = pcall(fs.move, destination, backup)
         if not moved then
             fs.delete(temporary)
-            return false, "Could not back up " .. destination .. ": " .. tostring(moveError)
+            return false, "Could not back up " .. displayPath(destination) .. ": " .. tostring(moveError)
         end
     end
 
@@ -517,7 +524,7 @@ local function saveTransferredFile(source)
     if not moved then
         if fs.exists(temporary) then fs.delete(temporary) end
         if fs.exists(backup) then fs.move(backup, destination) end
-        return false, "Could not save " .. destination .. ": " .. tostring(moveError)
+        return false, "Could not save " .. displayPath(destination) .. ": " .. tostring(moveError)
     end
     if fs.exists(backup) then fs.delete(backup) end
     return true, "Uploaded " .. fileName .. "."
@@ -534,7 +541,7 @@ local function openSelected()
         currentDirectory = entry.path
         selected = 1
         refreshEntries()
-        message = "Opened disk " .. entry.path .. "."
+        message = "Opened disk " .. displayPath(entry.path) .. "."
         return
     end
     if entry.returnHome then
@@ -553,7 +560,7 @@ local function openSelected()
         currentDirectory = entry.path
         selected = 1
         refreshEntries()
-        message = "Opened " .. currentDirectory .. "."
+        message = "Opened " .. displayPath(currentDirectory) .. "."
     else
         editSelected()
     end
@@ -607,7 +614,7 @@ while true do
                 end
                 selected = 1
                 refreshEntries()
-                message = "Opened " .. currentDirectory .. "."
+                message = "Opened " .. displayPath(currentDirectory) .. "."
             elseif action == "home" then
                 currentDirectory = homeDirectory
                 currentRoot = homeDirectory
@@ -637,7 +644,7 @@ while true do
         if #failures > 0 then
             message = table.concat(failures, " ")
         elseif uploaded > 0 then
-            message = "Uploaded " .. uploaded .. " file(s) to " .. currentDirectory .. "."
+            message = "Uploaded " .. uploaded .. " file(s) to " .. displayPath(currentDirectory) .. "."
         else
             message = "No files were uploaded."
         end
