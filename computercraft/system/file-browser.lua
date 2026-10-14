@@ -243,7 +243,7 @@ local function editSelected()
         return
     end
 
-    local ok, result = pcall(os.run, _ENV, editorPath, entry.path)
+    local ok, result = pcall(os.run, _ENV, editorPath, "/" .. entry.path)
     if not ok then
         message = "Could not run edit: " .. tostring(result)
     elseif result == false then
