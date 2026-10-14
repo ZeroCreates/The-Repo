@@ -16,6 +16,8 @@ local message = "Select a program to launch."
 local shiftDown = false
 local screen = "apps"
 local selectedSetting = 1
+local notificationListenerPage = 1
+local notificationHistory = {}
 local currentUser
 local homeDirectory
 local notificationConfigRevision = 0
@@ -39,6 +41,19 @@ local settings = {
     theme = 1,
     alphabetical = true,
 }
+
+local function readJSONFile(path)
+    if not nativeFs.exists(path) or nativeFs.isDir(path) then return nil end
+    local file = nativeFs.open(path, "r")
+    if not file then return nil, "Could not read " .. path .. "." end
+    local contents = file.readAll()
+    file.close()
+    local ok, value = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(value) ~= "table" then
+        return nil, "Invalid JSON data in " .. path .. "."
+    end
+    return value
+end
 
 local function isLuaFile(path)
     return not fs.isDir(path) and path:lower():match("%.lua$") ~= nil
@@ -894,7 +909,9 @@ local function draw()
     term.setBackgroundColor(backgroundColor)
     term.setCursorPos(2, 2)
     term.setTextColor(mutedColor)
-    term.write((screen == "apps" and "YOUR PROGRAMS" or "LAUNCHER CUSTOMISATION"):sub(1, math.max(0, width - 2)))
+    local subtitle = screen == "apps" and "YOUR PROGRAMS"
+        or (screen == "notifications" and "LISTENING NOTIFICATIONS" or "LAUNCHER CUSTOMISATION")
+    term.write(subtitle:sub(1, math.max(0, width - 2)))
 
     if screen == "apps" then
         local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
@@ -926,12 +943,13 @@ local function draw()
         }
         drawButtons(firstButtons, height - 2, width, isColor)
         drawButtons(secondButtons, height - 1, width, isColor)
-    else
+    elseif screen == "settings" then
         local options = {
             "Accent theme: " .. theme.name,
             "Sort programs alphabetically: " .. (settings.alphabetical and "On" or "Off"),
             "UPDATE LAUNCHER",
             "WIPE ENTIRE COMPUTER",
+            "NOTIFICATIONS",
         }
         for index, option in ipairs(options) do
             local row = index + 4
@@ -949,6 +967,71 @@ local function draw()
         firstButtons = {}
         secondButtons = { { label = "BACK TO PROGRAMS", action = "back" } }
         drawButtons(secondButtons, height - 1, width, isColor)
+    else
+        local config = homeDirectory
+            and readJSONFile(nativeFs.combine(homeDirectory, "notification-listeners.json"))
+        local listeners = type(config) == "table" and type(config.listeners) == "table"
+            and config.listeners or {}
+        local pageSize = math.max(1, math.floor((height - 8) / 2))
+        local pageCount = math.max(1, math.ceil(#listeners / pageSize))
+        notificationListenerPage = math.min(notificationListenerPage, pageCount)
+        local firstListener = (notificationListenerPage - 1) * pageSize + 1
+        local lastListener = math.min(#listeners, firstListener + pageSize - 1)
+        term.setCursorPos(2, 4)
+        term.setTextColor(titleColor)
+        term.write("ACTIVE LISTENERS (click to remove)")
+        local row = 5
+        local listenerRows = {}
+        for index = firstListener, lastListener do
+            local listener = listeners[index]
+            local visibleIndex = index - firstListener + 1
+            local label = string.format("[%d] %s  /  %s", visibleIndex,
+                tostring(listener.name or "Listener"), tostring(listener.protocol or ""))
+            term.setCursorPos(2, row)
+            term.setTextColor(textColor)
+            term.write(label:sub(1, math.max(0, width - 2)))
+            listenerRows[row] = index
+            row = row + 1
+        end
+        if #listeners == 0 then
+            term.setCursorPos(2, row)
+            term.setTextColor(mutedColor)
+            term.write("No custom protocol listeners are configured.")
+            row = row + 1
+        end
+
+        local historyHeader = math.min(height - 8, row + 1)
+        if historyHeader > row then
+            term.setCursorPos(2, historyHeader)
+            term.setTextColor(titleColor)
+            term.write("RECENT NOTIFICATIONS")
+        end
+        local historyRow = historyHeader + 1
+        local historyLimit = math.max(0, height - historyRow - 5)
+        for index = 1, math.min(#notificationHistory, historyLimit) do
+            local item = notificationHistory[index]
+            term.setCursorPos(2, historyRow)
+            term.setTextColor(mutedColor)
+            term.write((item.source .. ": " .. item.title .. " - " .. item.message)
+                :sub(1, math.max(0, width - 2)))
+            historyRow = historyRow + 1
+        end
+        if #notificationHistory == 0 and historyRow < height - 4 then
+            term.setCursorPos(2, historyRow)
+            term.setTextColor(mutedColor)
+            term.write("No notifications received this session.")
+        end
+        term.setCursorPos(2, height - 4)
+        term.setTextColor(mutedColor)
+        term.write(message:sub(1, math.max(0, width - 2)))
+        firstButtons = {}
+        secondButtons = {
+            { label = "PREVIOUS", action = "notifications-prev" },
+            { label = "BACK TO SETTINGS", action = "back-settings" },
+            { label = "NEXT", action = "notifications-next" },
+        }
+        drawButtons(secondButtons, height - 1, width, isColor)
+        return firstButtons, secondButtons, listenerRows
     end
 
     term.setCursorPos(2, height - 4)
@@ -1552,21 +1635,17 @@ local EMAIL_PROTOCOL = "launcher_email_v1"
 local EMAIL_NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
 local MARKET_PROTOCOL = "order_system_v1"
 local MARKET_NOTIFICATION_CONTROL_PROTOCOL = "launcher_market_notifications_v1"
-
-local function readJSONFile(path)
-    if not nativeFs.exists(path) or nativeFs.isDir(path) then return nil end
-    local file = nativeFs.open(path, "r")
-    if not file then return nil, "Could not read " .. path .. "." end
-    local contents = file.readAll()
-    file.close()
-    local ok, value = pcall(textutils.unserializeJSON, contents)
-    if not ok or type(value) ~= "table" then
-        return nil, "Invalid JSON data in " .. path .. "."
-    end
-    return value
-end
-
 local function showNotificationPopup(notification)
+    local function popupText(value)
+        return tostring(value):gsub("%c", " ")
+    end
+    table.insert(notificationHistory, 1, {
+        source = popupText(notification.source or "System"),
+        title = popupText(notification.title or "Notification"),
+        message = popupText(notification.message or ""),
+        receivedAt = os.epoch and os.epoch("utc") or os.time() * 1000,
+    })
+    while #notificationHistory > 20 do table.remove(notificationHistory) end
     if not nativeWindow or not nativeTerm then return end
     local width, height = nativeTerm.getSize()
     if width < 12 or height < 4 then return end
@@ -1574,9 +1653,6 @@ local function showNotificationPopup(notification)
     local popupWidth = math.min(width, 34)
     local popupHeight = math.min(height, 4)
     local popupX = width - popupWidth + 1
-    local function popupText(value)
-        return tostring(value):gsub("%c", " ")
-    end
     local popup = nativeWindow.create(nativeTerm, popupWidth, popupHeight, popupX, 1, false)
     popup.setBackgroundColor(colors.black)
     popup.setTextColor(colors.white)
@@ -1594,6 +1670,47 @@ local function showNotificationPopup(notification)
     popup.setVisible(true)
     sleep(4)
     popup.setVisible(false)
+end
+
+local function removeNotificationListener(index)
+    if not homeDirectory then return false, "No active profile." end
+    local configPath = nativeFs.combine(homeDirectory, "notification-listeners.json")
+    local config, loadError = readJSONFile(configPath)
+    if not config then return false, loadError or "No listener settings were found." end
+    if type(config.listeners) ~= "table" or type(config.listeners[index]) ~= "table" then
+        return false, "That listener is no longer available."
+    end
+
+    local removed = table.remove(config.listeners, index)
+    local temporary = configPath .. ".tmp"
+    local backup = configPath .. ".bak"
+    local file = nativeFs.open(temporary, "w")
+    if not file then
+        table.insert(config.listeners, index, removed)
+        return false, "Could not create temporary notification settings."
+    end
+    file.write(textutils.serializeJSON(config))
+    file.close()
+
+    if nativeFs.exists(backup) then nativeFs.delete(backup) end
+    if nativeFs.exists(configPath) then
+        local backedUp, backupError = pcall(nativeFs.move, configPath, backup)
+        if not backedUp then
+            nativeFs.delete(temporary)
+            table.insert(config.listeners, index, removed)
+            return false, "Could not back up notification settings: " .. tostring(backupError)
+        end
+    end
+    local moved, moveError = pcall(nativeFs.move, temporary, configPath)
+    if not moved then
+        if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
+        if nativeFs.exists(backup) then nativeFs.move(backup, configPath) end
+        table.insert(config.listeners, index, removed)
+        return false, "Could not save notification settings: " .. tostring(moveError)
+    end
+    if nativeFs.exists(backup) then nativeFs.delete(backup) end
+    notificationConfigRevision = notificationConfigRevision + 1
+    return true, "Removed listener for " .. tostring(removed.protocol) .. "."
 end
 
 local function openNotificationModems()
@@ -1796,7 +1913,7 @@ else
 end
 
 while true do
-    local firstButtons, secondButtons = draw()
+    local firstButtons, secondButtons, listenerRows = draw()
     local event, button, x, y = os.pullEventRaw()
     if event == "mouse_click" and button == 1 then
         local _, height = term.getSize()
@@ -1836,7 +1953,23 @@ while true do
                     return
                 end
             end
-        elseif y >= 5 and y <= 8 then
+        elseif screen == "notifications" then
+            local listenerIndex = listenerRows and listenerRows[y]
+            if listenerIndex then
+                local removed, result = removeNotificationListener(listenerIndex)
+                message = result
+            elseif y == height - 1 then
+                local action = buttonAt(secondButtons, x)
+                if action == "back-settings" then
+                    screen = "settings"
+                    message = "Click a setting to change it."
+                elseif action == "notifications-prev" then
+                    notificationListenerPage = math.max(1, notificationListenerPage - 1)
+                elseif action == "notifications-next" then
+                    notificationListenerPage = notificationListenerPage + 1
+                end
+            end
+        elseif y >= 5 and y <= 9 then
             selectedSetting = y - 4
             if selectedSetting == 1 then
                 local direction = x <= math.floor(select(1, term.getSize()) / 2) and -1 or 1
@@ -1847,6 +1980,10 @@ while true do
                 updateLauncher()
             elseif selectedSetting == 4 then
                 uninstallLauncher()
+            elseif selectedSetting == 5 then
+                screen = "notifications"
+                notificationListenerPage = 1
+                message = "Click an active listener to remove it."
             end
         elseif y == height - 1 and buttonAt(secondButtons, x) == "back" then
             screen = "apps"
