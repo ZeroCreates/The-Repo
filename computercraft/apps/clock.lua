@@ -1,17 +1,32 @@
+local function loadTheme()
+    local path = "/.launcher/settings.json"
+    if not fs.exists(path) then return colors.cyan end
+    local file = fs.open(path, "r")
+    if not file then return colors.cyan end
+    local contents = file.readAll()
+    file.close()
+    local ok, saved = pcall(textutils.unserializeJSON, contents)
+    local accents = { colors.cyan, colors.lime, colors.orange, colors.purple }
+    if ok and type(saved) == "table" and accents[saved.theme] then return accents[saved.theme] end
+    return colors.cyan
+end
+
+local accent = loadTheme()
+
 local function draw()
     local width, height = term.getSize()
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(1, 1)
-    term.setBackgroundColor(colors.blue)
+    term.setBackgroundColor(term.isColor() and accent or colors.gray)
     term.write((" " .. "CLOCK"):sub(1, width))
     term.setBackgroundColor(colors.black)
 
     local date = os.date("%A, %B %d, %Y")
     local time = os.date("%I:%M:%S %p")
     term.setCursorPos(math.max(1, math.floor((width - #date) / 2)), math.max(2, math.floor(height / 2) - 1))
-    term.setTextColor(colors.lightBlue)
+    term.setTextColor(term.isColor() and accent or colors.white)
     term.write(date)
     term.setCursorPos(math.max(1, math.floor((width - #time) / 2)), math.max(3, math.floor(height / 2)))
     term.setTextColor(colors.white)

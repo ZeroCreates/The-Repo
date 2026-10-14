@@ -2,11 +2,37 @@ local OWNER_REPO = "ZeroCreates/The-Repo"
 local BRANCH = "main"
 local RAW_BASE_URL = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/"
 local CATALOG_PATH = "app-catalog.json"
-local APP_NAMES_PATH = "/.app-catalog-names.json"
+local USER_ROOT = "/users/"
+local SYSTEM_DIRECTORY = "/.launcher"
+local CACHE_DIRECTORY = SYSTEM_DIRECTORY .. "/cache"
+local homeDirectory = USER_ROOT .. "default"
+local username = "default"
+local APP_NAMES_PATH = SYSTEM_DIRECTORY .. "/app-catalog-names.json"
 local apps = {}
 local selected = 1
 local firstVisible = 1
 local message = "Loading app catalog from GitHub..."
+local themeIndex = 1
+local themes = {
+    { accent = colors.cyan, highlight = colors.blue },
+    { accent = colors.lime, highlight = colors.green },
+    { accent = colors.orange, highlight = colors.red },
+    { accent = colors.purple, highlight = colors.magenta },
+}
+
+local function loadTheme()
+    local path = SYSTEM_DIRECTORY .. "/settings.json"
+    if not fs.exists(path) then return end
+    local file = fs.open(path, "r")
+    if not file then return end
+    local contents = file.readAll()
+    file.close()
+    local ok, saved = pcall(textutils.unserializeJSON, contents)
+    if ok and type(saved) == "table"
+        and type(saved.theme) == "number" and themes[saved.theme] then
+        themeIndex = saved.theme
+    end
+end
 
 local function request(url)
     local ok, response, requestError = pcall(http.get, url, {
@@ -78,6 +104,9 @@ end
 
 local function draw()
     local width, height = term.getSize()
+    local theme = themes[themeIndex]
+    local accent = term.isColor() and theme.accent or colors.gray
+    local highlight = term.isColor() and theme.highlight or colors.gray
     local visibleRows = visibleAppRows(height)
     if selected < firstVisible then firstVisible = selected end
     if selected >= firstVisible + visibleRows then
@@ -88,7 +117,7 @@ local function draw()
     term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(1, 1)
-    term.setBackgroundColor(term.isColor() and colors.cyan or colors.gray)
+    term.setBackgroundColor(accent)
     term.write((" " .. "COMPUTERCRAFT APP DOWNLOADER"):sub(1, width))
     term.setBackgroundColor(colors.black)
     term.setCursorPos(2, 2)
@@ -100,7 +129,7 @@ local function draw()
         local row = index - firstVisible + 3
         term.setCursorPos(2, row)
         if index == selected then
-            term.setBackgroundColor(term.isColor() and colors.blue or colors.gray)
+            term.setBackgroundColor(highlight)
             term.setTextColor(colors.white)
             term.write(("> " .. apps[index].name):sub(1, math.max(0, width - 2)))
             term.setBackgroundColor(colors.black)
@@ -179,6 +208,70 @@ local function saveCatalogName(fileName, appName)
     return true
 end
 
+local function setHomeDirectory(path)
+    if path == nil then path = USER_ROOT .. "default" end
+    if type(path) ~= "string" or not path:match("^/users/[%w_-]+$") then
+        return false, "Invalid user directory. Expected /users/<username>."
+    end
+    homeDirectory = path
+    username = path:match("^/users/([%w_-]+)$")
+    APP_NAMES_PATH = SYSTEM_DIRECTORY .. "/app-catalog-names.json"
+    fs.makeDir(SYSTEM_DIRECTORY)
+    fs.makeDir(CACHE_DIRECTORY)
+    local legacyNamesPath = homeDirectory .. "/.app-catalog-names.json"
+    if fs.exists(legacyNamesPath) then
+        local legacyFile = fs.open(legacyNamesPath, "r")
+        if legacyFile then
+            local contents = legacyFile.readAll()
+            legacyFile.close()
+            local ok, legacyNames = pcall(textutils.unserializeJSON, contents)
+            if ok and type(legacyNames) == "table" then
+                local currentNames = {}
+                if fs.exists(APP_NAMES_PATH) then
+                    local currentFile = fs.open(APP_NAMES_PATH, "r")
+                    if currentFile then
+                        local currentContents = currentFile.readAll()
+                        currentFile.close()
+                        local currentOk, decoded = pcall(textutils.unserializeJSON, currentContents)
+                        if currentOk and type(decoded) == "table" then currentNames = decoded end
+                    end
+                end
+                for fileName, appName in pairs(legacyNames) do
+                    if type(fileName) == "string" and type(appName) == "string"
+                        and currentNames[fileName] == nil then
+                        currentNames[fileName] = appName
+                    end
+                end
+                local temporary = APP_NAMES_PATH .. ".tmp"
+                local backup = APP_NAMES_PATH .. ".bak"
+                if fs.exists(temporary) then fs.delete(temporary) end
+                if fs.exists(backup) then fs.delete(backup) end
+                local output = fs.open(temporary, "w")
+                if output then
+                    output.write(textutils.serializeJSON(currentNames))
+                    output.close()
+                    if fs.exists(APP_NAMES_PATH) then
+                        local backedUp = pcall(fs.move, APP_NAMES_PATH, backup)
+                        if not backedUp then
+                            fs.delete(temporary)
+                            return true
+                        end
+                    end
+                    local moved = pcall(fs.move, temporary, APP_NAMES_PATH)
+                    if moved then
+                        if fs.exists(backup) then fs.delete(backup) end
+                        fs.delete(legacyNamesPath)
+                    else
+                        if fs.exists(backup) then fs.move(backup, APP_NAMES_PATH) end
+                    end
+                end
+            end
+        end
+    end
+    fs.makeDir(homeDirectory)
+    return true
+end
+
 local function downloadApp(app)
     if not app then
         message = "There are no apps available to download."
@@ -195,14 +288,16 @@ local function downloadApp(app)
         return
     end
 
-    local destination = app.file
+    local destination = fs.combine(homeDirectory, app.file)
     if not confirmOverwrite(destination) then
         message = "Download cancelled."
         return
     end
 
-    local temporary = destination .. ".download-tmp"
-    local backup = destination .. ".download-bak"
+    local cacheUserDirectory = fs.combine(CACHE_DIRECTORY, username)
+    fs.makeDir(cacheUserDirectory)
+    local temporary = fs.combine(cacheUserDirectory, app.file .. ".download-tmp")
+    local backup = fs.combine(cacheUserDirectory, app.file .. ".download-bak")
     if fs.exists(temporary) then fs.delete(temporary) end
     if fs.exists(backup) then fs.delete(backup) end
     local file = fs.open(temporary, "w")
@@ -222,7 +317,7 @@ local function downloadApp(app)
         return
     end
     if fs.exists(backup) then fs.delete(backup) end
-    local nameSaved, nameError = saveCatalogName(destination, app.name)
+    local nameSaved, nameError = saveCatalogName(fs.getName(destination), app.name)
     if not nameSaved then
         message = app.name .. " installed, but its catalog name could not be saved: " .. nameError
         return
@@ -230,7 +325,17 @@ local function downloadApp(app)
     message = app.name .. " downloaded as " .. destination .. "."
 end
 
-local mode, target = ...
+local mode, target, requestedHome = ...
+if mode ~= "update" then
+    requestedHome = mode
+    mode = nil
+end
+local homeOk, homeError = setHomeDirectory(requestedHome)
+if not homeOk then
+    printError(homeError)
+    return
+end
+loadTheme()
 local catalog, catalogError = loadCatalog()
 if not catalog then
     if mode == "update" then

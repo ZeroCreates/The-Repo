@@ -30,6 +30,18 @@
     "description": "Roll configurable dice"
   },
   {
+    "name": "File Browser",
+    "source": "computercraft/apps/file-browser.lua",
+    "file": "file-browser.lua",
+    "description": "Browse files and edit them with the built-in editor"
+  },
+  {
+    "name": "Lua Console",
+    "source": "computercraft/apps/lua-console.lua",
+    "file": "lua-console.lua",
+    "description": "Run Lua expressions and statements interactively"
+  },
+  {
     "name": "Notes",
     "source": "computercraft/apps/notes.lua",
     "file": "notes.lua",

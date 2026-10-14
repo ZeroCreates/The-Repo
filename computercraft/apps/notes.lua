@@ -1,5 +1,20 @@
 local NOTES_FILE = "notes.txt"
 
+local function loadTheme()
+    local path = "/.launcher/settings.json"
+    if not fs.exists(path) then return colors.cyan end
+    local file = fs.open(path, "r")
+    if not file then return colors.cyan end
+    local contents = file.readAll()
+    file.close()
+    local ok, saved = pcall(textutils.unserializeJSON, contents)
+    local accents = { colors.cyan, colors.lime, colors.orange, colors.purple }
+    if ok and type(saved) == "table" and accents[saved.theme] then return accents[saved.theme] end
+    return colors.cyan
+end
+
+local accent = loadTheme()
+
 local function readNotes()
     if not fs.exists(NOTES_FILE) then return "" end
     local file = fs.open(NOTES_FILE, "r")
@@ -12,7 +27,9 @@ end
 local function showNotes()
     term.clear()
     term.setCursorPos(1, 1)
+    term.setTextColor(term.isColor() and accent or colors.white)
     print("Notes")
+    term.setTextColor(colors.white)
     local width = term.getSize()
     print(string.rep("-", math.min(width, 32)))
     local contents = readNotes()
@@ -25,7 +42,9 @@ end
 while true do
     term.clear()
     term.setCursorPos(1, 1)
+    term.setTextColor(term.isColor() and accent or colors.white)
     print("Notes")
+    term.setTextColor(colors.white)
     print("1. Read notes")
     print("2. Add a note")
     print("3. Clear all notes")

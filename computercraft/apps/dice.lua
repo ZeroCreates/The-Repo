@@ -1,9 +1,28 @@
+local function loadTheme()
+    local path = "/.launcher/settings.json"
+    if not fs.exists(path) then return colors.cyan end
+    local file = fs.open(path, "r")
+    if not file then return colors.cyan end
+    local contents = file.readAll()
+    file.close()
+    local ok, saved = pcall(textutils.unserializeJSON, contents)
+    local accents = { colors.cyan, colors.lime, colors.orange, colors.purple }
+    if ok and type(saved) == "table" and accents[saved.theme] then return accents[saved.theme] end
+    return colors.cyan
+end
+
+local accent = loadTheme()
 term.clear()
 term.setCursorPos(1, 1)
+term.setTextColor(term.isColor() and accent or colors.white)
 print("Dice Roller")
+term.setTextColor(term.isColor() and accent or colors.white)
 write("How many dice? (1-100): ")
+term.setTextColor(colors.white)
 local count = tonumber(read())
+term.setTextColor(term.isColor() and accent or colors.white)
 write("How many sides per die? (2-1000): ")
+term.setTextColor(colors.white)
 local sides = tonumber(read())
 
 if not count or count % 1 ~= 0 or count < 1 or count > 100 then
@@ -23,5 +42,6 @@ for index = 1, count do
 end
 
 print("")
+term.setTextColor(term.isColor() and accent or colors.white)
 print("Rolls: " .. table.concat(rolls, ", "))
 print("Total: " .. total)
