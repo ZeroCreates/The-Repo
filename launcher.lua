@@ -128,6 +128,69 @@ local function installDownloader()
     return true
 end
 
+local function updateLauncher()
+    if not http or not http.get then
+        message = "Enable the ComputerCraft HTTP API to update the launcher."
+        return
+    end
+
+    local destination = "/" .. LAUNCHER_NAME
+    local temporary = destination .. ".update-tmp"
+    local backup = destination .. ".update-bak"
+    local ok, response, requestError = pcall(http.get, REPOSITORY_BASE_URL .. LAUNCHER_NAME)
+    if not ok then
+        message = "Launcher update request failed: " .. tostring(response)
+        return
+    end
+    if not response then
+        message = "Launcher update request failed: " .. tostring(requestError or "HTTP request failed.")
+        return
+    end
+
+    local responseCode = response.getResponseCode and response.getResponseCode()
+    if responseCode and responseCode ~= 200 then
+        response.close()
+        message = "Launcher update failed: GitHub returned HTTP " .. responseCode .. "."
+        return
+    end
+
+    local contents = response.readAll()
+    response.close()
+    if not contents or contents == "" then
+        message = "Launcher update failed: the downloaded file was empty."
+        return
+    end
+
+    if fs.exists(temporary) then fs.delete(temporary) end
+    if fs.exists(backup) then fs.delete(backup) end
+    local file = fs.open(temporary, "w")
+    if not file then
+        message = "Could not create " .. temporary .. "."
+        return
+    end
+    file.write(contents)
+    file.close()
+
+    if fs.exists(destination) then
+        local backedUp, backupError = pcall(fs.move, destination, backup)
+        if not backedUp then
+            fs.delete(temporary)
+            message = "Could not back up the current launcher: " .. tostring(backupError)
+            return
+        end
+    end
+
+    local moved, moveError = pcall(fs.move, temporary, destination)
+    if not moved then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        if fs.exists(backup) then fs.move(backup, destination) end
+        message = "Could not install the launcher update: " .. tostring(moveError)
+        return
+    end
+    if fs.exists(backup) then fs.delete(backup) end
+    message = "Launcher updated. Restart to use the new version."
+end
+
 local function displayName(path)
     local name = path:gsub("%.lua$", ""):gsub("[_%-]", " ")
     return name:gsub("(%a)([%w']*)", function(first, rest)
@@ -465,6 +528,7 @@ local function draw()
             "Accent theme: " .. theme.name,
             "Show app file paths: " .. (settings.showPath and "On" or "Off"),
             "Sort programs alphabetically: " .. (settings.alphabetical and "On" or "Off"),
+            "UPDATE LAUNCHER",
             "WIPE ENTIRE COMPUTER",
         }
         for index, option in ipairs(options) do
@@ -699,7 +763,7 @@ while true do
                     return
                 end
             end
-        elseif y >= 5 and y <= 8 then
+        elseif y >= 5 and y <= 9 then
             selectedSetting = y - 4
             if selectedSetting == 1 then
                 local direction = x <= math.floor(select(1, term.getSize()) / 2) and -1 or 1
@@ -707,6 +771,8 @@ while true do
             elseif selectedSetting == 2 or selectedSetting == 3 then
                 changeSetting(1)
             elseif selectedSetting == 4 then
+                updateLauncher()
+            elseif selectedSetting == 5 then
                 uninstallLauncher()
             end
         elseif y == height - 1 and buttonAt(secondButtons, x) == "back" then
