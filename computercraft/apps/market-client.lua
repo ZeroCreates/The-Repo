@@ -4,8 +4,15 @@ local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
 local FOLLOWED_ORDERS_FILE = "market-followed-orders.json"
+local FOLLOWED_ORDERS_FILE_STORED = path.combine("market", FOLLOWED_ORDERS_FILE)
 local MARKET_USER = "Market customer"
 local notifications = require("notifications")
+local storageLoaded, storage = pcall(require, "storage")
+if not storageLoaded or type(storage) ~= "table"
+    or type(storage.read) ~= "function" or type(storage.write) ~= "function"
+    or type(storage.delete) ~= "function" then
+    storage = nil
+end
 local mouseEnabled = false
 local followedOrders = {}
 
@@ -139,6 +146,23 @@ local function saveFollowedOrders()
         table.insert(saved, { orderId = entry.orderId, status = entry.status })
     end
     table.sort(saved, function(left, right) return left.orderId < right.orderId end)
+    
+    if storage then
+        local saved, saveError = storage.write(FOLLOWED_ORDERS_FILE_STORED, #saved == 0 and "[]" or textutils.serializeJSON(saved))
+        if not saved then
+            return false, "Could not save account details to private storage: "
+                .. tostring(saveError or "unknown storage error")
+        end
+        if fs.exists(FOLLOWED_ORDERS_FILE) then
+            local ok, deleteError = pcall(fs.delete, FOLLOWED_ORDERS_FILE)
+            if not ok then
+                return false, "Account was saved to private storage, but the old profile copy could not be removed: "
+                    .. tostring(deleteError)
+            end
+        end
+        return true
+    end
+    
     local file = fs.open(FOLLOWED_ORDERS_FILE, "w")
     if not file then return false end
     file.write(#saved == 0 and "[]" or textutils.serializeJSON(saved))
