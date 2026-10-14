@@ -147,12 +147,34 @@ end
 
 local function sendFollowControl(message)
     message.user = MARKET_USER
-    return notifications.send(CONTROL_PROTOCOL, message, SERVER_NAME)
+    local response, err = notifications.request(CONTROL_PROTOCOL, message, SERVER_NAME, TIMEOUT)
+    if not response then return false, err end
+    if response.type ~= "watch_order_ack" or response.success ~= true then
+        return false, type(response.message) == "string"
+            and response.message or "The order server did not confirm this notification subscription."
+    end
+    return true
 end
 
 local function registerFollowedOrders()
+    local orderIds = {}
     for orderId in pairs(followedOrders) do
-        sendFollowControl({ type = "watch_order", orderId = orderId })
+        table.insert(orderIds, orderId)
+    end
+    table.sort(orderIds)
+
+    local failures = {}
+    for _, orderId in ipairs(orderIds) do
+        local registered, err = sendFollowControl({
+            type = "watch_order",
+            orderId = orderId,
+        })
+        if not registered then
+            table.insert(failures, "#" .. tostring(orderId) .. ": " .. tostring(err))
+        end
+    end
+    if #failures > 0 then
+        showNotice("ORDER NOTIFICATIONS", "Could not activate follows: " .. table.concat(failures, "; "))
     end
 end
 
@@ -177,8 +199,16 @@ local function promptFollowOrder(order)
     if choice == "f" and not following then
         followedOrders[order.id] = { orderId = order.id, status = order.status }
         if saveFollowedOrders() then
-            sendFollowControl({ type = "watch_order", orderId = order.id })
-            showNotice("FOLLOWING ORDER", "You will be notified when this order's status changes.")
+            local registered, registerError = sendFollowControl({
+                type = "watch_order",
+                orderId = order.id,
+            })
+            if registered then
+                showNotice("FOLLOWING ORDER", "You will be notified when this order's status changes.")
+            else
+                showNotice("FOLLOW NOT ACTIVE", "The order was saved, but the server did not activate notifications: "
+                    .. tostring(registerError))
+            end
         else
             followedOrders[order.id] = nil
             showNotice("FOLLOW NOT SAVED", "Could not save your followed order.")
@@ -187,8 +217,16 @@ local function promptFollowOrder(order)
         local savedEntry = followedOrders[order.id]
         followedOrders[order.id] = nil
         if saveFollowedOrders() then
-            sendFollowControl({ type = "unwatch_order", orderId = order.id })
-            showNotice("UNFOLLOWED ORDER", "Status notifications are disabled for this order.")
+            local unregistered, unregisterError = sendFollowControl({
+                type = "unwatch_order",
+                orderId = order.id,
+            })
+            if unregistered then
+                showNotice("UNFOLLOWED ORDER", "Status notifications are disabled for this order.")
+            else
+                showNotice("UNFOLLOW SAVED", "Could not confirm notification removal: "
+                    .. tostring(unregisterError))
+            end
         else
             followedOrders[order.id] = savedEntry
             showNotice("UNFOLLOW NOT SAVED", "Could not save your followed orders.")

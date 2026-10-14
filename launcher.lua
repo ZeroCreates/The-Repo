@@ -18,6 +18,8 @@ local screen = "apps"
 local selectedSetting = 1
 local notificationListenerPage = 1
 local notificationHistory = {}
+local activeNotificationPopup
+local activeNotificationPopupTimer
 local currentUser
 local homeDirectory
 local notificationConfigRevision = 0
@@ -1009,8 +1011,7 @@ local function draw()
         local listenerRows = {}
         for index = firstListener, lastListener do
             local listener = listeners[index]
-            local visibleIndex = index - firstListener + 1
-            local label = string.format("[%d] %s  /  %s", visibleIndex,
+            local label = string.format("[%d] %s  /  %s", index - firstListener + 1,
                 tostring(listener.name or "Listener"), tostring(listener.protocol or ""))
             term.setCursorPos(2, row)
             term.setTextColor(textColor)
@@ -1169,13 +1170,6 @@ local function runHomeProgram(programPath, ...)
 
     local function createNotificationsModule()
         local configPath, configPathError = notificationConfigPath(homeDirectory)
-        local reservedProtocols = {
-            launcher_notifications_v1 = true,
-            launcher_email_v1 = true,
-            launcher_email_notifications_v1 = true,
-            launcher_market_notifications_v1 = true,
-            order_system_v1 = true,
-        }
 
         local function loadConfig()
             if not configPath then return nil, configPathError end
@@ -1258,9 +1252,6 @@ local function runHomeProgram(programPath, ...)
             if type(protocol) ~= "string" or #protocol < 1 or #protocol > 64
                 or not protocol:match("^[%w_.%-]+$") then
                 return false, "Protocol must be 1 to 64 letters, numbers, dots, dashes, or underscores."
-            end
-            if reservedProtocols[protocol] then
-                return false, "That protocol is reserved for a built-in launcher service."
             end
             if type(titleField) ~= "string" or not titleField:match("^[%w_]+$") then
                 return false, "Title field must be a table key containing letters, numbers, or underscores."
@@ -1769,12 +1760,17 @@ local function uninstallLauncher()
     while true do os.pullEventRaw() end
 end
 
-local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
-local MARKET_PROTOCOL = "order_system_v1"
-local MARKET_NOTIFICATION_CONTROL_PROTOCOL = "launcher_market_notifications_v1"
 local function showNotificationPopup(notification)
     local function popupText(value)
         return tostring(value):gsub("%c", " ")
+    end
+    if activeNotificationPopupTimer then
+        os.cancelTimer(activeNotificationPopupTimer)
+        activeNotificationPopupTimer = nil
+    end
+    if activeNotificationPopup then
+        activeNotificationPopup.setVisible(false)
+        activeNotificationPopup = nil
     end
     table.insert(notificationHistory, 1, {
         source = popupText(notification.source or "System"),
@@ -1805,8 +1801,8 @@ local function showNotificationPopup(notification)
     popup.setCursorPos(2, 3)
     popup.write(popupText(notification.message or ""):sub(1, popupWidth - 2))
     popup.setVisible(true)
-    sleep(4)
-    popup.setVisible(false)
+    activeNotificationPopup = popup
+    activeNotificationPopupTimer = os.startTimer(4)
 end
 
 local function removeNotificationListener(index)
@@ -1859,19 +1855,6 @@ local function openNotificationModems()
     end
 end
 
-local function loadMarketFollows(profilePath)
-    local follows, err = readJSONFile(nativeFs.combine(profilePath, "market-followed-orders.json"))
-    if not follows then
-        if err then showNotificationPopup({
-            source = "Market",
-            title = "Notification setup",
-            message = err,
-        }) end
-        return {}
-    end
-    return follows
-end
-
 local function loadNotificationListeners(profilePath)
     local configPath, pathError = notificationConfigPath(profilePath)
     if not configPath then
@@ -1920,40 +1903,17 @@ local function loadNotificationListeners(profilePath)
     return listeners
 end
 
-local function sendNotificationSubscriptions(profilePath, computerId)
-    openNotificationModems()
-
-    local followedOrders = loadMarketFollows(profilePath)
-    if type(followedOrders) ~= "table" then return end
-    local serverId = rednet.lookup(MARKET_PROTOCOL, "order_server")
-    if not serverId then return end
-    for _, followed in ipairs(followedOrders) do
-        if type(followed) == "table" and type(followed.orderId) == "number" then
-            rednet.send(serverId, {
-                type = "watch_order",
-                orderId = followed.orderId,
-                computerId = computerId,
-            }, MARKET_NOTIFICATION_CONTROL_PROTOCOL)
-        end
-    end
-end
-
 local function notificationReceiver()
     local lastProfilePath
-    local nextSubscriptionSync = 0
-    local computerId = os.getComputerID()
     local activeListeners = {}
     local loadedConfigRevision = -1
+    local refreshTimer = os.startTimer(1)
 
     while true do
-        local now = os.clock()
         if homeDirectory and (homeDirectory ~= lastProfilePath
-            or now >= nextSubscriptionSync
             or loadedConfigRevision ~= notificationConfigRevision) then
             lastProfilePath = homeDirectory
-            nextSubscriptionSync = now + 30
             activeListeners = loadNotificationListeners(homeDirectory)
-            sendNotificationSubscriptions(homeDirectory, computerId)
             loadedConfigRevision = notificationConfigRevision
         end
 
@@ -1962,28 +1922,34 @@ local function notificationReceiver()
         end
 
         openNotificationModems()
-        local _, payload, protocol = rednet.receive(nil, 1)
-        if protocol == NOTIFICATION_PROTOCOL
-            and type(payload) == "table" and payload.type == "notification" then
-            local show = true
-            if payload.source ~= "Email" and payload.source ~= "Market"
-                and type(payload.user) == "string" and currentUser then
-                show = payload.user == currentUser
+        local event, eventId, senderId, payload, protocol = os.pullEventRaw()
+        if event == "timer" then
+            if eventId == activeNotificationPopupTimer then
+                if activeNotificationPopup then
+                    activeNotificationPopup.setVisible(false)
+                    activeNotificationPopup = nil
+                end
+                activeNotificationPopupTimer = nil
+            elseif eventId == refreshTimer then
+                refreshTimer = os.startTimer(1)
             end
-            if show then showNotificationPopup(payload) end
-        elseif type(payload) == "table" then
-            for _, listener in ipairs(activeListeners) do
-                if listener.protocol == protocol then
-                    local title = payload[listener.titleField]
-                    local body = payload[listener.messageField]
-                    local titleType, bodyType = type(title), type(body)
-                    if (titleType == "string" or titleType == "number")
-                        and (bodyType == "string" or bodyType == "number") then
-                        showNotificationPopup({
-                            source = listener.name,
-                            title = title,
-                            message = body,
-                        })
+        elseif event == "rednet_message" then
+            if type(payload) == "table" and payload.type == "notification" then
+                showNotificationPopup(payload)
+            elseif type(payload) == "table" then
+                for _, listener in ipairs(activeListeners) do
+                    if listener.protocol == protocol then
+                        local title = payload[listener.titleField]
+                        local body = payload[listener.messageField]
+                        local titleType, bodyType = type(title), type(body)
+                        if (titleType == "string" or titleType == "number")
+                            and (bodyType == "string" or bodyType == "number") then
+                            showNotificationPopup({
+                                source = listener.name,
+                                title = title,
+                                message = body,
+                            })
+                        end
                     end
                 end
             end
