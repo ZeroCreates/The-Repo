@@ -114,6 +114,14 @@ local function readField(label, secret)
     return read(secret and "*" or nil)
 end
 
+local function completeEmailAddress(value)
+    local email = value:lower():match("^%s*(.-)%s*$")
+    if not email:find("@", 1, true) then
+        email = email .. "@riftmail.com"
+    end
+    return email
+end
+
 local function saveAccount(data)
     local file = fs.open(ACCOUNT_PATH, "w")
     if not file then return false, "Could not save account details in this profile." end
@@ -272,7 +280,7 @@ local function inbox()
 end
 
 local function compose()
-    local recipient = readField("Recipient email address:")
+    local recipient = completeEmailAddress(readField("Recipient email (or username for @riftmail.com):"))
     local subject = readField("Subject:")
     if #subject < 1 or #subject > 80 then
         notice("COMPOSE", "Subject must be 1 to 80 characters.")
@@ -295,7 +303,7 @@ local function compose()
         type = "send",
         email = account.email,
         password = account.password,
-        to = recipient:lower():match("^%s*(.-)%s*$"),
+        to = recipient,
         subject = subject,
         body = body,
     })
@@ -307,7 +315,7 @@ local function compose()
 end
 
 local function createAccount()
-    local email = readField("Choose your email address:")
+    local email = completeEmailAddress(readField("Choose email (or username for @riftmail.com):"))
     local password = readField("Choose a password:", true)
     local confirmation = readField("Confirm password:", true)
     if password ~= confirmation then
@@ -316,7 +324,7 @@ local function createAccount()
     end
     local response, err = request({
         type = "register",
-        email = email:lower():match("^%s*(.-)%s*$"),
+        email = email,
         password = password,
     })
     if not response then
@@ -329,11 +337,11 @@ local function createAccount()
 end
 
 local function signIn()
-    local email = readField("Email address:")
+    local email = completeEmailAddress(readField("Email (or username for @riftmail.com):"))
     local password = readField("Password:", true)
     local response, err = request({
         type = "login",
-        email = email:lower():match("^%s*(.-)%s*$"),
+        email = email,
         password = password,
     })
     if not response then
