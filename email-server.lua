@@ -387,6 +387,7 @@ local domainAllowlist = loadDomainAllowlist()
 local notificationSubscribers = {}
 openModems()
 rednet.host(PROTOCOL, SERVER_NAME)
+rednet.host(NOTIFICATION_CONTROL_PROTOCOL, SERVER_NAME)
 
 term.setBackgroundColor(colors.black)
 term.setTextColor(colors.white)
