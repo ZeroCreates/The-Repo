@@ -55,6 +55,31 @@ local function readJSONFile(path)
     return value
 end
 
+local function notificationConfigPath(profilePath)
+    if type(profilePath) ~= "string" then
+        return nil, "No active profile is available for notification settings."
+    end
+    local normalizedProfile = profilePath:gsub("^/+", ""):gsub("/+$", "")
+    local username = normalizedProfile:match("^users/([%w_-]+)$")
+    if not username then return nil, "The active profile path is invalid." end
+
+    local target = nativeFs.combine(".launcher", "user-data", username,
+        "notifications", "listeners.json")
+    local legacy = nativeFs.combine(normalizedProfile, "notification-listeners.json")
+    if not nativeFs.exists(target) and nativeFs.exists(legacy) then
+        local directory = nativeFs.getDir(target)
+        local created, createError = pcall(nativeFs.makeDir, directory)
+        if not created then
+            return nil, "Could not create private notification settings folder: " .. tostring(createError)
+        end
+        local moved, moveError = pcall(nativeFs.move, legacy, target)
+        if not moved then
+            return nil, "Could not move notification settings into private storage: " .. tostring(moveError)
+        end
+    end
+    return target
+end
+
 local function isLuaFile(path)
     return not fs.isDir(path) and path:lower():match("%.lua$") ~= nil
 end
@@ -968,8 +993,8 @@ local function draw()
         secondButtons = { { label = "BACK TO PROGRAMS", action = "back" } }
         drawButtons(secondButtons, height - 1, width, isColor)
     else
-        local config = homeDirectory
-            and readJSONFile(nativeFs.combine(homeDirectory, "notification-listeners.json"))
+        local configPath, configPathError = notificationConfigPath(homeDirectory)
+        local config = configPath and readJSONFile(configPath)
         local listeners = type(config) == "table" and type(config.listeners) == "table"
             and config.listeners or {}
         local pageSize = math.max(1, math.floor((height - 8) / 2))
@@ -996,7 +1021,8 @@ local function draw()
         if #listeners == 0 then
             term.setCursorPos(2, row)
             term.setTextColor(mutedColor)
-            term.write("No custom protocol listeners are configured.")
+            term.write((configPathError or "No custom protocol listeners are configured.")
+                :sub(1, math.max(0, width - 2)))
             row = row + 1
         end
 
@@ -1142,7 +1168,7 @@ local function runHomeProgram(programPath, ...)
     end
 
     local function createNotificationsModule()
-        local configPath = nativeFs.combine(homeDirectory, "notification-listeners.json")
+        local configPath, configPathError = notificationConfigPath(homeDirectory)
         local reservedProtocols = {
             launcher_notifications_v1 = true,
             launcher_email_v1 = true,
@@ -1152,6 +1178,7 @@ local function runHomeProgram(programPath, ...)
         }
 
         local function loadConfig()
+            if not configPath then return nil, configPathError end
             if not nativeFs.exists(configPath) then return { listeners = {} } end
             local file = nativeFs.open(configPath, "r")
             if not file then return nil, "Could not open notification listener settings." end
@@ -1165,6 +1192,12 @@ local function runHomeProgram(programPath, ...)
         end
 
         local function saveConfig(config)
+            if not configPath then return false, configPathError end
+            local directory = nativeFs.getDir(configPath)
+            local made, makeError = pcall(nativeFs.makeDir, directory)
+            if not made then
+                return false, "Could not create notification settings folder: " .. tostring(makeError)
+            end
             local temporary = configPath .. ".tmp"
             local backup = configPath .. ".bak"
             local file = nativeFs.open(temporary, "w")
@@ -1780,7 +1813,8 @@ end
 
 local function removeNotificationListener(index)
     if not homeDirectory then return false, "No active profile." end
-    local configPath = nativeFs.combine(homeDirectory, "notification-listeners.json")
+    local configPath, configPathError = notificationConfigPath(homeDirectory)
+    if not configPath then return false, configPathError end
     local config, loadError = readJSONFile(configPath)
     if not config then return false, loadError or "No listener settings were found." end
     if type(config.listeners) ~= "table" or type(config.listeners[index]) ~= "table" then
@@ -1862,7 +1896,16 @@ local function loadEmailAccount(profilePath)
 end
 
 local function loadNotificationListeners(profilePath)
-    local config, err = readJSONFile(nativeFs.combine(profilePath, "notification-listeners.json"))
+    local configPath, pathError = notificationConfigPath(profilePath)
+    if not configPath then
+        showNotificationPopup({
+            source = "Notifications",
+            title = "Listener settings",
+            message = pathError,
+        })
+        return {}
+    end
+    local config, err = readJSONFile(configPath)
     if not config then
         if err then
             showNotificationPopup({
