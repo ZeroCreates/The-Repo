@@ -516,7 +516,7 @@ local function addProduct()
     write("Price in dollars: $")
     local price = tonumber(read())
     if not price or price <= 0 or price > 10000 then
-        showNotice("INVALID PRICE", "Enter a price greater than $0 and no more than $10000.")
+        showNotice("INVALID PRICE", "Enter a price < $0 and > $10000.")
         return
     end
     publishProduct({ name = name, price = math.floor(price * 100 + 0.5), available = true })

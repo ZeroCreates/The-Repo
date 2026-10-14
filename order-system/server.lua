@@ -3,6 +3,9 @@ local SERVER_NAME = "order_server"
 local DATA_FILE = "orders.db"
 local BACKUP_FILE = "orders.db.bak"
 local TEMP_FILE = "orders.db.tmp"
+local PRODUCTS_FILE = "products.db"
+local PRODUCTS_BACKUP_FILE = "products.db.bak"
+local PRODUCTS_TEMP_FILE = "products.db.tmp"
 local state
 
 local ALLOWED_TRANSITIONS = {
@@ -24,7 +27,7 @@ local function openModems()
     if not found then error("Attach a modem before starting the order server.") end
 end
 
-local function readState(path)
+local function readOrdersState(path)
     if not fs.exists(path) then return nil end
     local file = fs.open(path, "r")
     if not file then return nil end
@@ -38,16 +41,60 @@ local function readState(path)
     return nil
 end
 
+local function readProductsState(path)
+    if not fs.exists(path) then return nil end
+    local file = fs.open(path, "r")
+    if not file then return nil end
+    local contents = file.readAll()
+    file.close()
+    local ok, data = pcall(textutils.unserialize, contents)
+    if ok and type(data) == "table" and type(data.products) == "table" then
+        if type(data.nextProductId) == "number" or type(data.providerAddresses) == "table" then
+            return data
+        end
+    end
+    return nil
+end
+
+local function rebuildProviderAddressesFromProducts(products)
+    local providerAddresses = {}
+    for _, product in ipairs(products) do
+        if type(product.providerId) == "number" and type(product.providerAddress) == "string" and product.providerAddress ~= "" then
+            providerAddresses[tostring(product.providerId)] = product.providerAddress
+        end
+    end
+    return providerAddresses
+end
+
 local function loadState()
-    if not fs.exists(DATA_FILE) and not fs.exists(BACKUP_FILE) then
-        return { nextId = 1, nextProductId = 1, orders = {}, products = {}, providerAddresses = {} }
+    local defaultState = { nextId = 1, nextProductId = 1, orders = {}, products = {}, providerAddresses = {} }
+    if not fs.exists(DATA_FILE) and not fs.exists(BACKUP_FILE)
+        and not fs.exists(PRODUCTS_FILE) and not fs.exists(PRODUCTS_BACKUP_FILE) then
+        return defaultState
     end
-    local loaded = readState(DATA_FILE) or readState(BACKUP_FILE)
-    if not loaded then
-        error("Could not read orders.db or its backup; refusing to overwrite order data.")
+
+    local legacyState = readOrdersState(DATA_FILE) or readOrdersState(BACKUP_FILE)
+    local loadedOrders = readOrdersState(DATA_FILE) or readOrdersState(BACKUP_FILE) or legacyState
+    local loadedProducts = readProductsState(PRODUCTS_FILE) or readProductsState(PRODUCTS_BACKUP_FILE)
+
+    if not loadedOrders and not loadedProducts and not legacyState then
+        error("Could not read the saved order or product data; refusing to overwrite order data.")
     end
+
+    local loaded = {
+        nextId = (loadedOrders and loadedOrders.nextId) or (legacyState and legacyState.nextId) or defaultState.nextId,
+        nextProductId = (loadedProducts and loadedProducts.nextProductId) or (legacyState and legacyState.nextProductId) or defaultState.nextProductId,
+        orders = (loadedOrders and loadedOrders.orders) or (legacyState and legacyState.orders) or defaultState.orders,
+        products = (loadedProducts and loadedProducts.products) or (legacyState and legacyState.products) or defaultState.products,
+        providerAddresses = (loadedProducts and loadedProducts.providerAddresses) or (legacyState and legacyState.providerAddresses) or defaultState.providerAddresses,
+    }
+
     loaded.products = type(loaded.products) == "table" and loaded.products or {}
-    loaded.providerAddresses = type(loaded.providerAddresses) == "table" and loaded.providerAddresses or {}
+    loaded.providerAddresses = type(loaded.providerAddresses) == "table" and loaded.providerAddresses or rebuildProviderAddressesFromProducts(loaded.products)
+    local derivedProviderAddresses = rebuildProviderAddressesFromProducts(loaded.products)
+    for providerId, address in pairs(derivedProviderAddresses) do
+        loaded.providerAddresses[providerId] = address
+    end
     loaded.nextProductId = loaded.nextProductId or 1
     for _, order in ipairs(loaded.orders) do
         order.reference = order.reference or string.format("ORD-%06d", order.id)
@@ -60,14 +107,36 @@ local function loadState()
     return loaded
 end
 
-local function saveState()
+local function saveOrdersFile()
     local file = fs.open(TEMP_FILE, "w")
-    file.write(textutils.serialize(state))
+    file.write(textutils.serialize({
+        nextId = state.nextId,
+        orders = state.orders,
+    }))
     file.close()
     if fs.exists(BACKUP_FILE) then fs.delete(BACKUP_FILE) end
     if fs.exists(DATA_FILE) then fs.move(DATA_FILE, BACKUP_FILE) end
     fs.move(TEMP_FILE, DATA_FILE)
     if fs.exists(BACKUP_FILE) then fs.delete(BACKUP_FILE) end
+end
+
+local function saveProductsFile()
+    local file = fs.open(PRODUCTS_TEMP_FILE, "w")
+    file.write(textutils.serialize({
+        nextProductId = state.nextProductId,
+        products = state.products,
+        providerAddresses = state.providerAddresses,
+    }))
+    file.close()
+    if fs.exists(PRODUCTS_BACKUP_FILE) then fs.delete(PRODUCTS_BACKUP_FILE) end
+    if fs.exists(PRODUCTS_FILE) then fs.move(PRODUCTS_FILE, PRODUCTS_BACKUP_FILE) end
+    fs.move(PRODUCTS_TEMP_FILE, PRODUCTS_FILE)
+    if fs.exists(PRODUCTS_BACKUP_FILE) then fs.delete(PRODUCTS_BACKUP_FILE) end
+end
+
+local function saveState()
+    saveOrdersFile()
+    saveProductsFile()
 end
 
 local function sendError(senderId, message)
@@ -77,6 +146,22 @@ end
 local function findOrder(orderId)
     for _, order in ipairs(state.orders) do
         if order.id == orderId then return order end
+    end
+end
+
+local function generateOrderId()
+    local minId = 100000
+    local maxId = 999999
+    local tries = 0
+    while true do
+        local candidate = math.random(minId, maxId)
+        if not findOrder(candidate) then return candidate end
+        tries = tries + 1
+        if tries > 1000 then
+            candidate = candidate + 1
+            if candidate > maxId then candidate = minId end
+            if not findOrder(candidate) then return candidate end
+        end
     end
 end
 
@@ -132,9 +217,10 @@ local function createOrder(senderId, message)
         return sendError(senderId, "This provider has not registered a payment address yet.")
     end
     local now = os.epoch("utc")
+    local orderId = generateOrderId()
     local order = {
-        id = state.nextId,
-        reference = string.format("ORD-%06d", state.nextId),
+        id = orderId,
+        reference = string.format("ORD-%06d", orderId),
         customerId = senderId,
         providerId = orderProviderId,
         providerAddress = orderProviderAddress,
@@ -145,7 +231,7 @@ local function createOrder(senderId, message)
         createdAt = now,
         updatedAt = now,
     }
-    state.nextId = state.nextId + 1
+    state.nextId = math.max(state.nextId or 1, orderId + 1)
     table.insert(state.orders, order)
     saveState()
     rednet.send(senderId, { type = "order_created", order = order }, PROTOCOL)
