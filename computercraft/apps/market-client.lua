@@ -5,6 +5,8 @@ local SERVER_NAME = "order_server"
 local TIMEOUT = 5
 local FOLLOWED_ORDERS_FILE = "market-followed-orders.json"
 local FOLLOWED_ORDERS_FILE_STORED = path.combine("market", FOLLOWED_ORDERS_FILE)
+local USERDATA_FILE = "market-userdata.json"
+local USERDATA_FILE_STORED = path.combine("market", USERDATA_FILE)
 local MARKET_USER = "Market customer"
 local notifications = require("notifications")
 local storageLoaded, storage = pcall(require, "storage")
@@ -187,7 +189,51 @@ local function saveFollowedOrders()
     file.close()
     return true
 end
+local function loadUserData()
+    followedOrders = {}
+    if storage then
+        local data, storageError = storage.read(USERDATA_FILE_STORED)
+        if data ~= nil then
+            local ok, saved = pcall(textutils.unserializeJSON, data)
+            userData = saved
+        end
+        if storageError and storageError ~= "Stored data was not found." then
+            error("Could not load the saved email account from private storage: " .. storageError)
+        end
+    else
+        if not fs.exists(USERDATA_FILE) then return end
+        local file = fs.open(USERDATA_FILE, "r")
+        if not file then return end
+        local contents = file.readAll()
+        file.close()
+        local ok, saved = pcall(textutils.unserializeJSON, contents)            
+        userData = saved
+    end
+end
 
+local function saveUserData()
+    if storage then
+        local saved, saveError = storage.write(USERDATA_FILE_STORED, textutils.serializeJSON(userData))
+        if not saved then
+            return false, "Could not save account details to private storage: "
+                .. tostring(saveError or "unknown storage error")
+        end
+        if fs.exists(USERDATA_FILE) then
+            local ok, deleteError = pcall(fs.delete, USERDATA_FILE)
+            if not ok then
+                return false, "Account was saved to private storage, but the old profile copy could not be removed: "
+                    .. tostring(deleteError)
+            end
+        end
+        return true
+    end
+    
+    local file = fs.open(USERDATA_FILE, "w")
+    if not file then return false end
+    file.write(textutils.serializeJSON(userData))
+    file.close()
+    return true
+end
 local function sendFollowControl(message)
     message.user = MARKET_USER
     local response, err = notifications.request(CONTROL_PROTOCOL, message, SERVER_NAME, TIMEOUT)
@@ -546,17 +592,23 @@ local function placeOrder(cart)
         showNotice("CART IS EMPTY", "Add a product before placing an order.")
         return
     end
-    
-    drawHeader("DELIVERY ADDRESS", "ENTER THE ADDRESS FOR THIS ORDER")
-    writeAt(2, 5, "Up to 100 characters.", colors.lightGray)
-    term.setCursorPos(2, 7)
-    write("Address: ")
-    local deliveryAddress = read():match("^%s*(.-)%s*$")
-    if #deliveryAddress < 1 or #deliveryAddress > 100 or deliveryAddress:find("%c") then
-        showNotice("INVALID ADDRESS", "Enter a non-empty address up to 100 characters.")
-        return
+    if not userData.deliveryAddress == nil then
+        drawHeader("DELIVERY ADDRESS", "ENTER THE ADDRESS FOR THIS ORDER")
+        writeAt(2, 5, "Up to 100 characters.", colors.lightGray)
+        term.setCursorPos(2, 7)
+        write("Address: ")
+        local deliveryAddress = read():match("^%s*(.-)%s*$")
+        if #deliveryAddress < 1 or #deliveryAddress > 100 or deliveryAddress:find("%c") then
+            showNotice("INVALID ADDRESS", "Enter a non-empty address up to 100 characters.")
+            return
+        end
+        userData.deliveryAddress = deliveryAddress
+        if not saveUserData() then
+            showNotice("ADDRESS NOT SAVED", "Could not save your delivery address for future orders.")
+        end
+    else
+        deliveryAddress = userData.deliveryAddress
     end
-
     drawHeader("ORDER REVIEW", "CONFIRM THE DELIVERY ADDRESS BEFORE PLACING")
     sectionTitle(4, "DELIVER TO")
     local width, height = term.getSize()
