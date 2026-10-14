@@ -3,6 +3,7 @@ local NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
 local SERVER_NAME = "email_server"
 local TIMEOUT = 5
 local ACCOUNT_PATH = ".email-account.json"
+local notifications = require("notifications")
 local requestedHome = ...
 local profileHome = type(requestedHome) == "string" and requestedHome:gsub("/+$", "")
 local mouseEnabled = false
@@ -60,21 +61,13 @@ end
 
 local function subscribeForNotifications()
     if not account then return false, "Sign in to enable email notifications." end
-    local serverId = rednet.lookup(PROTOCOL, SERVER_NAME)
-    if not serverId then
-        return false, "Email server not found; notifications are not enabled."
-    end
-
-    rednet.send(serverId, {
+    local response, err = notifications.request(NOTIFICATION_CONTROL_PROTOCOL, {
         type = "subscribe",
         email = account.email,
         password = account.password,
-    }, NOTIFICATION_CONTROL_PROTOCOL)
-    local _, response = rednet.receive(NOTIFICATION_CONTROL_PROTOCOL, TIMEOUT, serverId)
-    if type(response) ~= "table" or response.type ~= "subscribed" then
-        local message = type(response) == "table" and response.message
-        return false, message or "Email server did not confirm the notification subscription."
-    end
+    }, SERVER_NAME, TIMEOUT)
+    if not response then return false, err end
+    if response.type ~= "subscribed" then return false, "Email server did not confirm the notification subscription." end
     return true
 end
 

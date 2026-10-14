@@ -1108,6 +1108,36 @@ local function runHomeProgram(programPath, ...)
         end
 
         local api = {}
+        function api.send(protocol, payload, serviceName)
+            if type(protocol) ~= "string" or type(payload) ~= "table" then
+                return false, "A protocol string and table payload are required."
+            end
+            if type(serviceName) == "string" then
+                local serverId = rednet.lookup(protocol, serviceName)
+                if not serverId then return false, serviceName .. " was not found on rednet." end
+                rednet.send(serverId, payload, protocol)
+            else
+                rednet.broadcast(payload, protocol)
+            end
+            return true
+        end
+
+        function api.request(protocol, payload, serviceName, timeout)
+            if type(protocol) ~= "string" or type(payload) ~= "table"
+                or type(serviceName) ~= "string" then
+                return nil, "A protocol string, table payload, and service name are required."
+            end
+            local serverId = rednet.lookup(protocol, serviceName)
+            if not serverId then return nil, serviceName .. " was not found on rednet." end
+            rednet.send(serverId, payload, protocol)
+            local _, response = rednet.receive(protocol, timeout or 5, serverId)
+            if type(response) ~= "table" then return nil, "No response from " .. serviceName .. "." end
+            if response.type == "error" then
+                return nil, response.message or serviceName .. " rejected the request."
+            end
+            return response
+        end
+
         function api.listen(protocol, titleField, messageField, name)
             if type(protocol) ~= "string" or #protocol < 1 or #protocol > 64
                 or not protocol:match("^[%w_.%-]+$") then

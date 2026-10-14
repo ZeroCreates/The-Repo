@@ -4,6 +4,7 @@ local SERVER_NAME = "order_server"
 local TIMEOUT = 5
 local FOLLOWED_ORDERS_FILE = "market-followed-orders.json"
 local MARKET_USER = "Market customer"
+local notifications = require("notifications")
 local mouseEnabled = false
 local followedOrders = {}
 
@@ -145,11 +146,8 @@ local function saveFollowedOrders()
 end
 
 local function sendFollowControl(message)
-    local serverId = rednet.lookup(CONTROL_PROTOCOL, SERVER_NAME)
-    if not serverId then return false end
     message.user = MARKET_USER
-    rednet.send(serverId, message, CONTROL_PROTOCOL)
-    return true
+    return notifications.send(CONTROL_PROTOCOL, message, SERVER_NAME)
 end
 
 local function registerFollowedOrders()
