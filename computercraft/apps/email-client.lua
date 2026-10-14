@@ -1,5 +1,6 @@
 local PROTOCOL = "launcher_email_v1"
 local NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
+local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
 local SERVER_NAME = "email_server"
 local TIMEOUT = 5
 local ACCOUNT_PATH = ".email-account.json"
@@ -702,6 +703,12 @@ end
 
 if not profileHome then error("Could not determine the launcher profile home.") end
 openModems()
+local listenerRegistered, listenerError = notifications.listen(
+    NOTIFICATION_PROTOCOL, "title", "message", "Email", "source", "Email"
+)
+if not listenerRegistered then
+    notice("EMAIL NOTIFICATIONS", listenerError)
+end
 account = loadAccount()
 if account then
     local subscribed, subscriptionError = subscribeForNotifications()

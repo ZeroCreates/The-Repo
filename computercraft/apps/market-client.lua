@@ -1,5 +1,6 @@
 local PROTOCOL = "order_system_v1"
 local CONTROL_PROTOCOL = "launcher_market_notifications_v1"
+local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
 local FOLLOWED_ORDERS_FILE = "market-followed-orders.json"
@@ -603,6 +604,12 @@ local function checkStatus()
 end
 
 openModems()
+local listenerRegistered, listenerError = notifications.listen(
+    NOTIFICATION_PROTOCOL, "title", "message", "Market", "source", "Market"
+)
+if not listenerRegistered then
+    showNotice("ORDER NOTIFICATIONS", listenerError)
+end
 loadFollowedOrders()
 registerFollowedOrders()
 local cart = {}

@@ -1066,15 +1066,20 @@ local function draw()
         local config = configPath and readJSONFile(configPath)
         local listeners = type(config) == "table" and type(config.listeners) == "table"
             and config.listeners or {}
-        local pageSize = math.max(1, math.floor((height - 8) / 2))
+        local pageSize = math.max(1, math.floor((height - 9) / 2))
         local pageCount = math.max(1, math.ceil(#listeners / pageSize))
         notificationListenerPage = math.min(notificationListenerPage, pageCount)
         local firstListener = (notificationListenerPage - 1) * pageSize + 1
         local lastListener = math.min(#listeners, firstListener + pageSize - 1)
         term.setCursorPos(2, 4)
         term.setTextColor(titleColor)
-        term.write("ACTIVE LISTENERS (click to remove)")
+        term.write("ACTIVE LISTENERS")
         local row = 5
+        term.setCursorPos(2, row)
+        term.setTextColor(textColor)
+        term.write(("Notification pulses  /  all rednet protocols")
+            :sub(1, math.max(0, width - 2)))
+        row = row + 1
         local listenerRows = {}
         for index = firstListener, lastListener do
             local listener = listeners[index]
@@ -1089,7 +1094,7 @@ local function draw()
         if #listeners == 0 then
             term.setCursorPos(2, row)
             term.setTextColor(mutedColor)
-            term.write((configPathError or "No custom protocol listeners are configured.")
+            term.write((configPathError or "No additional protocol listeners are configured.")
                 :sub(1, math.max(0, width - 2)))
             row = row + 1
         end
@@ -1291,7 +1296,7 @@ local function runHomeProgram(programPath, ...)
             return response
         end
 
-        function api.listen(protocol, titleField, messageField, name)
+        function api.listen(protocol, titleField, messageField, name, filterField, filterValue)
             if type(protocol) ~= "string" or #protocol < 1 or #protocol > 64
                 or not protocol:match("^[%w_.%-]+$") then
                 return false, "Protocol must be 1 to 64 letters, numbers, dots, dashes, or underscores."
@@ -1310,20 +1315,38 @@ local function runHomeProgram(programPath, ...)
             if type(name) ~= "string" or #name < 1 or #name > 32 then
                 return false, "Notification name must be 1 to 32 characters."
             end
+            if filterField ~= nil or filterValue ~= nil then
+                if type(filterField) ~= "string" or #filterField > 32
+                    or not filterField:match("^[%w_]+$")
+                    or type(filterValue) ~= "string" or #filterValue < 1 or #filterValue > 64 then
+                    return false, "Notification filters require a valid field and a 1 to 64 character string value."
+                end
+            end
 
             local config, loadError = loadConfig()
             if not config then return false, loadError end
             for _, listener in ipairs(config.listeners) do
-                if type(listener) == "table" and listener.protocol == protocol then
-                    return false, "A listener for that protocol already exists."
+                if type(listener) == "table" and listener.protocol == protocol
+                    and listener.filterField == filterField
+                    and listener.filterValue == filterValue then
+                    if listener.name == name and listener.titleField == titleField
+                        and listener.messageField == messageField then
+                        return true
+                    end
+                    return false, "A listener for that protocol and filter already exists."
                 end
             end
-            table.insert(config.listeners, {
+            local listener = {
                 name = name,
                 protocol = protocol,
                 titleField = titleField,
                 messageField = messageField,
-            })
+            }
+            if filterField then
+                listener.filterField = filterField
+                listener.filterValue = filterValue
+            end
+            table.insert(config.listeners, listener)
             return saveConfig(config)
         end
 
@@ -1922,7 +1945,11 @@ local function loadNotificationListeners(profilePath)
         if type(listener) == "table" and type(listener.name) == "string"
             and type(listener.protocol) == "string"
             and type(listener.titleField) == "string"
-            and type(listener.messageField) == "string" then
+            and type(listener.messageField) == "string"
+            and ((listener.filterField == nil and listener.filterValue == nil)
+                or (type(listener.filterField) == "string"
+                    and listener.filterField:match("^[%w_]+$")
+                    and type(listener.filterValue) == "string")) then
             table.insert(listeners, listener)
         else
             showNotificationPopup({
@@ -1967,10 +1994,30 @@ local function notificationReceiver()
             end
         elseif event == "rednet_message" then
             if type(payload) == "table" and payload.type == "notification" then
-                showNotificationPopup(payload)
+                local handled = false
+                for _, listener in ipairs(activeListeners) do
+                    if listener.protocol == protocol
+                        and (not listener.filterField
+                            or payload[listener.filterField] == listener.filterValue) then
+                        local title = payload[listener.titleField]
+                        local body = payload[listener.messageField]
+                        if (type(title) == "string" or type(title) == "number")
+                            and (type(body) == "string" or type(body) == "number") then
+                            showNotificationPopup({
+                                source = listener.name,
+                                title = title,
+                                message = body,
+                            })
+                            handled = true
+                        end
+                    end
+                end
+                if not handled then showNotificationPopup(payload) end
             elseif type(payload) == "table" then
                 for _, listener in ipairs(activeListeners) do
-                    if listener.protocol == protocol then
+                    if listener.protocol == protocol
+                        and (not listener.filterField
+                            or payload[listener.filterField] == listener.filterValue) then
                         local title = payload[listener.titleField]
                         local body = payload[listener.messageField]
                         local titleType, bodyType = type(title), type(body)
@@ -1997,6 +2044,19 @@ if migrateLegacySettings and saveSettings() then
 end
 
 chooseUser()
+local notificationPath, notificationPathError = notificationConfigPath(homeDirectory)
+if notificationPath then
+    if not nativeFs.exists(notificationPath) then
+        local initialized, initializeError = writeNotificationConfig(
+            notificationPath, { listeners = {} }
+        )
+        if not initialized then
+            message = initializeError
+        end
+    end
+else
+    message = notificationPathError
+end
 local downloaded, downloadMessage = installDownloader()
 local systemAppsInstalled = false
 local systemAppInstallMessage
@@ -2093,7 +2153,7 @@ while true do
             elseif selectedSetting == 5 then
                 screen = "notifications"
                 notificationListenerPage = 1
-                message = "Click an active listener to remove it."
+                message = "File: H://[PRIVATE DATA]/notifications/listeners.json"
             end
         elseif y == height - 1 and buttonAt(secondButtons, x) == "back" then
             screen = "apps"
