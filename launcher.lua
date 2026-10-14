@@ -496,8 +496,6 @@ end
 local function waitForReturn()
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.lightGray)
-    term.setCursorPos(1, 1)
-    term.clear()
     print("")
     print("Exiting the program and returning to the launcher.")
     sleep(1)
@@ -551,6 +549,8 @@ local function launchSelected()
     shell.setDir(homeDirectory)
     local ok, result = pcall(os.run, _ENV, app.path, homeDirectory)
     shell.setDir(previousDirectory)
+    term.clear()
+    term.setCursorPos(1, 1)
     if not ok then
         printError("Program error: " .. tostring(result))
     elseif result == false then
