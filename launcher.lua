@@ -451,7 +451,6 @@ local function draw()
         local detail = selectedApp and (settings.showPath and selectedApp.path or "Ready to launch") or "No programs found"
         term.write(detail:sub(1, math.max(0, width - 2)))
         firstButtons = {
-            { label = "OPEN", action = "open" },
             { label = "UPDATE", action = "update" },
             { label = "SETTINGS", action = "settings" },
         }
@@ -670,7 +669,9 @@ while true do
             local clickedIndex = firstVisible + y - 4
             if y >= 4 and y < 4 + visibleRows
                 and clickedIndex >= firstVisible and clickedIndex <= #apps then
+                local wasSelected = selected == clickedIndex
                 selected = clickedIndex
+                if wasSelected then launchSelected() end
             elseif y == height - 2 then
                 local action = buttonAt(firstButtons, x)
                 if action == "open" then

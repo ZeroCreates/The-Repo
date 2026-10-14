@@ -168,7 +168,6 @@ local function draw()
     term.setTextColor(colors.yellow)
     term.write(message:sub(1, math.max(0, width - 2)))
     local buttons = {
-        { label = "DOWNLOAD", action = "download" },
         { label = "UPDATE", action = "update" },
         { label = "REFRESH", action = "refresh" },
         { label = "QUIT", action = "quit" },
