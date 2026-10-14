@@ -31,7 +31,7 @@
     "description": "Roll configurable dice"
   },
   {
-    "name": "Email",
+    "name": "Rift-Mail",
     "source": "computercraft/apps/email-client.lua",
     "file": "email-client.lua",
     "description": "Create saved email accounts and send messages over rednet"

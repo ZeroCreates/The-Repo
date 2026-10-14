@@ -202,28 +202,46 @@ local function displayMessage(item)
         for index = firstLine, math.min(#lines, firstLine + pageSize - 1) do
             writeAt(2, 4 + index - firstLine, lines[index], colors.white)
         end
-        writeAt(2, height, "[ PREV ]", colors.white, colors.blue)
-        writeAt(math.floor(width / 2) - 3, height, "[ NEXT ]", colors.white, colors.blue)
-        writeAt(math.max(1, width - 8), height, "[ BACK ]", colors.white, colors.blue)
+        local buttons = {
+            { key = "previous", label = "PREV" },
+            { key = "next", label = "NEXT" },
+            { key = "move", label = "MOVE" },
+            { key = "delete", label = "DELETE" },
+            { key = "back", label = "BACK" },
+        }
+        local slotWidth = math.max(1, math.floor(width / #buttons))
+        for index, button in ipairs(buttons) do
+            local left = (index - 1) * slotWidth + 1
+            local right = index == #buttons and width or index * slotWidth
+            writeAt(left, height, ("[ " .. button.label .. " ]"):sub(1, right - left + 1),
+                colors.white, colors.blue)
+        end
 
         if not mouseEnabled then
-            writeAt(2, height - 1, "Page " .. page .. "/" .. pageCount .. " (P/N/B)", colors.lightGray)
+            writeAt(2, height - 1, "Page " .. page .. "/" .. pageCount .. " (P/N/M/D/B)", colors.lightGray)
             local action = read():lower()
-            if action == "b" or action == "back" then return end
+            if action == "b" or action == "back" then return "back" end
+            if action == "d" or action == "delete" then return "delete" end
+            if action == "m" or action == "move" then return "move" end
             if action == "n" or action == "next" then page = math.min(pageCount, page + 1) end
             if action == "p" or action == "prev" then page = math.max(1, page - 1) end
         else
             while true do
                 local event, button, x, y = os.pullEvent()
                 if event == "mouse_click" and button == 1 and y == height then
-                    if x >= 2 and x <= 9 then
+                    local index = math.min(#buttons, math.floor((x - 1) / slotWidth) + 1)
+                    if buttons[index].key == "previous" then
                         page = math.max(1, page - 1)
                         break
-                    elseif x >= math.floor(width / 2) - 3 and x <= math.floor(width / 2) + 3 then
+                    elseif buttons[index].key == "next" then
                         page = math.min(pageCount, page + 1)
                         break
-                    elseif x >= math.max(1, width - 8) then
-                        return
+                    elseif buttons[index].key == "delete" then
+                        return "delete"
+                    elseif buttons[index].key == "move" then
+                        return "move"
+                    elseif buttons[index].key == "back" then
+                        return "back"
                     end
                 end
             end
@@ -231,19 +249,105 @@ local function displayMessage(item)
     end
 end
 
-local function inbox()
+local function fetchCategories()
+    local response, err = request({
+        type = "list_categories",
+        email = account.email,
+        password = account.password,
+    })
+    if not response then return nil, err end
+    if type(response.categories) ~= "table" then
+        return nil, "The email server returned invalid categories."
+    end
+    return response.categories
+end
+
+local function chooseFolder(categories, title)
+    local pageSize = math.max(1, select(2, term.getSize()) - 7)
+    local page, pageCount = 1, math.max(1, math.ceil(#categories / pageSize))
+    while true do
+        local choices = {}
+        local first = (page - 1) * pageSize + 1
+        local last = math.min(#categories, first + pageSize - 1)
+        for index = first, last do
+            table.insert(choices, { key = "category:" .. categories[index], label = categories[index] })
+        end
+        if page > 1 then table.insert(choices, { key = "previous", label = "Previous page" }) end
+        if page < pageCount then table.insert(choices, { key = "next", label = "Next page" }) end
+        table.insert(choices, { key = "back", label = "Back" })
+        local selected = choose(title, "Choose a folder", choices)
+        if selected == "back" or not selected then return nil end
+        if selected == "next" then
+            page = math.min(pageCount, page + 1)
+        elseif selected == "previous" then
+            page = math.max(1, page - 1)
+        else
+            return selected:match("^category:(.+)$")
+        end
+    end
+end
+
+local function folders()
+    local page = 1
+    while true do
+        local categories, err = fetchCategories()
+        if not categories then notice("FOLDERS", err); return nil end
+        local pageSize = math.max(1, select(2, term.getSize()) - 8)
+        local pageCount = math.max(1, math.ceil(#categories / pageSize))
+        page = math.min(page, pageCount)
+        local choices = {}
+        local first = (page - 1) * pageSize + 1
+        local last = math.min(#categories, first + pageSize - 1)
+        for index = first, last do
+            table.insert(choices, {
+                key = "category:" .. categories[index],
+                label = "Open " .. categories[index],
+            })
+        end
+        if page > 1 then table.insert(choices, { key = "previous", label = "Previous page" }) end
+        if page < pageCount then table.insert(choices, { key = "next", label = "Next page" }) end
+        table.insert(choices, { key = "create", label = "Create category" })
+        table.insert(choices, { key = "back", label = "Back" })
+        local selected = choose("EMAIL FOLDERS", account.email, choices)
+        if selected == "back" or not selected then return nil end
+        if selected == "create" then
+            local name = readField("New category name (up to 24 characters):")
+            name = name:match("^%s*(.-)%s*$")
+            local created, createError = request({
+                type = "create_category",
+                email = account.email,
+                password = account.password,
+                category = name,
+            })
+            if not created then
+                notice("CREATE CATEGORY", createError)
+            else
+                notice("CREATE CATEGORY", "Created " .. created.category .. ".")
+            end
+        elseif selected == "next" then
+            page = math.min(pageCount, page + 1)
+        elseif selected == "previous" then
+            page = math.max(1, page - 1)
+        else
+            return selected:match("^category:(.+)$")
+        end
+    end
+end
+
+local function inbox(category)
     local response, err = request({
         type = "list",
         email = account.email,
         password = account.password,
+        category = category,
     })
-    if not response then notice("INBOX", err); return end
+    if not response then notice("INBOX", err); return "home" end
     if type(response.messages) ~= "table" then
         notice("INBOX", "The email server returned an invalid inbox.")
-        return
+        return "home"
     end
 
-    local page, pageSize = 1, math.max(1, select(2, term.getSize()) - 8)
+    local page, pageSize = 1, math.max(1, select(2, term.getSize()) - 10)
     while true do
         local choices = {}
         local startIndex = (page - 1) * pageSize + 1
@@ -252,19 +356,28 @@ local function inbox()
             local message = response.messages[index]
             table.insert(choices, {
                 key = "message:" .. tostring(message.id),
-                label = string.format("%s %s - %s", message.read and " " or "*", message.from, message.subject),
+                label = string.format("%s%s | %s", message.read and "" or "* ", message.from, message.subject),
             })
+        end
+        if #response.messages == 0 then
+            table.insert(choices, { key = "empty", label = "No messages in this folder" })
         end
         if page > 1 then table.insert(choices, { key = "previous", label = "Previous page" }) end
         if endIndex < #response.messages then table.insert(choices, { key = "next", label = "Next page" }) end
-        table.insert(choices, { key = "back", label = "Back" })
-        if #response.messages == 0 then
-            choices = { { key = "back", label = "Inbox is empty - Back" } }
-        end
+        table.insert(choices, { key = "compose", label = "Compose" })
+        table.insert(choices, { key = "folders", label = "Folders" })
+        table.insert(choices, { key = "signout", label = "Sign out" })
+        table.insert(choices, { key = "quit", label = "Quit" })
 
-        local selected = choose("INBOX", account.email .. "  |  Page " .. page, choices)
-        if selected == "back" then return end
-        if selected == "next" then
+        local selected = choose("EMAIL  /  " .. category:upper(),
+            account.email .. "  |  Page " .. page, choices)
+        if selected == "compose" or selected == "signout" or selected == "quit" then
+            return selected
+        elseif selected == "folders" then
+            return "folder", folders()
+        elseif selected == "empty" or not selected then
+            -- Keep the empty folder visible while the user chooses an action.
+        elseif selected == "next" then
             page = page + 1
         elseif selected == "previous" then
             page = math.max(1, page - 1)
@@ -283,9 +396,65 @@ local function inbox()
                     notice("MESSAGE", "The email server returned an invalid message.")
                 else
                     local item = full.message
-                    displayMessage(item)
+                    local messageAction = displayMessage(item)
                     for _, inboxMessage in ipairs(response.messages) do
                         if inboxMessage.id == id then inboxMessage.read = true; break end
+                    end
+                    if messageAction == "delete" then
+                        local confirmation = choose("DELETE MESSAGE",
+                            "Delete this message permanently?",
+                            {
+                                { key = "yes", label = "Delete" },
+                                { key = "no", label = "Cancel" },
+                            })
+                        if confirmation == "yes" then
+                            local deleted, deleteError = request({
+                                type = "delete",
+                                email = account.email,
+                                password = account.password,
+                                id = id,
+                            })
+                            if not deleted then
+                                notice("DELETE FAILED", deleteError)
+                            else
+                                for index, inboxMessage in ipairs(response.messages) do
+                                    if inboxMessage.id == id then
+                                        table.remove(response.messages, index)
+                                        break
+                                    end
+                                end
+                                page = math.max(1, math.ceil(#response.messages / pageSize))
+                                notice("MESSAGE DELETED", "The email was permanently deleted.")
+                            end
+                        end
+                    elseif messageAction == "move" then
+                        local categories, categoryError = fetchCategories()
+                        if not categories then
+                            notice("MOVE MESSAGE", categoryError)
+                        else
+                            local destination = chooseFolder(categories, "MOVE MESSAGE")
+                            if destination then
+                                local moved, moveError = request({
+                                    type = "move",
+                                    email = account.email,
+                                    password = account.password,
+                                    id = id,
+                                    category = destination,
+                                })
+                                if not moved then
+                                    notice("MOVE MESSAGE", moveError)
+                                else
+                                    for index, inboxMessage in ipairs(response.messages) do
+                                        if inboxMessage.id == id and destination ~= category then
+                                            table.remove(response.messages, index)
+                                            break
+                                        end
+                                    end
+                                    page = math.max(1, math.ceil(#response.messages / pageSize))
+                                    notice("MESSAGE MOVED", "Moved to " .. destination .. ".")
+                                end
+                            end
+                        end
                     end
                 end
             end
@@ -387,20 +556,38 @@ if account then
     if not subscribed then notice("EMAIL NOTIFICATIONS", subscriptionError) end
 end
 
+local currentFolder = "Inbox"
 while true do
     if account then
-        local action = choose("EMAIL", account.email, {
-            { key = "inbox", label = "Inbox" },
-            { key = "compose", label = "Compose message" },
-            { key = "signout", label = "Sign out" },
-            { key = "quit", label = "Quit" },
-        })
-        if action == "inbox" then
-            inbox()
+        local action, selectedFolder = inbox(currentFolder)
+        if action == "folder" then
+            if selectedFolder then currentFolder = selectedFolder end
+        elseif action == "home" then
+            local homeAction = choose("EMAIL", account.email, {
+                { key = "inbox", label = "Inbox" },
+                { key = "folders", label = "Folders" },
+                { key = "compose", label = "Compose" },
+                { key = "signout", label = "Sign out" },
+                { key = "quit", label = "Quit" },
+            })
+            if homeAction == "inbox" then
+                currentFolder = "Inbox"
+            elseif homeAction == "folders" then
+                currentFolder = folders() or "Inbox"
+            elseif homeAction == "compose" then
+                compose()
+            elseif homeAction == "signout" then
+                account = nil
+                currentFolder = "Inbox"
+                if fs.exists(ACCOUNT_PATH) then fs.delete(ACCOUNT_PATH) end
+            elseif homeAction == "quit" then
+                return
+            end
         elseif action == "compose" then
             compose()
         elseif action == "signout" then
             account = nil
+            currentFolder = "Inbox"
             if fs.exists(ACCOUNT_PATH) then fs.delete(ACCOUNT_PATH) end
         elseif action == "quit" then
             return

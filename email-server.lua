@@ -5,6 +5,7 @@ local SERVER_NAME = "email_server"
 local DATA_DIRECTORY = "/email-server"
 local MAILBOX_PATH = DATA_DIRECTORY .. "/mailboxes.json"
 local ACCOUNT_PATH = DATA_DIRECTORY .. "/accounts.json"
+local CATEGORY_PATH = DATA_DIRECTORY .. "/categories.json"
 local DOMAIN_ALLOWLIST_PATH = DATA_DIRECTORY .. "/domain-allowlist.json"
 local LEGACY_MAILBOX_PATH = "/.launcher/email-mailboxes.json"
 local LEGACY_ACCOUNT_PATH = "/.launcher/email-accounts.json"
@@ -12,6 +13,8 @@ local MAX_MESSAGES_PER_MAILBOX = 100
 local MAX_SUBJECT_LENGTH = 80
 local MAX_BODY_LENGTH = 2000
 local MAX_PASSWORD_LENGTH = 128
+local MAX_CATEGORIES_PER_ACCOUNT = 20
+local MAX_CATEGORY_NAME_LENGTH = 24
 
 local function normalizeEmail(email)
     if type(email) ~= "string" then return nil end
@@ -45,6 +48,16 @@ end
 local function validLegacyMailboxName(name)
     return type(name) == "string" and #name > 0 and #name <= 32
         and name:match("^[%w_-]+$") ~= nil
+end
+
+local function validCategoryName(name)
+    return type(name) == "string" and #name > 0 and #name <= MAX_CATEGORY_NAME_LENGTH
+        and name:match("^[%w _%-]+$") ~= nil and name:match("^%s*$") == nil
+        and name == name:match("^%s*(.-)%s*$")
+end
+
+local function isInbox(category)
+    return type(category) == "string" and category:lower() == "inbox"
 end
 
 local function loadMailboxes()
@@ -85,10 +98,44 @@ local function loadAccounts()
     if not ok or type(data) ~= "table" then
         error("Email account data is invalid; refusing to overwrite it.")
     end
+
     for email, password in pairs(data) do
         if normalizeEmail(email) ~= email or type(password) ~= "string"
             or #password < 1 or #password > MAX_PASSWORD_LENGTH then
             error("Email account data contains an invalid account.")
+        end
+    end
+    return data
+end
+
+local function loadCategories()
+    if not fs.exists(CATEGORY_PATH) then return {} end
+    local file = fs.open(CATEGORY_PATH, "r")
+    if not file then error("Could not open " .. CATEGORY_PATH .. " for reading.") end
+    local contents = file.readAll()
+    file.close()
+    local ok, data = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(data) ~= "table" then
+        error("Email category data is invalid; refusing to overwrite it.")
+    end
+    for email, names in pairs(data) do
+        if normalizeEmail(email) ~= email or type(names) ~= "table" then
+            error("Email category data contains an invalid account.")
+        end
+        local seen, count = {}, 0
+        for index, name in pairs(names) do
+            if type(index) ~= "number" or index < 1 or index % 1 ~= 0
+                or not validCategoryName(name) or isInbox(name) or seen[name:lower()] then
+                error("Email category data contains an invalid category.")
+            end
+            seen[name:lower()] = true
+            count = count + 1
+        end
+        if count > MAX_CATEGORIES_PER_ACCOUNT then
+            error("Email category data exceeds the category limit.")
+        end
+        for index = 1, count do
+            if names[index] == nil then error("Email category data contains an invalid category list.") end
         end
     end
     return data
@@ -131,6 +178,10 @@ local function saveAccounts(accounts)
     return saveJSON(ACCOUNT_PATH, accounts, "account data")
 end
 
+local function saveCategories(categories)
+    return saveJSON(CATEGORY_PATH, categories, "category data")
+end
+
 local function loadDomainAllowlist()
     if not fs.exists(DOMAIN_ALLOWLIST_PATH) then
         local saved, saveError = saveJSON(DOMAIN_ALLOWLIST_PATH, {}, "domain allowlist")
@@ -166,18 +217,38 @@ local function mailboxFor(mailboxes, username)
     return mailboxes[username]
 end
 
-local function summarize(messages)
+local function summarize(messages, category)
     local result = {}
-    for index, message in ipairs(messages) do
-        result[index] = {
-            id = message.id,
-            from = message.from,
-            subject = message.subject,
-            sentAt = message.sentAt,
-            read = message.read,
-        }
+    for _, message in ipairs(messages) do
+        local messageCategory = message.category or "Inbox"
+        if messageCategory == category then
+            table.insert(result, {
+                id = message.id,
+                from = message.from,
+                subject = message.subject,
+                sentAt = message.sentAt,
+                read = message.read,
+            })
+        end
     end
     return result
+end
+
+local function categoriesFor(categories, email)
+    local result = { "Inbox" }
+    for _, category in ipairs(categories[email] or {}) do
+        table.insert(result, category)
+    end
+    return result
+end
+
+local function hasCategory(categories, email, requested)
+    if isInbox(requested) then return true, "Inbox" end
+    if type(requested) ~= "string" then return false end
+    for _, category in ipairs(categories[email] or {}) do
+        if category:lower() == requested:lower() then return true, category end
+    end
+    return false
 end
 
 local function nextMessageId(mailboxes, timestamp)
@@ -220,7 +291,7 @@ local function notifySubscribers(subscribers, email, title, message)
     end
 end
 
-local function handleRequest(mailboxes, accounts, domainAllowlist, subscribers, senderId, request)
+local function handleRequest(mailboxes, accounts, categories, domainAllowlist, subscribers, senderId, request)
     if type(request) ~= "table" or type(request.type) ~= "string" then
         return { type = "error", message = "Invalid request." }
     end
@@ -307,7 +378,69 @@ local function handleRequest(mailboxes, accounts, domainAllowlist, subscribers, 
         )
         return { type = "sent", id = id }
     elseif request.type == "list" then
-        return { type = "inbox", messages = summarize(mailboxFor(mailboxes, email)) }
+        local category = request.category or "Inbox"
+        local exists, normalizedCategory = hasCategory(categories, email, category)
+        if not exists then return { type = "error", message = "Email category not found." } end
+        return {
+            type = "inbox",
+            category = normalizedCategory,
+            messages = summarize(mailboxFor(mailboxes, email), normalizedCategory),
+        }
+    elseif request.type == "list_categories" then
+        return { type = "categories", categories = categoriesFor(categories, email) }
+    elseif request.type == "create_category" then
+        local name = request.category
+        if not validCategoryName(name) or isInbox(name) then
+            return {
+                type = "error",
+                message = "Category names must be 1 to 24 letters, numbers, spaces, underscores, or hyphens, and cannot be Inbox.",
+            }
+        end
+        local accountCategories = categories[email]
+        if not accountCategories then
+            accountCategories = {}
+            categories[email] = accountCategories
+        end
+        for _, existing in ipairs(accountCategories) do
+            if existing:lower() == name:lower() then
+                return { type = "error", message = "That category already exists." }
+            end
+        end
+        if #accountCategories >= MAX_CATEGORIES_PER_ACCOUNT then
+            return { type = "error", message = "You have reached the category limit." }
+        end
+        table.insert(accountCategories, name)
+        local saved, saveError = saveCategories(categories)
+        if not saved then
+            table.remove(accountCategories)
+            if #accountCategories == 0 then categories[email] = nil end
+            return { type = "error", message = saveError }
+        end
+        return { type = "category_created", category = name }
+    elseif request.type == "move" then
+        if type(request.id) ~= "number" then
+            return { type = "error", message = "Message request is invalid." }
+        end
+        local exists, destination = hasCategory(categories, email, request.category)
+        if not exists then return { type = "error", message = "Email category not found." } end
+        local messages = mailboxFor(mailboxes, email)
+        for _, message in ipairs(messages) do
+            if message.id == request.id then
+                local previousCategory = message.category
+                if destination == "Inbox" then
+                    message.category = nil
+                else
+                    message.category = destination
+                end
+                local saved, saveError = saveMailboxes(mailboxes)
+                if not saved then
+                    message.category = previousCategory
+                    return { type = "error", message = saveError }
+                end
+                return { type = "moved", id = request.id, category = destination }
+            end
+        end
+        return { type = "error", message = "Message not found." }
     elseif request.type == "read" then
         if type(request.id) ~= "number" then
             return { type = "error", message = "Message request is invalid." }
@@ -334,6 +467,23 @@ local function handleRequest(mailboxes, accounts, domainAllowlist, subscribers, 
                         sentAt = message.sentAt,
                     },
                 }
+            end
+        end
+        return { type = "error", message = "Message not found." }
+    elseif request.type == "delete" then
+        if type(request.id) ~= "number" then
+            return { type = "error", message = "Message request is invalid." }
+        end
+        local messages = mailboxFor(mailboxes, email)
+        for index, message in ipairs(messages) do
+            if message.id == request.id then
+                local deleted = table.remove(messages, index)
+                local saved, saveError = saveMailboxes(mailboxes)
+                if not saved then
+                    table.insert(messages, index, deleted)
+                    return { type = "error", message = saveError }
+                end
+                return { type = "deleted", id = request.id }
             end
         end
         return { type = "error", message = "Message not found." }
@@ -383,6 +533,7 @@ end
 
 local mailboxes = loadMailboxes()
 local accounts = loadAccounts()
+local categories = loadCategories()
 local domainAllowlist = loadDomainAllowlist()
 local notificationSubscribers = {}
 openModems()
@@ -406,7 +557,7 @@ while true do
     local sender, request, protocol = rednet.receive()
     if protocol == PROTOCOL then
         local response = handleRequest(
-            mailboxes, accounts, domainAllowlist, notificationSubscribers, sender, request
+            mailboxes, accounts, categories, domainAllowlist, notificationSubscribers, sender, request
         )
         rednet.send(sender, response, PROTOCOL)
     elseif protocol == NOTIFICATION_CONTROL_PROTOCOL then
