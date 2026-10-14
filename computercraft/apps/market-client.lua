@@ -592,7 +592,7 @@ local function placeOrder(cart)
         showNotice("CART IS EMPTY", "Add a product before placing an order.")
         return
     end
-    if not userData.deliveryAddress == nil then
+    if userData.deliveryAddress == nil then
         drawHeader("DELIVERY ADDRESS", "ENTER THE ADDRESS FOR THIS ORDER")
         writeAt(2, 5, "Up to 100 characters.", colors.lightGray)
         term.setCursorPos(2, 7)
