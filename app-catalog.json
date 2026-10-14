@@ -1,0 +1,38 @@
+[
+  {
+    "name": "App Downloader",
+    "source": "app-downloader.lua",
+    "file": "app-downloader.lua",
+    "description": "Download and update ComputerCraft apps"
+  },
+  {
+    "name": "Calculator",
+    "source": "computercraft/apps/calculator.lua",
+    "file": "calculator.lua",
+    "description": "Basic two-number calculator"
+  },
+  {
+    "name": "Clock",
+    "source": "computercraft/apps/clock.lua",
+    "file": "clock.lua",
+    "description": "Live date and time display"
+  },
+  {
+    "name": "Countdown Timer",
+    "source": "computercraft/apps/countdown.lua",
+    "file": "countdown.lua",
+    "description": "Simple seconds countdown"
+  },
+  {
+    "name": "Dice Roller",
+    "source": "computercraft/apps/dice.lua",
+    "file": "dice.lua",
+    "description": "Roll configurable dice"
+  },
+  {
+    "name": "Notes",
+    "source": "computercraft/apps/notes.lua",
+    "file": "notes.lua",
+    "description": "Read and write local notes"
+  }
+]

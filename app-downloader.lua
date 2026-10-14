@@ -1,10 +1,7 @@
 local OWNER_REPO = "ZeroCreates/The-Repo"
 local BRANCH = "main"
-local API_BASE_URL = "https://api.github.com/repos/" .. OWNER_REPO .. "/contents/"
 local RAW_BASE_URL = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/"
-local ROOT_APP_FILES = {
-    ["app-downloader.lua"] = "App Downloader"
-}
+local CATALOG_PATH = "app-catalog.json"
 local apps = {}
 local selected = 1
 local firstVisible = 1
@@ -28,64 +25,39 @@ local function request(url)
     return contents
 end
 
-local function listDirectory(path)
-    local contents, err = request(API_BASE_URL .. path .. "?ref=" .. BRANCH)
-    if not contents then return nil, err end
-    local ok, entries = pcall(textutils.unserializeJSON, contents)
-    if not ok or type(entries) ~= "table" or entries.message then
-        return nil, "Could not parse the GitHub app catalog for " .. path .. "."
-    end
-    for _, entry in ipairs(entries) do
-        if type(entry) ~= "table" or type(entry.name) ~= "string"
-            or type(entry.path) ~= "string" or type(entry.type) ~= "string" then
-            return nil, "GitHub returned an invalid app catalog for " .. path .. "."
-        end
-    end
-    return entries
-end
-
-local function appNameFromFile(file)
-    local name = file:gsub("%.lua$", ""):gsub("[_%-]", " ")
-    return name:gsub("(%a)([%w']*)", function(first, rest)
-        return first:upper() .. rest
-    end)
-end
-
 local function loadCatalog()
     if not http or not http.get then
         return nil, "Enable the ComputerCraft HTTP API to load apps from GitHub."
     end
-    local rootEntries, rootError = listDirectory("")
-    if not rootEntries then return nil, "Could not load the repository app list: " .. rootError end
-    local appEntries, appError = listDirectory("computercraft/apps")
-    if not appEntries then return nil, "Could not load the repository app list: " .. appError end
+
+    local contents, err = request(RAW_BASE_URL .. CATALOG_PATH)
+    if not contents then return nil, err end
+    local ok, entries = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(entries) ~= "table" then
+        return nil, "Could not parse " .. CATALOG_PATH .. "."
+    end
 
     local catalog, seenFiles = {}, {}
-    for _, entry in ipairs(rootEntries) do
-        local name = entry.name
-        if entry.type == "file" and ROOT_APP_FILES[name] and entry.path == name then
-            table.insert(catalog, {
-                name = ROOT_APP_FILES[name],
-                source = entry.path,
-                file = name,
-                description = "Order system program",
-            })
-            seenFiles[name] = true
+    for _, entry in ipairs(entries) do
+        if type(entry) ~= "table" or type(entry.name) ~= "string"
+            or type(entry.source) ~= "string" or type(entry.file) ~= "string"
+            or type(entry.description) ~= "string"
+            or entry.name == "" or entry.description == ""
+            or not entry.file:match("^[%w][%w_.%-]*%.lua$")
+            or not entry.source:match("^[%w_./%-]+%.lua$")
+            or entry.source:find("..", 1, true)
+            or seenFiles[entry.file] then
+            return nil, "Invalid app entry in " .. CATALOG_PATH .. "."
+        end
+        table.insert(catalog, entry)
+        seenFiles[entry.file] = true
+    end
+    for key in pairs(entries) do
+        if type(key) ~= "number" or key < 1 or key > #catalog or key % 1 ~= 0 then
+            return nil, CATALOG_PATH .. " must contain a JSON array of apps."
         end
     end
-    for _, entry in ipairs(appEntries) do
-        local name = entry.name
-        if entry.type == "file" and name:match("^[%w][%w_.%-]*%.lua$")
-            and entry.path == "computercraft/apps/" .. name and not seenFiles[name] then
-            table.insert(catalog, {
-                name = appNameFromFile(name),
-                source = entry.path,
-                file = name,
-                description = "ComputerCraft app",
-            })
-            seenFiles[name] = true
-        end
-    end
+
     table.sort(catalog, function(first, second)
         return first.name:lower() < second.name:lower()
     end)
