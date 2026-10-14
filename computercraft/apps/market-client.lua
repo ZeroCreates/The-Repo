@@ -15,6 +15,7 @@ if not storageLoaded or type(storage) ~= "table"
 end
 local mouseEnabled = false
 local followedOrders = {}
+local userData = {}
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -125,17 +126,34 @@ end
 
 local function loadFollowedOrders()
     followedOrders = {}
-    if not fs.exists(FOLLOWED_ORDERS_FILE) then return end
-    local file = fs.open(FOLLOWED_ORDERS_FILE, "r")
-    if not file then return end
-    local contents = file.readAll()
-    file.close()
-    local ok, saved = pcall(textutils.unserializeJSON, contents)
-    if not ok or type(saved) ~= "table" then return end
-    for _, entry in ipairs(saved) do
-        if type(entry) == "table" and type(entry.orderId) == "number"
-            and entry.orderId % 1 == 0 and type(entry.status) == "string" then
-            followedOrders[entry.orderId] = { orderId = entry.orderId, status = entry.status }
+    if storage then
+        local data, storageError = storage.read(FOLLOWED_ORDERS_FILE_STORED)
+        if data ~= nil then
+            local ok, saved = pcall(textutils.unserializeJSON, data)
+            if not ok or type(saved) ~= "table" then return end
+            for _, entry in ipairs(saved) do
+                if type(entry) == "table" and type(entry.orderId) == "number"
+                    and entry.orderId % 1 == 0 and type(entry.status) == "string" then
+                    followedOrders[entry.orderId] = { orderId = entry.orderId, status = entry.status }
+                end
+            end
+        end
+        if storageError and storageError ~= "Stored data was not found." then
+            error("Could not load the saved email account from private storage: " .. storageError)
+        end
+    else
+        if not fs.exists(FOLLOWED_ORDERS_FILE) then return end
+        local file = fs.open(FOLLOWED_ORDERS_FILE, "r")
+        if not file then return end
+        local contents = file.readAll()
+        file.close()
+        local ok, saved = pcall(textutils.unserializeJSON, contents)
+        if not ok or type(saved) ~= "table" then return end
+        for _, entry in ipairs(saved) do
+            if type(entry) == "table" and type(entry.orderId) == "number"
+                and entry.orderId % 1 == 0 and type(entry.status) == "string" then
+                followedOrders[entry.orderId] = { orderId = entry.orderId, status = entry.status }
+            end
         end
     end
 end
@@ -528,7 +546,7 @@ local function placeOrder(cart)
         showNotice("CART IS EMPTY", "Add a product before placing an order.")
         return
     end
-
+    
     drawHeader("DELIVERY ADDRESS", "ENTER THE ADDRESS FOR THIS ORDER")
     writeAt(2, 5, "Up to 100 characters.", colors.lightGray)
     term.setCursorPos(2, 7)
