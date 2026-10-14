@@ -1,6 +1,7 @@
 local requestedHome = ...
 local homeDirectory = type(requestedHome) == "string"
-    and requestedHome:match("^/users/[%w_-]+$") and requestedHome or "/users/default"
+    and requestedHome:gsub("^/+", ""):match("^users/[%w_-]+$")
+    and ("/" .. requestedHome:gsub("^/+", "")) or "/users/default"
 local currentDirectory = homeDirectory
 fs.makeDir(homeDirectory)
 local entries = {}

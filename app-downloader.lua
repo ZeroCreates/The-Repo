@@ -210,11 +210,15 @@ end
 
 local function setHomeDirectory(path)
     if path == nil then path = USER_ROOT .. "default" end
-    if type(path) ~= "string" or not path:match("^/users/[%w_-]+$") then
+    if type(path) ~= "string" then
         return false, "Invalid user directory. Expected /users/<username>."
     end
-    homeDirectory = path
-    username = path:match("^/users/([%w_-]+)$")
+    local normalizedPath = path:gsub("^/+", "")
+    username = normalizedPath:match("^users/([%w_-]+)$")
+    if not username then
+        return false, "Invalid user directory. Expected /users/<username>."
+    end
+    homeDirectory = "/users/" .. username
     APP_NAMES_PATH = SYSTEM_DIRECTORY .. "/app-catalog-names.json"
     fs.makeDir(SYSTEM_DIRECTORY)
     fs.makeDir(CACHE_DIRECTORY)
