@@ -127,7 +127,13 @@ local function editSelected()
         return
     end
 
-    local ok, result = pcall(shell.run, "edit", entry.path)
+    local editorPath = shell.resolveProgram("edit")
+    if not editorPath then
+        message = "The built-in edit program could not be found."
+        return
+    end
+
+    local ok, result = pcall(os.run, _ENV, editorPath, entry.path)
     if not ok then
         message = "Could not run edit: " .. tostring(result)
     elseif result == false then

@@ -473,7 +473,7 @@ local function updateSelected()
     term.clear()
     term.setCursorPos(1, 1)
     print("Opening the app downloader to update " .. app.name .. "...")
-    local ok, result = pcall(shell.run, DOWNLOADER_PATH, "update", fs.getName(app.path), homeDirectory)
+    local ok, result = pcall(os.run, _ENV, DOWNLOADER_PATH, "update", fs.getName(app.path), homeDirectory)
     if not ok then
         printError("Could not run the app downloader: " .. tostring(result))
     elseif result == false then
@@ -499,7 +499,7 @@ local function launchSelected()
 
     local previousDirectory = shell.dir()
     shell.setDir(homeDirectory)
-    local ok, result = pcall(shell.run, app.path, homeDirectory)
+    local ok, result = pcall(os.run, _ENV, app.path, homeDirectory)
     shell.setDir(previousDirectory)
     if not ok then
         printError("Program error: " .. tostring(result))
@@ -544,10 +544,12 @@ local function uninstallLauncher()
     local failures = {}
     local rootEntries = fs.list("/")
     for _, entry in ipairs(rootEntries) do
-        local path = fs.combine("/", entry)
-        local ok, err = pcall(fs.delete, path)
-        if not ok or fs.exists(path) then
-            table.insert(failures, path .. ": " .. tostring(err or "could not remove"))
+        if entry:lower() ~= "rom" then
+            local path = fs.combine("/", entry)
+            local ok, err = pcall(fs.delete, path)
+            if not ok or fs.exists(path) then
+                table.insert(failures, path .. ": " .. tostring(err or "could not remove"))
+            end
         end
     end
 
@@ -567,6 +569,7 @@ local function uninstallLauncher()
     term.setTextColor(colors.lime)
     print("Computer filesystem wiped.")
     term.setTextColor(colors.white)
+    print("The ROM folder was preserved.")
     print("Turn off or reboot the computer.")
     while true do os.pullEventRaw() end
 end
