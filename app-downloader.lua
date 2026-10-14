@@ -240,12 +240,12 @@ while true do
         end
     elseif event == "mouse_click" then
         local _, height = term.getSize()
-        local visibleRows = visibleAppRows(height)
-        local index = firstVisible + math.floor((y - 3) / 2)
-        if y >= 3 and y < 3 + visibleRows * 2
+        local index = firstVisible + y - 3
+        if y >= 3 and y < 3 + visibleAppRows(height)
             and index >= firstVisible and index <= #apps then
+            local wasSelected = selected == index
             selected = index
-            if key == 1 then downloadApp(apps[selected]) end
+            if key == 1 and wasSelected then downloadApp(apps[selected]) end
         end
     end
 end

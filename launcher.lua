@@ -248,9 +248,14 @@ while true do
         local clickedIndex = firstVisible + y - 3
         if y >= 3 and y < 3 + visibleRows
             and clickedIndex >= firstVisible and clickedIndex <= #apps then
+            local wasSelected = selected == clickedIndex
             selected = clickedIndex
             if first == 1 then
-                if shiftDown then updateSelected() else launchSelected() end
+                if shiftDown then
+                    updateSelected()
+                elseif wasSelected then
+                    launchSelected()
+                end
             end
         end
     end
