@@ -236,7 +236,7 @@ function readAmountCents(value, allowZero) {
 }
 
 function sendCommandMessage(source, message) {
-  source.sendSuccess(() => Text.of(message), false)
+  source.sendSystemMessage(Text.of(message))
 }
 
 function notifyEconomyAdmins(player, message) {
