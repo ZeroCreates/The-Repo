@@ -27,6 +27,7 @@ local function loadTheme()
 end
 
 loadTheme()
+local commandHistory = {}
 term.setBackgroundColor(colors.black)
 term.setTextColor(term.isColor() and themeAccent or colors.gray)
 term.clear()
@@ -40,7 +41,16 @@ while true do
     term.setTextColor(term.isColor() and themeAccent or colors.white)
     write("> ")
     term.setTextColor(colors.white)
-    local input = read()
+    local input = read(nil, commandHistory, function(line)
+        local startPosition = line:find("[a-zA-Z0-9_%.:]+$")
+        if not startPosition then return nil end
+        local prefix = line:sub(startPosition)
+        if prefix == "" then return nil end
+        return textutils.complete(prefix, _ENV)
+    end)
+    if input:match("%S") and commandHistory[#commandHistory] ~= input then
+        table.insert(commandHistory, input)
+    end
     local command = input:lower()
 
     if command == "exit" or command == "quit" then
