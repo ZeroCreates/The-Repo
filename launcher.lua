@@ -458,7 +458,6 @@ local function draw()
         secondButtons = {
             { label = "SWITCH USER", action = "user" },
             { label = "REFRESH", action = "refresh" },
-            { label = "EXIT", action = "exit" },
         }
         drawButtons(firstButtons, height - 2, width, isColor)
         drawButtons(secondButtons, height - 1, width, isColor)

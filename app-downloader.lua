@@ -103,6 +103,26 @@ local function visibleAppRows(height)
     return math.max(1, height - 6)
 end
 
+local function drawButtons(buttons, row, width)
+    local slotWidth = math.max(1, math.floor(width / #buttons))
+    for index, button in ipairs(buttons) do
+        local left = (index - 1) * slotWidth + 1
+        local buttonWidth = index == #buttons and width - left + 1 or slotWidth
+        term.setCursorPos(left, row)
+        term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
+        term.setTextColor(colors.white)
+        term.write(("[" .. button.label .. "]"):sub(1, buttonWidth))
+        button.left = left
+        button.right = left + buttonWidth - 1
+    end
+end
+
+local function buttonAt(buttons, x)
+    for _, button in ipairs(buttons) do
+        if x >= button.left and x <= button.right then return button.action end
+    end
+end
+
 local function draw()
     local width, height = term.getSize()
     local theme = themes[themeIndex]
@@ -147,10 +167,15 @@ local function draw()
     term.setCursorPos(2, height - 2)
     term.setTextColor(colors.yellow)
     term.write(message:sub(1, math.max(0, width - 2)))
-    term.setCursorPos(2, height)
-    term.setTextColor(colors.white)
-    term.write("UP/DOWN select  ENTER download  R refresh  Q quit")
+    local buttons = {
+        { label = "DOWNLOAD", action = "download" },
+        { label = "UPDATE", action = "update" },
+        { label = "REFRESH", action = "refresh" },
+        { label = "QUIT", action = "quit" },
+    }
+    drawButtons(buttons, height - 1, width)
     term.setBackgroundColor(colors.black)
+    return buttons
 end
 
 local function confirmOverwrite(file)
@@ -332,6 +357,19 @@ local function downloadApp(app)
     message = app.name .. " downloaded as " .. destination .. "."
 end
 
+local function updateApp(app)
+    if not app then
+        message = "Select an app to update."
+        return
+    end
+    local installedPath = fs.combine(appDirectory, app.file)
+    if not fs.exists(installedPath) then
+        message = app.name .. " is not installed yet. Use Download first."
+        return
+    end
+    downloadApp(app)
+end
+
 local mode, target, requestedHome = ...
 if mode ~= "update" then
     requestedHome = mode
@@ -369,8 +407,8 @@ if mode == "update" then
 end
 
 while true do
-    draw()
-    local event, key, _, y = os.pullEventRaw()
+    local buttons = draw()
+    local event, key, x, y = os.pullEventRaw()
     if event == "key" then
         if key == keys.up then
             selected = math.max(1, selected - 1)
@@ -378,6 +416,8 @@ while true do
             selected = math.min(#apps, selected + 1)
         elseif key == keys.enter then
             downloadApp(apps[selected])
+        elseif key == keys.u then
+            updateApp(apps[selected])
         elseif key == keys.r then
             local refreshed, refreshError = loadCatalog()
             if refreshed then
@@ -394,11 +434,30 @@ while true do
     elseif event == "mouse_click" then
         local _, height = term.getSize()
         local index = firstVisible + y - 3
-        if y >= 3 and y < 3 + visibleAppRows(height)
+        if key == 1 and y >= 3 and y < 3 + visibleAppRows(height)
             and index >= firstVisible and index <= #apps then
             local wasSelected = selected == index
             selected = index
-            if key == 1 and wasSelected then downloadApp(apps[selected]) end
+            if wasSelected then downloadApp(apps[selected]) end
+        elseif key == 1 and y == height - 1 then
+            local action = buttonAt(buttons, x)
+            if action == "download" then
+                downloadApp(apps[selected])
+            elseif action == "update" then
+                updateApp(apps[selected])
+            elseif action == "refresh" then
+                local refreshed, refreshError = loadCatalog()
+                if refreshed then
+                    apps = refreshed
+                    selected = math.min(selected, math.max(1, #apps))
+                    firstVisible = 1
+                    message = "Loaded " .. #apps .. " app(s) from GitHub."
+                else
+                    message = refreshError
+                end
+            elseif action == "quit" then
+                return
+            end
         end
     end
 end
