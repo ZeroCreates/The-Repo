@@ -3,6 +3,7 @@ local SERVER_NAME = "email_server"
 local DATA_DIRECTORY = "/email-server"
 local MAILBOX_PATH = DATA_DIRECTORY .. "/mailboxes.json"
 local ACCOUNT_PATH = DATA_DIRECTORY .. "/accounts.json"
+local DOMAIN_ALLOWLIST_PATH = DATA_DIRECTORY .. "/domain-allowlist.json"
 local LEGACY_MAILBOX_PATH = "/.launcher/email-mailboxes.json"
 local LEGACY_ACCOUNT_PATH = "/.launcher/email-accounts.json"
 local MAX_MESSAGES_PER_MAILBOX = 100
@@ -18,6 +19,25 @@ local function normalizeEmail(email)
         return nil
     end
     return email
+end
+
+local function validDomain(domain)
+    if type(domain) ~= "string" or #domain > 253 or domain:find("[^%w.-]") then
+        return false
+    end
+    for label in domain:gmatch("[^.]+") do
+        if #label > 63 or label:match("^[%-]") or label:match("%-$") then
+            return false
+        end
+    end
+    return domain:find("%.") ~= nil
+        and not domain:find("%.%.")
+        and not domain:find("^%.")
+        and not domain:find("%.$")
+end
+
+local function emailDomain(email)
+    return email:match("@(.+)$")
 end
 
 local function validLegacyMailboxName(name)
@@ -109,6 +129,36 @@ local function saveAccounts(accounts)
     return saveJSON(ACCOUNT_PATH, accounts, "account data")
 end
 
+local function loadDomainAllowlist()
+    if not fs.exists(DOMAIN_ALLOWLIST_PATH) then
+        local saved, saveError = saveJSON(DOMAIN_ALLOWLIST_PATH, {}, "domain allowlist")
+        if not saved then error(saveError) end
+        return {}
+    end
+
+    local file = fs.open(DOMAIN_ALLOWLIST_PATH, "r")
+    if not file then error("Could not open " .. DOMAIN_ALLOWLIST_PATH .. " for reading.") end
+    local contents = file.readAll()
+    file.close()
+    local ok, data = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(data) ~= "table" then
+        error("Domain allowlist is invalid; refusing account registrations.")
+    end
+
+    for domain, computerIds in pairs(data) do
+        if not validDomain(domain) or domain ~= domain:lower() or type(computerIds) ~= "table" then
+            error("Domain allowlist must map lowercase domains to arrays of computer IDs.")
+        end
+        for index, computerId in pairs(computerIds) do
+            if type(index) ~= "number" or index < 1 or index % 1 ~= 0
+                or type(computerId) ~= "number" or computerId < 0 or computerId % 1 ~= 0 then
+                error("Domain allowlist contains an invalid computer ID.")
+            end
+        end
+    end
+    return data
+end
+
 local function mailboxFor(mailboxes, username)
     if not mailboxes[username] then mailboxes[username] = {} end
     return mailboxes[username]
@@ -148,7 +198,7 @@ local function authenticatedAccount(accounts, request)
     return email
 end
 
-local function handleRequest(mailboxes, accounts, request)
+local function handleRequest(mailboxes, accounts, domainAllowlist, senderId, request)
     if type(request) ~= "table" or type(request.type) ~= "string" then
         return { type = "error", message = "Invalid request." }
     end
@@ -157,6 +207,20 @@ local function handleRequest(mailboxes, accounts, request)
         local email = normalizeEmail(request.email)
         if not email then
             return { type = "error", message = "Enter a valid email address (for example, name@example.com)." }
+        end
+        local domain = emailDomain(email)
+        local allowedIds = domainAllowlist[domain]
+        local permitted = domain == "riftmail.com"
+        if not permitted and type(allowedIds) == "table" then
+            for _, computerId in ipairs(allowedIds) do
+                if computerId == senderId then
+                    permitted = true
+                    break
+                end
+            end
+        end
+        if not permitted then
+            return { type = "error", message = "This domain is not enabled for registration from this computer." }
         end
         if type(request.password) ~= "string" or #request.password < 1
             or #request.password > MAX_PASSWORD_LENGTH then
@@ -262,6 +326,7 @@ end
 
 local mailboxes = loadMailboxes()
 local accounts = loadAccounts()
+local domainAllowlist = loadDomainAllowlist()
 openModems()
 rednet.host(PROTOCOL, SERVER_NAME)
 
@@ -272,10 +337,14 @@ term.setCursorPos(1, 1)
 print("Email server is running.")
 print("Service: " .. SERVER_NAME)
 print("Data directory: " .. DATA_DIRECTORY)
+print("Domain allowlist: " .. DOMAIN_ALLOWLIST_PATH)
+print("Format: {\"example.com\":[computerId,...]}")
+print("Find a computer ID with os.getComputerID() on the client computer.")
+print("Global registration domain: riftmail.com")
 print("Stop the program to shut down the server.")
 
 while true do
     local sender, request = rednet.receive(PROTOCOL)
-    local response = handleRequest(mailboxes, accounts, request)
+    local response = handleRequest(mailboxes, accounts, domainAllowlist, sender, request)
     rednet.send(sender, response, PROTOCOL)
 end
