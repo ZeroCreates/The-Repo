@@ -3,7 +3,7 @@ local normalizedHome = type(requestedHome) == "string" and requestedHome:gsub("^
 local homeDirectory = normalizedHome and normalizedHome:match("^users/[%w_-]+$")
     and normalizedHome or "users/default"
 local username = homeDirectory:match("^users/([%w_-]+)$")
-local privateDataDirectory = "/.launcher/user-data/" .. username
+local privateDataDirectory = fs.combine(".launcher", "user-data", username)
 local profilesDirectory = "users"
 local currentDirectory = fs.combine(homeDirectory, "desktop")
 local currentRoot = homeDirectory
