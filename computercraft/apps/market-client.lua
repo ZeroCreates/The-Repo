@@ -282,7 +282,7 @@ local function saveKnownOrderStatus(order)
 end
 
 local function promptFollowOrder(order)
-    if not notifications then
+    if notifications == nil then
         return
     end
     if type(order.customerId) ~= "number" or order.customerId ~= os.getComputerID() then
@@ -708,7 +708,7 @@ local function checkStatus()
 end
 
 openModems()
-if notifications then
+if not notifications == nil then
     local listenerRegistered, listenerError = notifications.listen(
         NOTIFICATION_PROTOCOL, "title", "message", "Market", "source", "Market"
     )
