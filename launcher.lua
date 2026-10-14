@@ -204,39 +204,31 @@ local function chooseUser()
             end
         end
         term.setCursorPos(2, height)
-        term.setTextColor(colors.lightGray)
-        term.write("UP/DOWN select  ENTER choose  ESC cancel")
+        term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
+        term.setTextColor(colors.white)
+        term.write((currentUser and "[CANCEL]" or ""))
+        term.setCursorPos(math.floor(width / 2) + 1, height)
+        term.write("[CREATE PROFILE]")
+        term.setBackgroundColor(colors.black)
 
-        local event, key, _, y = os.pullEventRaw()
-        if event == "key" then
-            if key == keys.up then
-                userSelected = math.max(1, userSelected - 1)
-            elseif key == keys.down then
-                userSelected = math.min(optionCount, userSelected + 1)
-            elseif key == keys.enter then
-                if userSelected == createIndex then
-                    if createProfile() then return true end
-                else
-                    currentUser = users[userSelected]
-                    homeDirectory = fs.combine(USER_ROOT, currentUser)
-                    return true
-                end
-            elseif key == keys.escape and currentUser then
-                return false
-            end
-        elseif event == "mouse_click" then
+        local event, button, x, y = os.pullEventRaw()
+        if event == "mouse_click" and button == 1 then
             local index = userFirstVisible + y - 4
             if y >= 4 and y < 4 + visibleRows and index >= userFirstVisible and index <= optionCount then
                 local wasSelected = userSelected == index
                 userSelected = index
-                if key == 1 and wasSelected then
-                    if userSelected == createIndex then
-                        if createProfile() then return true end
-                    else
-                        currentUser = users[userSelected]
-                        homeDirectory = fs.combine(USER_ROOT, currentUser)
-                        return true
-                    end
+                if userSelected == createIndex then
+                    if createProfile() then return true end
+                elseif wasSelected then
+                    currentUser = users[userSelected]
+                    homeDirectory = fs.combine(USER_ROOT, currentUser)
+                    return true
+                end
+            elseif y == height then
+                if x <= math.floor(width / 2) and currentUser then
+                    return false
+                elseif x > math.floor(width / 2) then
+                    if createProfile() then return true end
                 end
             end
         end
@@ -333,23 +325,52 @@ local function refreshApps()
         end
     end
 
-    local otherPaths = {}
-    for _, path in ipairs(fs.list(homeDirectory)) do
-        local fullPath = fs.combine(homeDirectory, path)
-        if isLuaFile(fullPath) and not available[path] then
-            table.insert(otherPaths, path)
+    local appDirectory = fs.combine(homeDirectory, "apps")
+    fs.makeDir(appDirectory)
+
+    local migrationErrors = {}
+    for _, name in ipairs(fs.list(homeDirectory)) do
+        local legacyPath = fs.combine(homeDirectory, name)
+        if name ~= "apps" and name ~= "launcher.lua" and name ~= "app-downloader.lua"
+            and isLuaFile(legacyPath) then
+            local destination = fs.combine(appDirectory, name)
+            if not fs.exists(destination) then
+                local moved, moveError = pcall(fs.move, legacyPath, destination)
+                if not moved then
+                    table.insert(migrationErrors, name .. ": " .. tostring(moveError))
+                end
+            end
         end
     end
+
+    local otherPaths = {}
+    local function addAppsFrom(directory, includeLegacyRoot)
+        for _, name in ipairs(fs.list(directory)) do
+            local fullPath = fs.combine(directory, name)
+            if isLuaFile(fullPath) and not available[fullPath]
+                and (not includeLegacyRoot or name ~= "launcher.lua" and name ~= "app-downloader.lua"
+                    and not fs.exists(fs.combine(appDirectory, name))) then
+                table.insert(otherPaths, fullPath)
+                available[fullPath] = true
+            end
+        end
+    end
+    addAppsFrom(appDirectory, false)
+    addAppsFrom(homeDirectory, true)
     if settings.alphabetical then
         table.sort(otherPaths, function(first, second)
-            return first:lower() < second:lower()
+            return fs.getName(first):lower() < fs.getName(second):lower()
         end)
     end
     for _, path in ipairs(otherPaths) do
+        local name = fs.getName(path)
         table.insert(available, {
-            path = fs.combine(homeDirectory, path),
-            name = catalogNames[path] or displayName(path),
+            path = path,
+            name = catalogNames[name] or displayName(name),
         })
+    end
+    if #migrationErrors > 0 then
+        message = "Some old apps could not be moved: " .. table.concat(migrationErrors, "; ")
     end
     apps = available
     if #apps == 0 then
@@ -361,6 +382,26 @@ local function refreshApps()
     selected = math.min(selected, #apps)
 end
 
+local function drawButtons(buttons, row, width, isColor)
+    local slotWidth = math.max(1, math.floor(width / #buttons))
+    for index, button in ipairs(buttons) do
+        local x = (index - 1) * slotWidth + 1
+        local buttonWidth = index == #buttons and width - x + 1 or slotWidth
+        term.setCursorPos(x, row)
+        term.setBackgroundColor(isColor and colors.gray or colors.black)
+        term.setTextColor(colors.white)
+        term.write(("[" .. button.label .. "]"):sub(1, buttonWidth))
+        button.left = x
+        button.right = x + buttonWidth - 1
+    end
+end
+
+local function buttonAt(buttons, x)
+    for _, button in ipairs(buttons) do
+        if x >= button.left and x <= button.right then return button.action end
+    end
+end
+
 local function draw()
     local width, height = term.getSize()
     local isColor = term.isColor()
@@ -370,7 +411,8 @@ local function draw()
     local highlightColor = isColor and theme.highlight or colors.gray
     local mutedColor = isColor and colors.lightGray or colors.white
     local titleColor = isColor and theme.accent or colors.gray
-    local visibleRows = math.max(1, height - 9)
+    local visibleRows = math.max(1, height - 12)
+    local firstButtons, secondButtons
 
     if selected < firstVisible then firstVisible = selected end
     if selected >= firstVisible + visibleRows then
@@ -403,11 +445,23 @@ local function draw()
                 term.write(("    " .. apps[index].name):sub(1, math.max(0, width - 2)))
             end
         end
-        term.setCursorPos(2, height - 4)
+        term.setCursorPos(2, height - 6)
         term.setTextColor(titleColor)
         local selectedApp = apps[selected]
         local detail = selectedApp and (settings.showPath and selectedApp.path or "Ready to launch") or "No programs found"
         term.write(detail:sub(1, math.max(0, width - 2)))
+        firstButtons = {
+            { label = "OPEN", action = "open" },
+            { label = "UPDATE", action = "update" },
+            { label = "SETTINGS", action = "settings" },
+        }
+        secondButtons = {
+            { label = "SWITCH USER", action = "user" },
+            { label = "REFRESH", action = "refresh" },
+            { label = "EXIT", action = "exit" },
+        }
+        drawButtons(firstButtons, height - 2, width, isColor)
+        drawButtons(secondButtons, height - 1, width, isColor)
     else
         local options = {
             "Accent theme: " .. theme.name,
@@ -428,28 +482,27 @@ local function draw()
                 term.write(("    " .. option):sub(1, math.max(0, width - 2)))
             end
         end
+        firstButtons = {}
+        secondButtons = { { label = "BACK TO PROGRAMS", action = "back" } }
+        drawButtons(secondButtons, height - 1, width, isColor)
     end
 
-    term.setCursorPos(2, height - 2)
+    term.setCursorPos(2, height - 4)
     term.setTextColor(mutedColor)
     term.write(message:sub(1, math.max(0, width - 2)))
-    term.setCursorPos(2, height)
-    local footer = screen == "apps"
-        and "ENTER run  SHIFT+CLICK update  S settings  U switch user  R refresh"
-        or "UP/DOWN choose  LEFT/RIGHT change  S/ESC back"
-    term.write(footer:sub(1, math.max(0, width - 1)))
     term.setBackgroundColor(backgroundColor)
     term.setTextColor(textColor)
+    return firstButtons, secondButtons
 end
 
 local function waitForReturn()
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.lightGray)
     print("")
-    print("Press any key to return to the launcher.")
+    print("Click anywhere to return to the launcher.")
     while true do
         local event = os.pullEventRaw()
-        if event == "key" or event == "mouse_click" then return end
+        if event == "mouse_click" then return end
     end
 end
 
@@ -524,6 +577,11 @@ local function changeSetting(direction)
 end
 
 local function uninstallLauncher()
+    local width, height = term.getSize()
+    local confirmationButtons = {
+        { label = "CANCEL", action = false },
+        { label = "WIPE COMPUTER", action = true },
+    }
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
     term.clear()
@@ -534,9 +592,24 @@ local function uninstallLauncher()
     print("This permanently deletes every file and folder")
     print("on this computer, including all user profiles,")
     print("apps, settings, and startup files.")
+    term.setTextColor(colors.yellow)
     print("")
-    write("Type WIPE to erase the entire computer: ")
-    if read() ~= "WIPE" then
+    print("Click WIPE COMPUTER below to confirm.")
+    drawButtons(confirmationButtons, height - 1, width, term.isColor())
+    local confirmed = false
+    while true do
+        local event, button, x, y = os.pullEventRaw()
+        if event == "mouse_click" and button == 1 and y == height - 1 then
+            for _, choice in ipairs(confirmationButtons) do
+                if x >= choice.left and x <= choice.right then
+                    confirmed = choice.action
+                    break
+                end
+            end
+            break
+        end
+    end
+    if not confirmed then
         message = "Computer wipe cancelled."
         return
     end
@@ -589,82 +662,57 @@ else
 end
 
 while true do
-    draw()
-    local event, first, second, y = os.pullEventRaw()
-    if event == "key" then
-        if first == keys.leftShift or first == keys.rightShift then
-            shiftDown = true
-        end
-        if first == keys.u and screen == "apps" then
-            if chooseUser() then
-                refreshApps()
-                message = "Switched to " .. currentUser .. "."
-            else
-                message = "Profile switch cancelled."
-            end
-        elseif first == keys.s or (screen == "settings" and first == keys.escape) then
-            screen = screen == "apps" and "settings" or "apps"
-            message = screen == "settings" and "Choose a setting and change it with LEFT or RIGHT." or "Back to your programs."
-        elseif first == keys.up then
-            if screen == "apps" then
-                if #apps > 0 then selected = math.max(1, selected - 1) end
-            else
-                selectedSetting = math.max(1, selectedSetting - 1)
-            end
-        elseif first == keys.down then
-            if screen == "apps" then
-                if #apps > 0 then selected = math.min(#apps, selected + 1) end
-            else
-                selectedSetting = math.min(4, selectedSetting + 1)
-            end
-        elseif screen == "settings" and (first == keys.left or first == keys.right or first == keys.enter) then
-            if selectedSetting == 4 and first == keys.enter then
-                uninstallLauncher()
-            elseif selectedSetting <= 3 then
-                changeSetting(first == keys.left and -1 or 1)
-            end
-        elseif screen == "apps" and first == keys.enter then
-            launchSelected()
-        elseif screen == "apps" and first == keys.r then
-            refreshApps()
-            message = "Program list refreshed."
-        elseif screen == "apps" and first == keys.d and not fs.exists(DOWNLOADER_PATH) then
-            local ok, err = installDownloader()
-            refreshApps()
-            message = ok and "App downloader is ready." or err
-        end
-    elseif event == "key_up" then
-        if first == keys.leftShift or first == keys.rightShift then
-            shiftDown = false
-        end
-    elseif event == "mouse_click" then
-        if first == 1 then
-            if screen == "apps" then
-                local _, screenHeight = term.getSize()
-                local visibleRows = math.max(1, screenHeight - 9)
-                local clickedIndex = firstVisible + y - 4
-                if y >= 4 and y < 4 + visibleRows
-                    and clickedIndex >= firstVisible and clickedIndex <= #apps then
-                    local wasSelected = selected == clickedIndex
-                    selected = clickedIndex
-                    if shiftDown then
-                        updateSelected()
-                    elseif wasSelected then
-                        launchSelected()
-                    end
+    local firstButtons, secondButtons = draw()
+    local event, button, x, y = os.pullEventRaw()
+    if event == "mouse_click" and button == 1 then
+        local _, height = term.getSize()
+        if screen == "apps" then
+            local visibleRows = math.max(1, height - 12)
+            local clickedIndex = firstVisible + y - 4
+            if y >= 4 and y < 4 + visibleRows
+                and clickedIndex >= firstVisible and clickedIndex <= #apps then
+                selected = clickedIndex
+            elseif y == height - 2 then
+                local action = buttonAt(firstButtons, x)
+                if action == "open" then
+                    launchSelected()
+                elseif action == "update" then
+                    updateSelected()
+                elseif action == "settings" then
+                    screen = "settings"
+                    message = "Click a setting to change it."
                 end
-            elseif y >= 5 and y <= 8 then
-                local clickedSetting = y - 4
-                local wasSelected = selectedSetting == clickedSetting
-                selectedSetting = clickedSetting
-                if wasSelected then
-                    if selectedSetting == 4 then
-                        uninstallLauncher()
+            elseif y == height - 1 then
+                local action = buttonAt(secondButtons, x)
+                if action == "user" then
+                    if chooseUser() then
+                        selected = 1
+                        firstVisible = 1
+                        refreshApps()
+                        message = "Switched to " .. currentUser .. "."
                     else
-                        changeSetting(1)
+                        message = "Profile switch cancelled."
                     end
+                elseif action == "refresh" then
+                    refreshApps()
+                    message = "Program list refreshed."
+                elseif action == "exit" then
+                    return
                 end
             end
+        elseif y >= 5 and y <= 8 then
+            selectedSetting = y - 4
+            if selectedSetting == 1 then
+                local direction = x <= math.floor(select(1, term.getSize()) / 2) and -1 or 1
+                changeSetting(direction)
+            elseif selectedSetting == 2 or selectedSetting == 3 then
+                changeSetting(1)
+            elseif selectedSetting == 4 then
+                uninstallLauncher()
+            end
+        elseif y == height - 1 and buttonAt(secondButtons, x) == "back" then
+            screen = "apps"
+            message = "Back to your programs."
         end
     end
 end

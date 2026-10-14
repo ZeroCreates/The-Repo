@@ -6,6 +6,7 @@ local USER_ROOT = "/users/"
 local SYSTEM_DIRECTORY = "/.launcher"
 local CACHE_DIRECTORY = SYSTEM_DIRECTORY .. "/cache"
 local homeDirectory = USER_ROOT .. "default"
+local appDirectory = homeDirectory .. "/apps"
 local username = "default"
 local APP_NAMES_PATH = SYSTEM_DIRECTORY .. "/app-catalog-names.json"
 local apps = {}
@@ -219,6 +220,7 @@ local function setHomeDirectory(path)
         return false, "Invalid user directory. Expected /users/<username>."
     end
     homeDirectory = "/users/" .. username
+    appDirectory = homeDirectory .. "/apps"
     APP_NAMES_PATH = SYSTEM_DIRECTORY .. "/app-catalog-names.json"
     fs.makeDir(SYSTEM_DIRECTORY)
     fs.makeDir(CACHE_DIRECTORY)
@@ -273,6 +275,7 @@ local function setHomeDirectory(path)
         end
     end
     fs.makeDir(homeDirectory)
+    fs.makeDir(appDirectory)
     return true
 end
 
@@ -292,7 +295,7 @@ local function downloadApp(app)
         return
     end
 
-    local destination = fs.combine(homeDirectory, app.file)
+    local destination = fs.combine(appDirectory, app.file)
     if not confirmOverwrite(destination) then
         message = "Download cancelled."
         return

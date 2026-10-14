@@ -7,7 +7,7 @@ fs.makeDir(homeDirectory)
 local entries = {}
 local selected = 1
 local firstVisible = 1
-local message = "Enter opens folders or files; E edits the selected file."
+local message = "Click an item to select; click again or use Open. Drop files to upload."
 local themeIndex = 1
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
@@ -65,7 +65,27 @@ local function refreshEntries()
 end
 
 local function visibleRows(height)
-    return math.max(1, height - 5)
+    return math.max(1, height - 9)
+end
+
+local function drawButtons(buttons, row, width)
+    local slotWidth = math.max(1, math.floor(width / #buttons))
+    for index, button in ipairs(buttons) do
+        local x = (index - 1) * slotWidth + 1
+        local buttonWidth = index == #buttons and width - x + 1 or slotWidth
+        term.setCursorPos(x, row)
+        term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
+        term.setTextColor(colors.white)
+        term.write(("[" .. button.label .. "]"):sub(1, buttonWidth))
+        button.left = x
+        button.right = x + buttonWidth - 1
+    end
+end
+
+local function buttonAt(buttons, x)
+    for _, button in ipairs(buttons) do
+        if x >= button.left and x <= button.right then return button.action end
+    end
 end
 
 local function draw()
@@ -74,6 +94,17 @@ local function draw()
     local accent = term.isColor() and theme.accent or colors.gray
     local highlight = term.isColor() and theme.highlight or colors.gray
     local rowCount = visibleRows(height)
+    local topButtons = {
+        { label = "NEW FILE", action = "create" },
+        { label = "NEW FOLDER", action = "create-folder" },
+        { label = "EDIT", action = "edit" },
+        { label = "OPEN", action = "open" },
+    }
+    local bottomButtons = {
+        { label = "UP", action = "up" },
+        { label = "HOME", action = "home" },
+        { label = "EXIT", action = "exit" },
+    }
     if selected < firstVisible then firstVisible = selected end
     if selected >= firstVisible + rowCount then
         firstVisible = selected - rowCount + 1
@@ -102,18 +133,18 @@ local function draw()
             term.write(("> " .. label):sub(1, math.max(0, width - 2)))
             term.setBackgroundColor(colors.black)
         else
-            term.setTextColor(entry.isDirectory and colors.cyan or colors.white)
+            term.setTextColor(entry.isDirectory and (term.isColor() and accent or colors.white) or colors.white)
             term.write(("  " .. label):sub(1, math.max(0, width - 2)))
         end
     end
 
-    term.setCursorPos(2, height - 2)
+    term.setCursorPos(2, height - 4)
     term.setTextColor(colors.yellow)
     term.write(message:sub(1, math.max(0, width - 2)))
-    term.setCursorPos(2, height)
-    term.setTextColor(colors.white)
-    term.write("UP/DOWN move  DROP upload  ENTER open/edit  E edit")
+    drawButtons(topButtons, height - 2, width)
+    drawButtons(bottomButtons, height - 1, width)
     term.setBackgroundColor(colors.black)
+    return topButtons, bottomButtons
 end
 
 local function editSelected()
@@ -124,6 +155,10 @@ local function editSelected()
     end
     if entry.isDirectory then
         message = "Select a file to edit."
+        return
+    end
+    if entry.path:sub(1, #homeDirectory + 1) ~= homeDirectory .. "/" then
+        message = "That file is outside your home directory."
         return
     end
 
@@ -145,13 +180,102 @@ local function editSelected()
     refreshEntries()
 end
 
-local function confirmUploadOverwrite(path)
+local function createFile()
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(1, 1)
+    print("Create a file in " .. currentDirectory)
+    write("File name: ")
+    local name = read()
+    if name == "" then
+        message = "File creation cancelled."
+        return
+    end
+    if name:find("[/\\:]", 1) or name == "." or name == ".." then
+        message = "Enter a file name, not a path."
+        return
+    end
+
+    local path = fs.combine(currentDirectory, name)
+    if fs.exists(path) then
+        message = "That file or folder already exists."
+        return
+    end
+    local file = fs.open(path, "w")
+    if not file then
+        message = "Could not create " .. name .. "."
+        return
+    end
+    file.close()
+    refreshEntries()
+    for index, entry in ipairs(entries) do
+        if entry.path == path then
+            selected = index
+            break
+        end
+    end
+    message = "Created " .. name .. " in your home directory."
+end
+
+local function createFolder()
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("Create a folder in " .. currentDirectory)
+    write("Folder name: ")
+    local name = read()
+    if name == "" then
+        message = "Folder creation cancelled."
+        return
+    end
+    if name:find("[/\\:]", 1) or name == "." or name == ".." then
+        message = "Enter a folder name, not a path."
+        return
+    end
+
+    local path = fs.combine(currentDirectory, name)
+    if fs.exists(path) then
+        message = "That file or folder already exists."
+        return
+    end
+    local ok, err = pcall(fs.makeDir, path)
+    if not ok then
+        message = "Could not create " .. name .. ": " .. tostring(err)
+        return
+    end
+    refreshEntries()
+    for index, entry in ipairs(entries) do
+        if entry.path == path then
+            selected = index
+            break
+        end
+    end
+    message = "Created folder " .. name .. "."
+end
+
+local function confirmUploadOverwrite(path)
+    local width, height = term.getSize()
+    local buttons = {
+        { label = "CANCEL", action = false },
+        { label = "REPLACE", action = true },
+    }
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.yellow)
     print(path .. " already exists.")
-    write("Replace it with the dropped file? [y/N] ")
-    local answer = read()
-    return answer:lower() == "y"
+    term.setTextColor(colors.white)
+    print("Choose whether to replace it.")
+    drawButtons(buttons, height - 1, width)
+    while true do
+        local event, button, x, y = os.pullEventRaw()
+        if event == "mouse_click" and button == 1 and y == height - 1 then
+            for _, choice in ipairs(buttons) do
+                if x >= choice.left and x <= choice.right then return choice.action end
+            end
+        end
+    end
 end
 
 local function saveTransferredFile(source)
@@ -174,8 +298,11 @@ local function saveTransferredFile(source)
 
     local contents = source.readAll()
     source.close()
-    local temporary = destination .. ".upload-tmp"
-    local backup = destination .. ".upload-bak"
+    local username = homeDirectory:match("^/users/([%w_-]+)$") or "default"
+    local cacheDirectory = fs.combine("/.launcher/cache", username)
+    fs.makeDir(cacheDirectory)
+    local temporary = fs.combine(cacheDirectory, fileName .. ".upload-tmp")
+    local backup = fs.combine(cacheDirectory, fileName .. ".upload-bak")
     if fs.exists(temporary) then fs.delete(temporary) end
     if fs.exists(backup) then fs.delete(backup) end
 
@@ -220,38 +347,45 @@ end
 
 refreshEntries()
 while true do
-    draw()
-    local event, key, _, y = os.pullEventRaw()
-    if event == "key" then
-        if key == keys.up then
-            if #entries > 0 then selected = math.max(1, selected - 1) end
-        elseif key == keys.down then
-            if #entries > 0 then selected = math.min(#entries, selected + 1) end
-        elseif key == keys.enter then
-            openSelected()
-        elseif key == keys.e then
-            editSelected()
-        elseif key == keys.backspace then
-            if currentDirectory ~= homeDirectory then
+    local topButtons, bottomButtons = draw()
+    local event, button, x, y = os.pullEventRaw()
+    if event == "mouse_click" then
+        local _, height = term.getSize()
+        local index = firstVisible + y - 3
+        if button == 1 and y >= 3 and y < 3 + visibleRows(height)
+            and index >= firstVisible and index <= #entries then
+            local wasSelected = selected == index
+            selected = index
+            if button == 1 and wasSelected then openSelected() end
+        elseif button == 1 and y == height - 2 then
+            local action = buttonAt(topButtons, x)
+            if action == "create" then
+                createFile()
+            elseif action == "create-folder" then
+                createFolder()
+            elseif action == "edit" then
+                editSelected()
+            elseif action == "open" then
+                openSelected()
+            end
+        elseif button == 1 and y == height - 1 then
+            local action = buttonAt(bottomButtons, x)
+            if action == "up" and currentDirectory ~= homeDirectory then
                 currentDirectory = parentDirectory(currentDirectory)
                 selected = 1
                 refreshEntries()
                 message = "Opened " .. currentDirectory .. "."
+            elseif action == "home" then
+                currentDirectory = homeDirectory
+                selected = 1
+                refreshEntries()
+                message = "Returned to your home directory."
+            elseif action == "exit" then
+                return
             end
-        elseif key == keys.q or key == keys.escape then
-            return
-        end
-    elseif event == "mouse_click" then
-        local _, height = term.getSize()
-        local index = firstVisible + y - 3
-        if y >= 3 and y < 3 + visibleRows(height)
-            and index >= firstVisible and index <= #entries then
-            local wasSelected = selected == index
-            selected = index
-            if key == 1 and wasSelected then openSelected() end
         end
     elseif event == "file_transfer" then
-        local transferredFiles = key.getFiles()
+        local transferredFiles = button.getFiles()
         local uploaded, failures = 0, {}
         for _, transferredFile in ipairs(transferredFiles) do
             local ok, result = saveTransferredFile(transferredFile)
