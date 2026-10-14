@@ -239,6 +239,23 @@ function sendCommandMessage(source, message) {
   source.sendSystemMessage(Text.of(message))
 }
 
+function addRedeemableItem(source, itemId, amount) {
+  itemId = itemId.trim().toLowerCase()
+  const cents = readAmountCents(amount, false)
+  if (!Item.exists(itemId)) {
+    sendCommandMessage(source, 'Unknown item: ' + itemId)
+    return 0
+  }
+  if (cents == null || cents < 1) {
+    sendCommandMessage(source, 'Redeem value must be greater than $0.00.')
+    return 0
+  }
+  redeemableItems[itemId] = cents
+  JsonIO.write(REDEEMABLES_FILE, redeemableItems)
+  sendCommandMessage(source, itemId + ' now redeems for ' + formatMoney(cents) + '.')
+  return 1
+}
+
 function notifyEconomyAdmins(player, message) {
   const auditMessage = '[Economy] ' + message
   console.info(auditMessage)
@@ -648,28 +665,30 @@ ServerEvents.commandRegistry(event => {
             .then(Commands.argument('item', Arguments.STRING.create(event))
               .then(Commands.argument('amount', Arguments.DOUBLE.create(event))
                 .executes(context => {
-                  const itemId = Arguments.STRING.getResult(context, 'item').toLowerCase()
-                  const cents = readAmountCents(Arguments.DOUBLE.getResult(context, 'amount'), false)
-                  if (!Item.exists(itemId)) {
-                    sendCommandMessage(context.source, 'Unknown item: ' + itemId)
-                    return 0
-                  }
-                  if (cents == null || cents < 1) {
-                    sendCommandMessage(context.source, 'Redeem value must be greater than $0.00.')
-                    return 0
-                  }
-                  redeemableItems[itemId] = cents
-                  JsonIO.write(REDEEMABLES_FILE, redeemableItems)
-                  sendCommandMessage(context.source, itemId + ' now redeems for ' + formatMoney(cents) + '.')
-                  return 1
+                  return addRedeemableItem(
+                    context.source,
+                    Arguments.STRING.getResult(context, 'item'),
+                    Arguments.DOUBLE.getResult(context, 'amount')
+                  )
+                })
+              )
+            )
+            .then(Commands.argument('amount', Arguments.DOUBLE.create(event))
+              .then(Commands.argument('itemId', Arguments.GREEDY_STRING.create(event))
+                .executes(context => {
+                  return addRedeemableItem(
+                    context.source,
+                    Arguments.GREEDY_STRING.getResult(context, 'itemId'),
+                    Arguments.DOUBLE.getResult(context, 'amount')
+                  )
                 })
               )
             )
           )
           .then(Commands.literal('remove')
-            .then(Commands.argument('item', Arguments.STRING.create(event))
+            .then(Commands.argument('item', Arguments.GREEDY_STRING.create(event))
               .executes(context => {
-                const itemId = Arguments.STRING.getResult(context, 'item').toLowerCase()
+                const itemId = Arguments.GREEDY_STRING.getResult(context, 'item').trim().toLowerCase()
                 if (redeemableItems[itemId] == null) {
                   sendCommandMessage(context.source, itemId + ' is not redeemable.')
                   return 0
