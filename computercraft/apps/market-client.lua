@@ -600,12 +600,13 @@ local function placeOrder(cart)
         showNotice("CART IS EMPTY", "Add a product before placing an order.")
         return
     end
+    local deliveryAddress
     if userData.deliveryAddress == nil then
         drawHeader("DELIVERY ADDRESS", "ENTER THE ADDRESS FOR THIS ORDER")
         writeAt(2, 5, "Up to 100 characters.", colors.lightGray)
         term.setCursorPos(2, 7)
         write("Address: ")
-        local deliveryAddress = read():match("^%s*(.-)%s*$")
+        deliveryAddress = read():match("^%s*(.-)%s*$")
         if #deliveryAddress < 1 or #deliveryAddress > 100 or deliveryAddress:find("%c") then
             showNotice("INVALID ADDRESS", "Enter a non-empty address up to 100 characters.")
             return
@@ -707,14 +708,16 @@ local function checkStatus()
 end
 
 openModems()
-local listenerRegistered, listenerError = notifications.listen(
-    NOTIFICATION_PROTOCOL, "title", "message", "Market", "source", "Market"
-)
-if not listenerRegistered then
-    showNotice("ORDER NOTIFICATIONS", listenerError)
+if notifications then
+    local listenerRegistered, listenerError = notifications.listen(
+        NOTIFICATION_PROTOCOL, "title", "message", "Market", "source", "Market"
+    )
+    if not listenerRegistered then
+        showNotice("ORDER NOTIFICATIONS", listenerError)
+    end
+    loadFollowedOrders()
+    registerFollowedOrders()
 end
-loadFollowedOrders()
-registerFollowedOrders()
 local cart = {}
 local page = 1
 while true do
