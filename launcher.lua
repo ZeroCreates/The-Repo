@@ -202,6 +202,7 @@ local function chooseUser()
     fs.makeDir(USER_ROOT)
     local userSelected = 1
     local userFirstVisible = 1
+    local profileMessage = ""
 
     local function createProfile()
         term.setBackgroundColor(colors.black)
@@ -211,12 +212,12 @@ local function chooseUser()
         write("New username: ")
         local username = read()
         if not username or not username:match("^[%w_-]+$") then
-            message = "Use only letters, numbers, underscores, and hyphens."
+            profileMessage = "Use only letters, numbers, underscores, and hyphens."
             return false
         end
         local path = fs.combine(USER_ROOT, username)
         if fs.exists(path) then
-            message = "That profile already exists. Select it from the list."
+            profileMessage = "That profile already exists. Select it from the list."
             return false
         end
         currentUser = username
@@ -233,65 +234,104 @@ local function chooseUser()
             end
         end
         table.sort(users, function(first, second) return first:lower() < second:lower() end)
-        local createIndex = #users + 1
-        local optionCount = createIndex
-        local visibleRows = math.max(1, select(2, term.getSize()) - 5)
-        if userSelected < 1 or userSelected > optionCount then userSelected = 1 end
+        local width, height = term.getSize()
+        local visibleRows = math.max(1, height - 9)
+        if userSelected < 1 or userSelected > #users then userSelected = 1 end
         if userSelected < userFirstVisible then userFirstVisible = userSelected end
         if userSelected >= userFirstVisible + visibleRows then
             userFirstVisible = userSelected - visibleRows + 1
         end
 
+        local theme = THEMES[settings.theme]
+        local accent = term.isColor() and theme.accent or colors.gray
+        local highlight = term.isColor() and theme.highlight or colors.gray
         term.setBackgroundColor(colors.black)
         term.setTextColor(colors.white)
         term.clear()
         term.setCursorPos(1, 1)
-        term.setTextColor(colors.cyan)
-        print("COMPUTERCRAFT USER PROFILES")
+        term.setBackgroundColor(accent)
+        term.write((" " .. "PROFILE SELECTOR"):sub(1, width))
+        term.setBackgroundColor(colors.black)
+        term.setCursorPos(2, 2)
         term.setTextColor(colors.lightGray)
-        print("Select a profile, or choose Create Profile.")
-        print("Profiles have no password and are not security-isolated.")
-        local width, height = term.getSize()
-        local lastVisible = math.min(optionCount, userFirstVisible + visibleRows - 1)
+        term.write(("Welcome back. Choose a profile to continue."):sub(1, math.max(0, width - 2)))
+        term.setCursorPos(2, 3)
+        term.setTextColor(accent)
+        term.write((#users .. (#users == 1 and " PROFILE" or " PROFILES")):sub(1, math.max(0, width - 2)))
+
+        local lastVisible = math.min(#users, userFirstVisible + visibleRows - 1)
         for index = userFirstVisible, lastVisible do
-            term.setCursorPos(2, index - userFirstVisible + 4)
-            local label = index == createIndex and "+ Create Profile" or users[index]
+            local row = index - userFirstVisible + 5
+            term.setCursorPos(2, row)
             if index == userSelected then
-                term.setBackgroundColor(colors.blue)
+                term.setBackgroundColor(highlight)
                 term.setTextColor(colors.white)
-                term.write(("> " .. label):sub(1, math.max(0, width - 2)))
+                term.write(("  > " .. users[index]):sub(1, math.max(0, width - 2)))
                 term.setBackgroundColor(colors.black)
             else
-                term.setTextColor(index == createIndex and colors.lime or colors.white)
-                term.write(("  " .. label):sub(1, math.max(0, width - 2)))
+                term.setTextColor(colors.white)
+                term.write(("    " .. users[index]):sub(1, math.max(0, width - 2)))
             end
         end
-        term.setCursorPos(2, height)
-        term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
-        term.setTextColor(colors.white)
-        term.write((currentUser and "[CANCEL]" or ""))
-        term.setCursorPos(math.floor(width / 2) + 1, height)
-        term.write("[CREATE PROFILE]")
+        if profileMessage ~= "" then
+            term.setCursorPos(2, height - 3)
+            term.setTextColor(colors.yellow)
+            term.write(profileMessage:sub(1, math.max(0, width - 2)))
+        elseif #users == 0 then
+            term.setCursorPos(2, 6)
+            term.setTextColor(colors.lightGray)
+            term.write("No profiles yet. Create one to get started.")
+        else
+            term.setCursorPos(2, height - 3)
+            term.setTextColor(colors.lightGray)
+            term.write(("Click a profile once to select, again to open."):sub(1, math.max(0, width - 2)))
+        end
+        term.setCursorPos(2, height - 2)
+        term.setTextColor(colors.yellow)
+        term.write(("Profiles have no password and are not security-isolated."):sub(1, math.max(0, width - 2)))
+
+        local buttons = {}
+        if currentUser then
+            buttons = {
+                { label = "CANCEL", action = "cancel" },
+                { label = "CREATE PROFILE", action = "create" },
+            }
+        else
+            buttons = {
+                { label = "CREATE PROFILE", action = "create" },
+            }
+        end
+        local slotWidth = math.max(1, math.floor(width / #buttons))
+        for index, profileButton in ipairs(buttons) do
+            local left = (index - 1) * slotWidth + 1
+            local buttonWidth = index == #buttons and width - left + 1 or slotWidth
+            term.setCursorPos(left, height)
+            term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
+            term.setTextColor(colors.white)
+            term.write(("[" .. profileButton.label .. "]"):sub(1, buttonWidth))
+            profileButton.left = left
+            profileButton.right = left + buttonWidth - 1
+        end
         term.setBackgroundColor(colors.black)
 
         local event, button, x, y = os.pullEventRaw()
         if event == "mouse_click" and button == 1 then
-            local index = userFirstVisible + y - 4
-            if y >= 4 and y < 4 + visibleRows and index >= userFirstVisible and index <= optionCount then
+            local index = userFirstVisible + y - 5
+            if y >= 5 and y < 5 + visibleRows and index >= userFirstVisible and index <= #users then
                 local wasSelected = userSelected == index
                 userSelected = index
-                if userSelected == createIndex then
-                    if createProfile() then return true end
-                elseif wasSelected then
+                if wasSelected then
                     currentUser = users[userSelected]
                     homeDirectory = fs.combine(USER_ROOT, currentUser)
                     return true
                 end
             elseif y == height then
-                if x <= math.floor(width / 2) and currentUser then
-                    return false
-                elseif x > math.floor(width / 2) then
-                    if createProfile() then return true end
+                for _, profileButton in ipairs(buttons) do
+                    if x >= profileButton.left and x <= profileButton.right then
+                        if profileButton.action == "cancel" then return false end
+                        if createProfile() then return true end
+                        break
+                    end
                 end
             end
         end
