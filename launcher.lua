@@ -65,9 +65,9 @@ local function notificationConfigPath(profilePath)
     local username = normalizedProfile:match("^users/([%w_-]+)$")
     if not username then return nil, "The active profile path is invalid." end
 
-    local target = nativeFs.combine(".launcher", "user-data", username,
+    local target = nativeFs.combine("/", ".launcher", "user-data", username,
         "notifications", "listeners.json")
-    local legacy = nativeFs.combine(normalizedProfile, "notification-listeners.json")
+    local legacy = nativeFs.combine("/", normalizedProfile, "notification-listeners.json")
     if not nativeFs.exists(target) and nativeFs.exists(legacy) then
         local directory = nativeFs.getDir(target)
         local created, createError = pcall(nativeFs.makeDir, directory)
@@ -80,6 +80,73 @@ local function notificationConfigPath(profilePath)
         end
     end
     return target
+end
+
+local function writeNotificationConfig(path, config)
+    local serialized, contents = pcall(textutils.serializeJSON, config)
+    if not serialized or type(contents) ~= "string" then
+        return false, "Could not serialize notification listener settings."
+    end
+
+    local directory = nativeFs.getDir(path)
+    local made, makeError = pcall(nativeFs.makeDir, directory)
+    if not made then
+        return false, "Could not create notification settings folder: " .. tostring(makeError)
+    end
+
+    local temporary = path .. ".tmp"
+    local backup = path .. ".bak"
+    local file, openError = nativeFs.open(temporary, "w")
+    if not file then
+        return false, "Could not create notification listener settings: "
+            .. tostring(openError or "file could not be opened")
+    end
+    local wrote, writeError = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
+        return false, "Could not write notification listener settings: "
+            .. tostring(not wrote and writeError or closeError)
+    end
+
+    if nativeFs.exists(backup) then nativeFs.delete(backup) end
+    if nativeFs.exists(path) then
+        local backedUp, backupError = pcall(nativeFs.move, path, backup)
+        if not backedUp then
+            nativeFs.delete(temporary)
+            return false, "Could not back up notification settings: " .. tostring(backupError)
+        end
+    end
+
+    local moved, moveError = pcall(nativeFs.move, temporary, path)
+    if not moved then
+        if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
+        if nativeFs.exists(backup) then
+            local restored, restoreError = pcall(nativeFs.move, backup, path)
+            if not restored then
+                return false, "Could not save notification settings: " .. tostring(moveError)
+                    .. "; restoring the previous file also failed: " .. tostring(restoreError)
+            end
+        end
+        return false, "Could not save notification settings: " .. tostring(moveError)
+    end
+
+    local saved, saveError = readJSONFile(path)
+    if not saved or type(saved.listeners) ~= "table" then
+        if nativeFs.exists(path) then nativeFs.delete(path) end
+        if nativeFs.exists(backup) then
+            local restored, restoreError = pcall(nativeFs.move, backup, path)
+            if not restored then
+                return false, "Saved notification settings could not be verified: "
+                    .. tostring(saveError) .. "; restoring the previous file also failed: "
+                    .. tostring(restoreError)
+            end
+        end
+        return false, "Saved notification settings could not be verified: " .. tostring(saveError)
+    end
+
+    if nativeFs.exists(backup) then nativeFs.delete(backup) end
+    return true
 end
 
 local function isLuaFile(path)
@@ -1187,32 +1254,8 @@ local function runHomeProgram(programPath, ...)
 
         local function saveConfig(config)
             if not configPath then return false, configPathError end
-            local directory = nativeFs.getDir(configPath)
-            local made, makeError = pcall(nativeFs.makeDir, directory)
-            if not made then
-                return false, "Could not create notification settings folder: " .. tostring(makeError)
-            end
-            local temporary = configPath .. ".tmp"
-            local backup = configPath .. ".bak"
-            local file = nativeFs.open(temporary, "w")
-            if not file then return false, "Could not create notification listener settings." end
-            file.write(textutils.serializeJSON(config))
-            file.close()
-            if nativeFs.exists(backup) then nativeFs.delete(backup) end
-            if nativeFs.exists(configPath) then
-                local backedUp, backupError = pcall(nativeFs.move, configPath, backup)
-                if not backedUp then
-                    nativeFs.delete(temporary)
-                    return false, "Could not back up notification settings: " .. tostring(backupError)
-                end
-            end
-            local moved, moveError = pcall(nativeFs.move, temporary, configPath)
-            if not moved then
-                if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
-                if nativeFs.exists(backup) then nativeFs.move(backup, configPath) end
-                return false, "Could not save notification settings: " .. tostring(moveError)
-            end
-            if nativeFs.exists(backup) then nativeFs.delete(backup) end
+            local saved, saveError = writeNotificationConfig(configPath, config)
+            if not saved then return false, saveError end
             notificationConfigRevision = notificationConfigRevision + 1
             return true
         end
@@ -1816,33 +1859,11 @@ local function removeNotificationListener(index)
     end
 
     local removed = table.remove(config.listeners, index)
-    local temporary = configPath .. ".tmp"
-    local backup = configPath .. ".bak"
-    local file = nativeFs.open(temporary, "w")
-    if not file then
+    local saved, saveError = writeNotificationConfig(configPath, config)
+    if not saved then
         table.insert(config.listeners, index, removed)
-        return false, "Could not create temporary notification settings."
+        return false, saveError
     end
-    file.write(textutils.serializeJSON(config))
-    file.close()
-
-    if nativeFs.exists(backup) then nativeFs.delete(backup) end
-    if nativeFs.exists(configPath) then
-        local backedUp, backupError = pcall(nativeFs.move, configPath, backup)
-        if not backedUp then
-            nativeFs.delete(temporary)
-            table.insert(config.listeners, index, removed)
-            return false, "Could not back up notification settings: " .. tostring(backupError)
-        end
-    end
-    local moved, moveError = pcall(nativeFs.move, temporary, configPath)
-    if not moved then
-        if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
-        if nativeFs.exists(backup) then nativeFs.move(backup, configPath) end
-        table.insert(config.listeners, index, removed)
-        return false, "Could not save notification settings: " .. tostring(moveError)
-    end
-    if nativeFs.exists(backup) then nativeFs.delete(backup) end
     notificationConfigRevision = notificationConfigRevision + 1
     return true, "Removed listener for " .. tostring(removed.protocol) .. "."
 end
@@ -1864,6 +1885,17 @@ local function loadNotificationListeners(profilePath)
             message = pathError,
         })
         return {}
+    end
+    if not nativeFs.exists(configPath) then
+        local initialized, initializeError = writeNotificationConfig(configPath, { listeners = {} })
+        if not initialized then
+            showNotificationPopup({
+                source = "Notifications",
+                title = "Listener settings",
+                message = initializeError,
+            })
+            return {}
+        end
     end
     local config, err = readJSONFile(configPath)
     if not config then
