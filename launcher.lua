@@ -16,11 +16,13 @@ local selectedSetting = 1
 local currentUser
 local homeDirectory
 local profilePasswords = {}
+local profileAdmins = {}
 local authorizedProfiles = {}
 local USER_ROOT = "/users"
 local SYSTEM_DIRECTORY = "/.launcher"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
 local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
+local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
 local LEGACY_SETTINGS_PATH = "/.launcher-settings.json"
 local THEMES = {
     { name = "Ocean", accent = colors.cyan, highlight = colors.blue },
@@ -135,6 +137,55 @@ local function saveProfilePasswords(passwords)
         if fs.exists(temporary) then fs.delete(temporary) end
         if fs.exists(backup) then fs.move(backup, PROFILE_PASSWORDS_PATH) end
         return false, "Could not save profile passwords: " .. tostring(moveError)
+    end
+    if fs.exists(backup) then fs.delete(backup) end
+    return true
+end
+
+local function loadProfileAdmins()
+    if not fs.exists(PROFILE_ADMINS_PATH) then return {} end
+    local file = fs.open(PROFILE_ADMINS_PATH, "r")
+    if not file then
+        return nil, "Could not read profile admins from " .. PROFILE_ADMINS_PATH .. "."
+    end
+    local contents = file.readAll()
+    file.close()
+    local ok, admins = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(admins) ~= "table" then
+        return nil, "Profile admin data is invalid. Refusing to grant sudo access."
+    end
+    for username, isAdmin in pairs(admins) do
+        if type(username) ~= "string" or not username:match("^[%w_-]+$")
+            or isAdmin ~= true then
+            return nil, "Profile admin data is invalid. Refusing to grant sudo access."
+        end
+    end
+    return admins
+end
+
+local function saveProfileAdmins(admins)
+    fs.makeDir(SYSTEM_DIRECTORY)
+    local temporary = PROFILE_ADMINS_PATH .. ".tmp"
+    local backup = PROFILE_ADMINS_PATH .. ".bak"
+    if fs.exists(temporary) then fs.delete(temporary) end
+    if fs.exists(backup) then fs.delete(backup) end
+    local file = fs.open(temporary, "w")
+    if not file then return false, "Could not create " .. temporary .. "." end
+    file.write(textutils.serializeJSON(admins))
+    file.close()
+
+    if fs.exists(PROFILE_ADMINS_PATH) then
+        local backedUp, backupError = pcall(fs.move, PROFILE_ADMINS_PATH, backup)
+        if not backedUp then
+            fs.delete(temporary)
+            return false, "Could not back up profile admins: " .. tostring(backupError)
+        end
+    end
+    local moved, moveError = pcall(fs.move, temporary, PROFILE_ADMINS_PATH)
+    if not moved then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        if fs.exists(backup) then fs.move(backup, PROFILE_ADMINS_PATH) end
+        return false, "Could not save profile admins: " .. tostring(moveError)
     end
     if fs.exists(backup) then fs.delete(backup) end
     return true
@@ -268,6 +319,9 @@ local function chooseUser()
     local loadedPasswords, passwordError = loadProfilePasswords()
     if not loadedPasswords then error(passwordError, 0) end
     profilePasswords = loadedPasswords
+    local loadedAdmins, adminError = loadProfileAdmins()
+    if not loadedAdmins then error(adminError, 0) end
+    profileAdmins = loadedAdmins
     local userSelected = 1
     local userFirstVisible = 1
     local profileMessage = ""
@@ -371,6 +425,56 @@ local function chooseUser()
             end
         end
 
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1, 1)
+        term.setTextColor(colors.cyan)
+        print("ADMIN PROFILE")
+        term.setTextColor(colors.lightGray)
+        print("Admin profiles can use sudo to access other profiles.")
+        local adminExists = next(profileAdmins) ~= nil
+        if adminExists then
+            print("An admin profile already exists; only standard profiles can be created.")
+        else
+            print("Choose whether " .. username .. " should be an admin.")
+        end
+        local adminButtons = {
+            { label = "STANDARD PROFILE", admin = false },
+        }
+        if not adminExists then
+            table.insert(adminButtons, { label = "MAKE ADMIN", admin = true })
+        end
+        table.insert(adminButtons, { label = "CANCEL", cancel = true })
+        local width, height = term.getSize()
+        local slotWidth = math.max(1, math.floor(width / #adminButtons))
+        for index, option in ipairs(adminButtons) do
+            local left = (index - 1) * slotWidth + 1
+            local buttonWidth = index == #adminButtons and width - left + 1 or slotWidth
+            term.setCursorPos(left, height)
+            term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
+            term.setTextColor(colors.white)
+            term.write(("[" .. option.label .. "]"):sub(1, buttonWidth))
+            option.left = left
+            option.right = left + buttonWidth - 1
+        end
+        local isAdmin
+        while isAdmin == nil do
+            local event, button, x, y = os.pullEventRaw()
+            if event == "mouse_click" and button == 1 and y == height then
+                for _, option in ipairs(adminButtons) do
+                    if x >= option.left and x <= option.right then
+                        if option.cancel then
+                            profileMessage = "Profile creation cancelled."
+                            return false
+                        end
+                        isAdmin = option.admin
+                        break
+                    end
+                end
+            end
+        end
+
         local created, createError = pcall(fs.makeDir, path)
         if not created then
             profileMessage = "Could not create profile: " .. tostring(createError)
@@ -386,6 +490,31 @@ local function chooseUser()
             profilePasswords[username] = nil
             pcall(fs.delete, path)
             profileMessage = saveError
+            return false
+        end
+        if isAdmin and next(profileAdmins) ~= nil then
+            profilePasswords[username] = nil
+            local rollbackSaved, rollbackError = saveProfilePasswords(profilePasswords)
+            pcall(fs.delete, path)
+            profileMessage = "An admin profile already exists; cannot create another."
+            if not rollbackSaved then
+                profileMessage = profileMessage .. " Password rollback failed: " .. tostring(rollbackError)
+            end
+            return false
+        end
+        if isAdmin then
+            profileAdmins[username] = true
+        end
+        local adminsSaved, adminsError = saveProfileAdmins(profileAdmins)
+        if not adminsSaved then
+            profilePasswords[username] = nil
+            profileAdmins[username] = nil
+            local rollbackSaved, rollbackError = saveProfilePasswords(profilePasswords)
+            pcall(fs.delete, path)
+            profileMessage = adminsError
+            if not rollbackSaved then
+                profileMessage = profileMessage .. " Password rollback also failed: " .. tostring(rollbackError)
+            end
             return false
         end
         currentUser = username
@@ -531,18 +660,23 @@ local function authorizeProfileAccess(username)
     term.setTextColor(colors.cyan)
     print("PROFILE ACCESS REQUIRED")
     term.setTextColor(colors.white)
-    print("Enter the password for " .. username .. " to continue.")
+    print("Enter " .. username .. "'s password, or type sudo as an admin.")
     write("Password: ")
     local entered = read("*")
-    if entered ~= expected then
+    if entered == expected then
+        authorizedProfiles[username] = true
+        return true
+    elseif entered == "sudo" and profileAdmins[currentUser] == true then
+        authorizedProfiles[username] = true
+        return true
+    elseif entered == "sudo" then
+        return false, "The current profile is not an admin."
+    else
         term.setTextColor(colors.yellow)
         print("Incorrect password. Access denied.")
         sleep(1)
         return false, "Incorrect password for " .. username .. "."
     end
-
-    authorizedProfiles[username] = true
-    return true
 end
 
 local function listOtherProfiles()

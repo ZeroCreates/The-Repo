@@ -31,6 +31,12 @@
     "description": "Roll configurable dice"
   },
   {
+    "name": "Email",
+    "source": "computercraft/apps/email-client.lua",
+    "file": "email-client.lua",
+    "description": "Create saved email accounts and send messages over rednet"
+  },
+  {
     "name": "File Browser",
     "source": "computercraft/system/file-browser.lua",
     "file": "file-browser.lua",
