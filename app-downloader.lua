@@ -89,7 +89,7 @@ local function draw()
 
     local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
     for index = firstVisible, lastVisible do
-        local row = index - firstVisible + 3
+        local row = (index - firstVisible) * 2 + 3
         term.setCursorPos(2, row)
         if index == selected then
             term.setBackgroundColor(term.isColor() and colors.blue or colors.gray)

@@ -35,4 +35,10 @@
     "file": "notes.lua",
     "description": "Read and write local notes"
   }
+  {
+    "name": "The Market",
+    "source": "client.lua",
+    "file": "market.lua",
+    "description": "Allows users to shop for items that are available for sale in the market"
+  }
 ]
