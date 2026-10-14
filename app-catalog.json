@@ -34,7 +34,7 @@
     "source": "computercraft/apps/notes.lua",
     "file": "notes.lua",
     "description": "Read and write local notes"
-  }
+  },
   {
     "name": "The Market",
     "source": "client.lua",
