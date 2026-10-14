@@ -38,7 +38,7 @@
   {
     "name": "The Market",
     "source": "client.lua",
-    "file": "client.lua",
+    "file": "market.lua",
     "description": "Allows users to shop for items that are available for sale in the market"
   }
 ]
