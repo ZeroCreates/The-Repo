@@ -492,12 +492,22 @@ local function handleRequest(mailboxes, accounts, categories, domainAllowlist, s
 end
 
 local function handleNotificationSubscription(accounts, mailboxes, subscribers, senderId, request)
-    if type(request) ~= "table" or request.type ~= "subscribe" then
+    if type(request) ~= "table"
+        or (request.type ~= "subscribe" and request.type ~= "unsubscribe") then
         return { type = "error", message = "Invalid notification subscription." }
     end
     local email = authenticatedAccount(accounts, request)
     if not email then
         return { type = "error", message = "Email address or password is incorrect." }
+    end
+
+    if request.type == "unsubscribe" then
+        local accountSubscribers = subscribers[email]
+        if accountSubscribers then
+            accountSubscribers[senderId] = nil
+            if next(accountSubscribers) == nil then subscribers[email] = nil end
+        end
+        return { type = "unsubscribed" }
     end
 
     local accountSubscribers = subscribers[email]

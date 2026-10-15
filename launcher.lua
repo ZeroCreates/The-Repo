@@ -8,6 +8,7 @@ local nativeOs = os
 local nativeRequire = require
 local nativeTerm = term.current()
 local nativeParallel = parallel
+local nativeMultishell = multishell
 local nativeWindow = window
 local apps = {}
 local selected = 1
@@ -24,9 +25,11 @@ local currentUser
 local homeDirectory
 local notificationConfigRevision = 0
 local apiNotificationQueue = {}
+local MAX_API_NOTIFICATION_QUEUE = 50
 local profilePasswords = {}
 local profileAdmins = {}
 local authorizedProfiles = {}
+local launchHomeProgramInTab = false
 local USER_ROOT = "/users"
 local SYSTEM_DIRECTORY = "/.launcher"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
@@ -773,16 +776,20 @@ local function chooseUser()
     end
 end
 
-local function authorizeProfileAccess(username)
+local function authorizeProfileAccess(username, profileContext)
+    local accessingUser = profileContext and profileContext.user or currentUser
+    local passwords = profileContext and profileContext.passwords or profilePasswords
+    local admins = profileContext and profileContext.admins or profileAdmins
+    local authorized = profileContext and profileContext.authorized or authorizedProfiles
     if type(username) ~= "string" or not username:match("^[%w_-]+$") then
         return false, "Invalid profile name."
     end
-    if username == currentUser or authorizedProfiles[username] then return true end
+    if username == accessingUser or authorized[username] then return true end
 
     local profilePath = fs.combine(USER_ROOT, username)
     if not fs.isDir(profilePath) then return false, "That profile does not exist." end
 
-    local expected = profilePasswords[username]
+    local expected = passwords[username]
     if type(expected) ~= "string" or expected == "" then
         return false, "This profile has no password. Set one before accessing it."
     end
@@ -798,10 +805,10 @@ local function authorizeProfileAccess(username)
     write("Password: ")
     local entered = readPassword()
     if entered == expected then
-        authorizedProfiles[username] = true
+        authorized[username] = true
         return true
-    elseif entered == "sudo" and profileAdmins[currentUser] == true then
-        authorizedProfiles[username] = true
+    elseif entered == "sudo" and admins[accessingUser] == true then
+        authorized[username] = true
         return true
     elseif entered == "sudo" then
         return false, "The current profile is not an admin."
@@ -813,10 +820,11 @@ local function authorizeProfileAccess(username)
     end
 end
 
-local function listOtherProfiles()
+local function listOtherProfiles(excludingUser)
+    excludingUser = excludingUser or currentUser
     local profiles = {}
     for _, username in ipairs(fs.list(USER_ROOT)) do
-        if username ~= currentUser and username:match("^[%w_-]+$")
+        if username ~= excludingUser and username:match("^[%w_-]+$")
             and fs.isDir(fs.combine(USER_ROOT, username)) then
             table.insert(profiles, username)
         end
@@ -1049,6 +1057,7 @@ local function draw()
         term.write(detail:sub(1, math.max(0, width - 2)))
         firstButtons = {
             { label = "UPDATE", action = "update" },
+            { label = "OPEN TAB", action = "tab" },
             { label = "SETTINGS", action = "settings" },
         }
         secondButtons = {
@@ -1097,7 +1106,7 @@ local function draw()
         local row = 5
         term.setCursorPos(2, row)
         term.setTextColor(textColor)
-        term.write(("Notification pulses  /  all rednet protocols")
+        term.write(("Incoming notifications  /  matching listeners only")
             :sub(1, math.max(0, width - 2)))
         row = row + 1
         local listenerRows = {}
@@ -1208,7 +1217,9 @@ local function isInHomeDirectory(path)
         or normalizedPath:sub(1, #normalizedHome + 1) == normalizedHome .. "/"
 end
 
-local function runHomeProgram(programPath, ...)
+local function runHomeProgram(programPath, profileContext, ...)
+    local homeDirectory = profileContext.homeDirectory
+    local currentUser = profileContext.user
     local normalizedHome = homeDirectory:gsub("^/+", ""):gsub("/+$", "")
     local normalizedProgram = programPath:gsub("^/+", ""):gsub("/+$", "")
     local virtualProgram
@@ -1247,7 +1258,7 @@ local function runHomeProgram(programPath, ...)
         if type(path) == "string" and path:sub(1, 1) == "/" then
             local username, profilePath = normalizedPath:match("^users/([%w_-]+)/*(.*)$")
             if username then
-                local authorized, accessError = authorizeProfileAccess(username)
+                local authorized, accessError = authorizeProfileAccess(username, profileContext)
                 if not authorized then error(accessError, 0) end
                 return nativeFs.combine(USER_ROOT, username, profilePath)
             end
@@ -1370,17 +1381,26 @@ local function runHomeProgram(programPath, ...)
             return saveConfig(config)
         end
 
-        function api.unlisten(protocol)
+        function api.unlisten(protocol, filterField, filterValue)
             if type(protocol) ~= "string" then return false, "Protocol must be a string." end
+            if filterField ~= nil or filterValue ~= nil then
+                if type(filterField) ~= "string" or #filterField > 32
+                    or not filterField:match("^[%w_]+$")
+                    or type(filterValue) ~= "string" or #filterValue < 1 or #filterValue > 64 then
+                    return false, "Unlisten filters require a valid field and a 1 to 64 character string value."
+                end
+            end
             local config, loadError = loadConfig()
             if not config then return false, loadError end
             for index, listener in ipairs(config.listeners) do
-                if type(listener) == "table" and listener.protocol == protocol then
+                if type(listener) == "table" and listener.protocol == protocol
+                    and (filterField == nil or listener.filterField == filterField
+                        and listener.filterValue == filterValue) then
                     table.remove(config.listeners, index)
                     return saveConfig(config)
                 end
             end
-            return false, "No listener is registered for that protocol."
+            return false, "No matching listener is registered for that protocol."
         end
 
         function api.notify(title, message, source)
@@ -1390,6 +1410,9 @@ local function runHomeProgram(programPath, ...)
             end
             if #tostring(title) > 256 or #tostring(message) > 2000 then
                 return false, "Notification title or message is too long."
+            end
+            if #apiNotificationQueue >= MAX_API_NOTIFICATION_QUEUE then
+                return false, "The notification queue is full."
             end
             table.insert(apiNotificationQueue, {
                 type = "notification",
@@ -1669,6 +1692,7 @@ local function runHomeProgram(programPath, ...)
         environment._G = environment
         environment.debug = nil
         environment.package = nil
+        environment.commands = nil
         environment.require = function(moduleName)
             if moduleName == "notifications" then
                 return notificationsModule
@@ -1718,15 +1742,30 @@ local function runHomeProgram(programPath, ...)
     end
 
     local environment = createEnvironment(_ENV, virtualProgram)
-    return nativeOs.run(environment, nativeFs.combine(homeDirectory, virtualProgram), ...)
+    local target = nativeFs.combine(homeDirectory, virtualProgram)
+    if launchHomeProgramInTab then
+        return nativeMultishell.launch(environment, target, ...)
+    end
+    return nativeOs.run(environment, target, ...)
 end
 
-local function launchSelected()
+local function launchSelected(openInTab)
     local app = apps[selected]
     if not app then
         message = "Select an available program first."
         return
     end
+    if openInTab and (not nativeMultishell or type(nativeMultishell.launch) ~= "function") then
+        message = "This computer does not support program tabs."
+        return
+    end
+    local profileContext = {
+        user = currentUser,
+        homeDirectory = homeDirectory,
+        passwords = profilePasswords,
+        admins = profileAdmins,
+        authorized = authorizedProfiles,
+    }
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
     term.clear()
@@ -1737,22 +1776,50 @@ local function launchSelected()
     shell.setDir(homeDirectory)
     local ok, result
     if isInHomeDirectory(app.path) then
-        ok, result = pcall(runHomeProgram, app.path, homeDirectory)
+        launchHomeProgramInTab = openInTab == true
+        ok, result = pcall(runHomeProgram, app.path, profileContext, profileContext.homeDirectory)
+        launchHomeProgramInTab = false
     elseif app.path:gsub("^/+", "") == SYSTEM_FILE_BROWSER_PATH:gsub("^/+", "") then
         local function runProfileProgram(path, ...)
-            if type(path) ~= "string" or not isInHomeDirectory(path) then
+            local normalizedPath = type(path) == "string" and path:gsub("^/+", ""):gsub("/+$", "")
+            local normalizedHome = profileContext.homeDirectory:gsub("^/+", ""):gsub("/+$", "")
+            if not normalizedPath or (normalizedPath ~= normalizedHome
+                and normalizedPath:sub(1, #normalizedHome + 1) ~= normalizedHome .. "/") then
                 error("Only programs in the active profile home can be run here.", 0)
             end
-            return runHomeProgram(path, ...)
+            return runHomeProgram(path, profileContext, ...)
         end
-        ok, result = pcall(
-            nativeOs.run, _ENV, app.path, homeDirectory,
-            runProfileProgram, listOtherProfiles, authorizeProfileAccess
-        )
+        local function listLaunchProfiles()
+            return listOtherProfiles(profileContext.user)
+        end
+        local function authorizeLaunchProfile(username)
+            return authorizeProfileAccess(username, profileContext)
+        end
+        local runner = openInTab and nativeMultishell.launch or nativeOs.run
+        ok, result = pcall(runner, _ENV, app.path, profileContext.homeDirectory,
+            runProfileProgram, listLaunchProfiles, authorizeLaunchProfile)
     else
-        ok, result = pcall(nativeOs.run, _ENV, app.path, homeDirectory)
+        local runner = openInTab and nativeMultishell.launch or nativeOs.run
+        ok, result = pcall(runner, _ENV, app.path, homeDirectory)
     end
     shell.setDir(previousDirectory)
+    if openInTab then
+        if not ok then
+            message = "Could not open " .. app.name .. " in a tab: " .. tostring(result)
+        elseif not result then
+            message = "Could not open " .. app.name .. " in a tab."
+        else
+            if type(nativeMultishell.setTitle) == "function" then
+                pcall(nativeMultishell.setTitle, result, app.name)
+            end
+            if type(nativeMultishell.setFocus) == "function" then
+                pcall(nativeMultishell.setFocus, result)
+            end
+            message = "Opened " .. app.name .. " in a new tab."
+        end
+        refreshApps()
+        return
+    end
     term.clear()
     term.setCursorPos(1, 1)
     if not ok then
@@ -1847,8 +1914,8 @@ local function uninstallLauncher()
 end
 
 local function showNotificationPopup(notification)
-    local function popupText(value)
-        return tostring(value):gsub("%c", " ")
+    local function popupText(value, limit)
+        return tostring(value):gsub("%c", " "):sub(1, limit)
     end
     if activeNotificationPopupTimer then
         os.cancelTimer(activeNotificationPopupTimer)
@@ -1859,9 +1926,9 @@ local function showNotificationPopup(notification)
         activeNotificationPopup = nil
     end
     table.insert(notificationHistory, 1, {
-        source = popupText(notification.source or "System"),
-        title = popupText(notification.title or "Notification"),
-        message = popupText(notification.message or ""),
+        source = popupText(notification.source or "System", 64),
+        title = popupText(notification.title or "Notification", 256),
+        message = popupText(notification.message or "", 2000),
         receivedAt = os.epoch and os.epoch("utc") or os.time() * 1000,
     })
     while #notificationHistory > 20 do table.remove(notificationHistory) end
@@ -1880,12 +1947,12 @@ local function showNotificationPopup(notification)
     popup.setBackgroundColor(colors.cyan)
     popup.write(string.rep(" ", popupWidth))
     popup.setCursorPos(2, 1)
-    popup.write(popupText(notification.title or "Notification"):sub(1, popupWidth - 2))
+    popup.write(popupText(notification.title or "Notification", 256):sub(1, popupWidth - 2))
     popup.setBackgroundColor(colors.black)
     popup.setCursorPos(2, 2)
-    popup.write(popupText(notification.source or "System"):sub(1, popupWidth - 2))
+    popup.write(popupText(notification.source or "System", 64):sub(1, popupWidth - 2))
     popup.setCursorPos(2, 3)
-    popup.write(popupText(notification.message or ""):sub(1, popupWidth - 2))
+    popup.write(popupText(notification.message or "", 2000):sub(1, popupWidth - 2))
     popup.setVisible(true)
     activeNotificationPopup = popup
     activeNotificationPopupTimer = os.startTimer(4)
@@ -1996,8 +2063,14 @@ local function notificationReceiver()
             loadedConfigRevision = notificationConfigRevision
         end
 
-        while #apiNotificationQueue > 0 do
-            showNotificationPopup(table.remove(apiNotificationQueue, 1))
+        local queuedCount = #apiNotificationQueue
+        for _ = 1, queuedCount do
+            local notification = table.remove(apiNotificationQueue, 1)
+            if notification.user == nil or notification.user == currentUser then
+                showNotificationPopup(notification)
+            else
+                table.insert(apiNotificationQueue, notification)
+            end
         end
 
         openNotificationModems()
@@ -2014,7 +2087,6 @@ local function notificationReceiver()
             end
         elseif event == "rednet_message" then
             if type(payload) == "table" and payload.type == "notification" then
-                local handled = false
                 for _, listener in ipairs(activeListeners) do
                     if listener.protocol == protocol
                         and (not listener.filterField
@@ -2028,11 +2100,9 @@ local function notificationReceiver()
                                 title = title,
                                 message = body,
                             })
-                            handled = true
                         end
                     end
                 end
-                if not handled then showNotificationPopup(payload) end
             elseif type(payload) == "table" then
                 for _, listener in ipairs(activeListeners) do
                     if listener.protocol == protocol
@@ -2131,6 +2201,8 @@ while true do
                 elseif action == "settings" then
                     screen = "settings"
                     message = "Click a setting to change it."
+                elseif action == "tab" then
+                    launchSelected(true)
                 end
             elseif y == height - 1 then
                 local action = buttonAt(secondButtons, x)

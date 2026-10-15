@@ -144,6 +144,20 @@ local function subscribeForNotifications()
     return true
 end
 
+local function unsubscribeFromNotifications()
+    if not account then return false, "Sign in to disable email notifications." end
+    local response, err = notifications.request(NOTIFICATION_CONTROL_PROTOCOL, {
+        type = "unsubscribe",
+        email = account.email,
+        password = account.password,
+    }, SERVER_NAME, TIMEOUT)
+    if not response then return false, err end
+    if response.type ~= "unsubscribed" then
+        return false, "Email server did not confirm notification unsubscription."
+    end
+    return true
+end
+
 local function choose(title, subtitle, choices)
     drawHeader(title, subtitle)
     local width, height = term.getSize()
@@ -315,8 +329,19 @@ local function signOut()
         notice("SIGN OUT", deleteError)
         return false
     end
+    local unlistened, unlistenError = notifications.unlisten(
+        NOTIFICATION_PROTOCOL, "source", "Email"
+    )
+    local unsubscribed, unsubscribeError = unsubscribeFromNotifications()
     account = nil
     currentFolder = "Inbox"
+    if not unsubscribed then
+        notice("EMAIL NOTIFICATIONS", "Signed out, but the server unsubscribe failed: "
+            .. tostring(unsubscribeError))
+    elseif not unlistened and unlistenError ~= "No matching listener is registered for that protocol." then
+        notice("EMAIL NOTIFICATIONS", "Signed out, but the local listener could not be removed: "
+            .. tostring(unlistenError))
+    end
     return true
 end
 

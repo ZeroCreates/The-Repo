@@ -708,7 +708,7 @@ local function checkStatus()
 end
 
 openModems()
-if not notifications == nil then
+if notifications ~= nil then
     local listenerRegistered, listenerError = notifications.listen(
         NOTIFICATION_PROTOCOL, "title", "message", "Market", "source", "Market"
     )
