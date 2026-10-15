@@ -726,7 +726,9 @@ local function chooseUser()
         term.setBackgroundColor(colors.black)
 
         local event, button, x, y = os.pullEventRaw()
-        if event == "mouse_click" and button == 1 then
+        if event == "mouse_scroll" and y >= 5 and y < 5 + visibleRows then
+            userSelected = math.max(1, math.min(#users, userSelected + button))
+        elseif event == "mouse_click" and button == 1 then
             local index = userFirstVisible + y - 5
             if y >= 5 and y < 5 + visibleRows and index >= userFirstVisible and index <= #users then
                 local wasSelected = userSelected == index
@@ -2085,7 +2087,14 @@ end
 while true do
     local firstButtons, secondButtons, listenerRows = draw()
     local event, button, x, y = os.pullEventRaw()
-    if event == "mouse_click" and button == 1 then
+    if event == "mouse_scroll" then
+        local _, height = term.getSize()
+        if screen == "apps" and y >= 4 and y < 4 + math.max(1, height - 12) then
+            selected = math.max(1, math.min(#apps, selected + button))
+        elseif screen == "notifications" and y >= 5 and y < height - 4 then
+            notificationListenerPage = math.max(1, notificationListenerPage + button)
+        end
+    elseif event == "mouse_click" and button == 1 then
         local _, height = term.getSize()
         if screen == "apps" then
             local visibleRows = math.max(1, height - 12)

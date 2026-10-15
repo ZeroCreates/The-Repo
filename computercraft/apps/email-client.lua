@@ -91,7 +91,12 @@ local function readChoice(help)
     local buttons = drawChoices(help)
     while true do
         local event, button, x, y = os.pullEvent()
-        if event == "mouse_click" and button == 1 then
+        if event == "mouse_scroll" then
+            local scrollAction = button > 0 and "n" or "p"
+            for _, choice in ipairs(buttons) do
+                if choice.key == scrollAction then return scrollAction end
+            end
+        elseif event == "mouse_click" and button == 1 then
             for _, choice in ipairs(buttons) do
                 if y == choice.row and x >= choice.left and x <= choice.right then
                     return choice.key
@@ -161,7 +166,12 @@ local function choose(title, subtitle, choices)
 
     while true do
         local event, button, x, y = os.pullEvent()
-        if event == "mouse_click" and button == 1 and x >= 2 then
+        if event == "mouse_scroll" then
+            local scrollAction = button > 0 and "next" or "previous"
+            for _, choice in ipairs(choices) do
+                if choice.key == scrollAction then return scrollAction end
+            end
+        elseif event == "mouse_click" and button == 1 and x >= 2 then
             local index = y - firstRow + 1
             if index >= 1 and index <= #choices and y <= lastRow then
                 return choices[index].key
@@ -495,7 +505,14 @@ local function inbox(category)
             local buttons = drawChoices(help)
             while true do
                 local event, button, x, y = os.pullEvent()
-                if event == "mouse_click" and button == 1 then
+                if event == "mouse_scroll" then
+                    if button > 0 and endIndex < #response.messages then
+                        selected = "n"
+                    elseif button < 0 and page > 1 then
+                        selected = "p"
+                    end
+                    if selected then break end
+                elseif event == "mouse_click" and button == 1 then
                     for _, choice in ipairs(buttons) do
                         if y == choice.row and x >= choice.left and x <= choice.right then
                             selected = choice.key

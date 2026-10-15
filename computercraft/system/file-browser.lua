@@ -736,6 +736,11 @@ while true do
         elseif button == keys.leftCtrl or button == keys.rightCtrl then
             controlHeld = false
         end
+    elseif event == "mouse_scroll" then
+        local _, height = term.getSize()
+        if y >= 3 and y < 3 + visibleRows(height) then
+            selected = math.max(1, math.min(#entries, selected + button))
+        end
     elseif event == "mouse_click" then
         local _, height = term.getSize()
         local index = firstVisible + y - 3

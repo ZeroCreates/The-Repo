@@ -6,6 +6,7 @@ local USER_ROOT = "/users/"
 local SYSTEM_DIRECTORY = "/.launcher"
 local SYSTEM_APP_DIRECTORY = SYSTEM_DIRECTORY .. "/apps"
 local CACHE_DIRECTORY = SYSTEM_DIRECTORY .. "/cache"
+local INSTALLED_VERSIONS_PATH = SYSTEM_DIRECTORY .. "/app-versions.json"
 local homeDirectory = USER_ROOT .. "default"
 local appDirectory = homeDirectory .. "/apps"
 local username = "default"
@@ -14,6 +15,7 @@ local apps = {}
 local selected = 1
 local firstVisible = 1
 local message = "Loading app catalog from GitHub..."
+local installedVersions = {}
 local themeIndex = 1
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
@@ -21,6 +23,92 @@ local themes = {
     { accent = colors.orange, highlight = colors.red },
     { accent = colors.purple, highlight = colors.magenta },
 }
+
+local function versionParts(version)
+    if type(version) ~= "string" then return nil end
+    local major, minor, patch = version:match("^(%d+)%.(%d+)%.(%d+)$")
+    if not major then return nil end
+    return { tonumber(major), tonumber(minor), tonumber(patch) }
+end
+
+local function isVersionNewer(first, second)
+    local firstParts, secondParts = versionParts(first), versionParts(second)
+    if not firstParts or not secondParts then return false end
+    for index = 1, 3 do
+        if firstParts[index] ~= secondParts[index] then
+            return firstParts[index] > secondParts[index]
+        end
+    end
+    return false
+end
+
+local function versionKey(app)
+    if app.scope == "system" then return "system/" .. app.file end
+    return "user/" .. username .. "/" .. app.file
+end
+
+local function loadInstalledVersions()
+    if not fs.exists(INSTALLED_VERSIONS_PATH) then return {} end
+    local file = fs.open(INSTALLED_VERSIONS_PATH, "r")
+    if not file then return {} end
+    local contents = file.readAll()
+    file.close()
+    local ok, saved = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(saved) ~= "table" then return {} end
+
+    local versions = {}
+    for key, version in pairs(saved) do
+        if type(key) == "string" and versionParts(version) then
+            versions[key] = version
+        end
+    end
+    return versions
+end
+
+local function saveInstalledVersions()
+    local serialized, contents = pcall(textutils.serializeJSON, installedVersions)
+    if not serialized or type(contents) ~= "string" then
+        return false, "Could not serialize installed app versions."
+    end
+    local made, makeError = pcall(fs.makeDir, SYSTEM_DIRECTORY)
+    if not made then return false, "Could not create version metadata folder: " .. tostring(makeError) end
+
+    local temporary = INSTALLED_VERSIONS_PATH .. ".tmp"
+    local backup = INSTALLED_VERSIONS_PATH .. ".bak"
+    if fs.exists(temporary) then fs.delete(temporary) end
+    if fs.exists(backup) then fs.delete(backup) end
+    local file = fs.open(temporary, "w")
+    if not file then return false, "Could not create installed app version metadata." end
+    file.write(contents)
+    file.close()
+
+    if fs.exists(INSTALLED_VERSIONS_PATH) then
+        local backedUp, backupError = pcall(fs.move, INSTALLED_VERSIONS_PATH, backup)
+        if not backedUp then
+            fs.delete(temporary)
+            return false, "Could not back up installed app versions: " .. tostring(backupError)
+        end
+    end
+    local moved, moveError = pcall(fs.move, temporary, INSTALLED_VERSIONS_PATH)
+    if not moved then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        if fs.exists(backup) then fs.move(backup, INSTALLED_VERSIONS_PATH) end
+        return false, "Could not save installed app versions: " .. tostring(moveError)
+    end
+    if fs.exists(backup) then fs.delete(backup) end
+    return true
+end
+
+local function appVersionStatus(app)
+    local destinationDirectory = app.scope == "system" and SYSTEM_APP_DIRECTORY or appDirectory
+    if not fs.exists(fs.combine(destinationDirectory, app.file)) then return "NEW" end
+
+    local installedVersion = installedVersions[versionKey(app)]
+    if not versionParts(installedVersion) then return "UNKNOWN" end
+    if isVersionNewer(app.version, installedVersion) then return "UPDATE", installedVersion end
+    if isVersionNewer(installedVersion, app.version) then return "AHEAD", installedVersion end
+    return "CURRENT", installedVersion
+end
 
 local function loadTheme()
     local path = SYSTEM_DIRECTORY .. "/settings.json"
@@ -77,6 +165,7 @@ local function loadCatalog()
     for _, entry in ipairs(entries) do
         if type(entry) ~= "table" or type(entry.name) ~= "string"
             or type(entry.source) ~= "string" or type(entry.file) ~= "string"
+            or type(entry.version) ~= "string" or not entry.version:match("^%d+%.%d+%.%d+$")
             or type(entry.description) ~= "string"
             or entry.name == "" or entry.description == ""
             or not entry.file:match("^[%w][%w_.%-]*%.lua$")
@@ -150,27 +239,52 @@ local function draw()
     local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
     for index = firstVisible, lastVisible do
         local row = index - firstVisible + 3
+        local status = appVersionStatus(apps[index])
+        local statusColors = {
+            NEW = colors.lightGray,
+            UNKNOWN = colors.orange,
+            UPDATE = colors.yellow,
+            CURRENT = colors.lime,
+            AHEAD = colors.cyan,
+        }
         term.setCursorPos(2, row)
+        term.setTextColor(index == selected and colors.white or statusColors[status])
         if index == selected then
             term.setBackgroundColor(highlight)
-            term.setTextColor(colors.white)
-            term.write(("> " .. apps[index].name):sub(1, math.max(0, width - 2)))
+            term.write(("> " .. apps[index].name .. " [" .. status .. "]")
+                :sub(1, math.max(0, width - 2)))
             term.setBackgroundColor(colors.black)
         else
-            term.setTextColor(colors.white)
-            term.write(("  " .. apps[index].name):sub(1, math.max(0, width - 2)))
+            term.write(("  " .. apps[index].name .. " [" .. status .. "]")
+                :sub(1, math.max(0, width - 2)))
         end
     end
 
     term.setCursorPos(2, height - 3)
     term.setTextColor(colors.lightGray)
-    local description = apps[selected] and apps[selected].description or "No apps available."
-    term.write(description:sub(1, math.max(0, width - 2)))
+    local selectedApp = apps[selected]
+    local versionSummary = "No apps available."
+    if selectedApp then
+        local status, installedVersion = appVersionStatus(selectedApp)
+        if status == "NEW" then
+            versionSummary = "Not installed | Latest v" .. selectedApp.version
+        elseif status == "UNKNOWN" then
+            versionSummary = "Installed version unknown | Latest v" .. selectedApp.version
+        elseif status == "UPDATE" then
+            versionSummary = "Update: v" .. installedVersion .. " -> v" .. selectedApp.version
+        elseif status == "AHEAD" then
+            versionSummary = "Installed v" .. installedVersion .. " is newer than catalog v" .. selectedApp.version
+        else
+            versionSummary = "Up to date: v" .. installedVersion
+        end
+        versionSummary = versionSummary .. " | " .. selectedApp.description
+    end
+    term.write(versionSummary:sub(1, math.max(0, width - 2)))
     term.setCursorPos(2, height - 2)
     term.setTextColor(colors.yellow)
     term.write(message:sub(1, math.max(0, width - 2)))
     local buttons = {
-        { label = "UPDATE", action = "update" },
+        { label = "INSTALL/UPDATE", action = "update" },
         { label = "REFRESH", action = "refresh" },
         { label = "QUIT", action = "quit" },
     }
@@ -306,7 +420,7 @@ local function setHomeDirectory(path)
     return true
 end
 
-local function downloadApp(app)
+local function downloadApp(app, skipOverwriteConfirmation)
     if not app then
         message = "There are no apps available to download."
         return
@@ -325,7 +439,7 @@ local function downloadApp(app)
     local destinationDirectory = app.scope == "system" and SYSTEM_APP_DIRECTORY or appDirectory
     fs.makeDir(destinationDirectory)
     local destination = fs.combine(destinationDirectory, app.file)
-    if not confirmOverwrite(destination) then
+    if not skipOverwriteConfirmation and not confirmOverwrite(destination) then
         message = "Download cancelled."
         return
     end
@@ -358,7 +472,16 @@ local function downloadApp(app)
         message = app.name .. " installed, but its catalog name could not be saved: " .. nameError
         return
     end
-    message = app.name .. " downloaded as " .. destination .. "."
+    local key = versionKey(app)
+    local previousVersion = installedVersions[key]
+    installedVersions[key] = app.version
+    local versionSaved, versionError = saveInstalledVersions()
+    if not versionSaved then
+        installedVersions[key] = previousVersion
+        message = app.name .. " installed, but its version could not be saved: " .. versionError
+        return
+    end
+    message = app.name .. " v" .. app.version .. " installed as " .. destination .. "."
 end
 
 local function updateApp(app)
@@ -369,10 +492,19 @@ local function updateApp(app)
     local destinationDirectory = app.scope == "system" and SYSTEM_APP_DIRECTORY or appDirectory
     local installedPath = fs.combine(destinationDirectory, app.file)
     if not fs.exists(installedPath) then
-        message = app.name .. " is not installed yet. Use Download first."
+        downloadApp(app, true)
         return
     end
-    downloadApp(app)
+    local installedVersion = installedVersions[versionKey(app)]
+    if installedVersion == app.version then
+        message = app.name .. " is already up to date (v" .. app.version .. ")."
+        return
+    end
+    if isVersionNewer(installedVersion, app.version) then
+        message = app.name .. " v" .. installedVersion .. " is newer than catalog v" .. app.version .. "."
+        return
+    end
+    downloadApp(app, true)
 end
 
 local mode, target, requestedHome = ...
@@ -388,6 +520,7 @@ if not homeOk then
     printError(homeError)
     return
 end
+installedVersions = loadInstalledVersions()
 loadTheme()
 local catalog, catalogError = loadCatalog()
 if not catalog then
@@ -485,7 +618,7 @@ end
 if mode == "update" then
     for _, app in ipairs(apps) do
         if app.file == target then
-            downloadApp(app)
+            updateApp(app)
             print(message)
             return
         end
@@ -518,6 +651,11 @@ while true do
             end
         elseif key == keys.q or key == keys.escape then
             return
+        end
+    elseif event == "mouse_scroll" then
+        local _, height = term.getSize()
+        if y >= 3 and y < 3 + visibleAppRows(height) then
+            selected = math.max(1, math.min(#apps, selected + key))
         end
     elseif event == "mouse_click" then
         local _, height = term.getSize()

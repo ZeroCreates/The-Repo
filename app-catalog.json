@@ -4,36 +4,42 @@
     "source": "computercraft/system/app-downloader.lua",
     "file": "app-downloader.lua",
     "scope": "system",
+    "version": "1.0.0",
     "description": "Download and update ComputerCraft apps"
   },
   {
     "name": "Calculator",
     "source": "computercraft/apps/calculator.lua",
     "file": "calculator.lua",
+    "version": "1.0.0",
     "description": "Basic two-number calculator"
   },
   {
     "name": "Clock",
     "source": "computercraft/apps/clock.lua",
     "file": "clock.lua",
+    "version": "1.0.0",
     "description": "Live date and time display"
   },
   {
     "name": "Countdown Timer",
     "source": "computercraft/apps/countdown.lua",
     "file": "countdown.lua",
+    "version": "1.0.0",
     "description": "Simple seconds countdown"
   },
   {
     "name": "Dice Roller",
     "source": "computercraft/apps/dice.lua",
     "file": "dice.lua",
+    "version": "1.0.0",
     "description": "Roll configurable dice"
   },
   {
     "name": "Rift-Mail",
     "source": "computercraft/apps/email-client.lua",
     "file": "email-client.lua",
+    "version": "1.0.0",
     "description": "Create saved email accounts and send messages over rednet"
   },
   {
@@ -41,30 +47,35 @@
     "source": "computercraft/system/file-browser.lua",
     "file": "file-browser.lua",
     "scope": "system",
+    "version": "1.0.0",
     "description": "Browse and edit files; hold Alt to show hidden files and private data"
   },
   {
     "name": "Lua Console",
     "source": "computercraft/apps/lua-console.lua",
     "file": "lua-console.lua",
+    "version": "1.0.0",
     "description": "Run Lua expressions and statements interactively"
   },
   {
     "name": "Market Provider",
     "source": "computercraft/apps/market-provider.lua",
     "file": "market-provider.lua",
+    "version": "1.0.0",
     "description": "Manage provider products and orders"
   },
   {
     "name": "Notes",
     "source": "computercraft/apps/notes.lua",
     "file": "notes.lua",
+    "version": "1.0.0",
     "description": "Read and write local notes"
   },
   {
     "name": "The Market",
     "source": "computercraft/apps/market-client.lua",
     "file": "market-client.lua",
+    "version": "1.0.0",
     "description": "Allows users to shop for items that are available for sale in the market"
   }
 ]
