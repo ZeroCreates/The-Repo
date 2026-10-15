@@ -15,6 +15,13 @@
     "description": "Basic two-number calculator"
   },
   {
+    "name": "Casino",
+    "source": "computercraft/apps/casino.lua",
+    "file": "casino.lua",
+    "version": "1.0.0",
+    "description": "Install and launch Casino games with a shared server bankroll"
+  },
+  {
     "name": "Clock",
     "source": "computercraft/apps/clock.lua",
     "file": "clock.lua",
@@ -77,5 +84,12 @@
     "file": "market-client.lua",
     "version": "1.0.1",
     "description": "Allows users to shop for items that are available for sale in the market"
+  },
+  {
+    "name": "Rift Jobs",
+    "source": "computercraft/apps/jobs.lua",
+    "file": "jobs.lua",
+    "version": "1.0.0",
+    "description": "Post player jobs, claim work, and review submissions"
   }
 ]
