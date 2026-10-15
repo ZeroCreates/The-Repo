@@ -29,9 +29,10 @@ local function drawHeader(subtitle)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
     term.clear()
-    writeAt(1, 1, string.rep(" ", width), colors.white, colors.cyan)
-    writeAt(2, 1, "RIFT CASINO", colors.white, colors.cyan)
+    writeAt(1, 1, string.rep(" ", width), colors.yellow, colors.red)
+    writeAt(2, 1, "RIFT CASINO  /  PRIVATE TABLES", colors.yellow, colors.red)
     writeAt(2, 2, subtitle, colors.lightGray)
+    writeAt(1, 3, string.rep("=", width), colors.orange)
 end
 
 local function drawButtons(options)
@@ -45,8 +46,8 @@ local function drawButtons(options)
         local left = math.floor(column * width / columns) + 1
         local right = math.floor((column + 1) * width / columns)
         local label = ("[ " .. option.label .. " ]"):sub(1, right - left + 1)
-        writeAt(left, row, string.rep(" ", right - left + 1), colors.black, colors.lightBlue)
-        writeAt(left, row, label, colors.black, colors.lightBlue)
+        writeAt(left, row, string.rep(" ", right - left + 1), colors.black, colors.orange)
+        writeAt(left, row, label, colors.black, colors.orange)
         table.insert(buttons, { id = option.id, key = option.key, row = row, left = left, right = right })
     end
     return buttons
@@ -175,6 +176,45 @@ local function updateBalance()
     end
 end
 
+local function drawGamePanel(x, y, width, index, title, description)
+    if width < 12 then return end
+    local border = "+" .. string.rep("-", width - 2) .. "+"
+    writeAt(x, y, border, colors.orange)
+    writeAt(x, y + 1, "|" .. (" " .. index .. "  " .. title):sub(1, width - 2)
+        .. "|", colors.yellow)
+    writeAt(x, y + 2, "|" .. (" " .. description):sub(1, width - 2) .. "|", colors.lightGray)
+    writeAt(x, y + 3, border, colors.orange)
+end
+
+local function drawCasinoMenu(options)
+    local width, height = term.getSize()
+    local bankroll = balance and ("" .. balance .. " CHIPS") or "SERVER OFFLINE"
+    drawHeader("CARD ROOM  /  SERVER-MANAGED CHIP BANK")
+    writeAt(2, 5, "YOUR BANKROLL", colors.orange)
+    writeAt(2, 6, bankroll, colors.yellow)
+    local connected = balance ~= nil
+    local connectionText = connected and "+ ONLINE" or "! OFFLINE"
+    writeAt(math.max(2, width - #connectionText - 1), 6, connectionText,
+        connected and colors.lime or colors.red)
+
+    if width >= 42 then
+        local panelWidth = math.floor((width - 5) / 2)
+        local rightPanelX = 2 + panelWidth + 2
+        drawGamePanel(2, 8, panelWidth, "01", "BLACKJACK", "Dealer  /  3:2 natural")
+        drawGamePanel(rightPanelX, 8, panelWidth, "02", "HOLD'EM", "You + three table bots")
+    else
+        local panelWidth = width - 3
+        drawGamePanel(2, 8, panelWidth, "01", "BLACKJACK", "Dealer  /  3:2 natural")
+        drawGamePanel(2, 11, panelWidth, "02", "HOLD'EM", "You + three bots")
+    end
+
+    local statusHeadingRow = width >= 42 and height - 5 or height - 4
+    local statusRow = statusHeadingRow + 1
+    writeAt(2, statusHeadingRow, "HOUSE NOTE", colors.orange)
+    writeAt(2, statusRow, statusMessage, colors.lightGray)
+    return drawButtons(options)
+end
+
 local function launchGame(game)
     if not gameInstalled(game) then
         local installed, err = downloadGame(game)
@@ -206,14 +246,9 @@ end
 
 local function startModemsAndInstall()
     openModems()
-    local missing = false
-    for _, game in ipairs(games) do
-        if not gameInstalled(game) then missing = true end
-    end
-    if missing then
-        local installed, err = installGames(true)
-        statusMessage = installed and "Both Casino games are installed." or ("INSTALL FAILED  /  " .. tostring(err))
-    end
+    local installed, err = installGames(false)
+    statusMessage = installed and "Casino games installed and current."
+        or ("GAME UPDATE FAILED  /  " .. tostring(err))
     updateBalance()
 end
 
@@ -228,13 +263,6 @@ elseif requestedGame == "holdem" then
 end
 
 while true do
-    local bankroll = balance and ("BANKROLL  " .. balance .. " CHIPS") or "BANKROLL  SERVER OFFLINE"
-    drawHeader(bankroll)
-    writeAt(2, 5, "BLACKJACK", colors.yellow)
-    writeAt(2, 6, "Dealer game  /  shared Casino bankroll", colors.lightGray)
-    writeAt(2, 8, "TEXAS HOLD'EM", colors.yellow)
-    writeAt(2, 9, "Three automated opponents  /  shared bankroll", colors.lightGray)
-    writeAt(2, 12, statusMessage, colors.white)
     local options = {
         { id = "blackjack", label = "BLACKJACK", key = keys.b },
         { id = "holdem", label = "HOLD'EM", key = keys.h },
@@ -246,7 +274,7 @@ while true do
     end
     table.insert(options, { id = "quit", label = "QUIT", key = keys.q })
 
-    local choice = waitForAction(drawButtons(options))
+    local choice = waitForAction(drawCasinoMenu(options))
     if choice == "blackjack" then
         launchGame(games[1])
     elseif choice == "holdem" then
