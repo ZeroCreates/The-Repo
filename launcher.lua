@@ -57,6 +57,24 @@ local function readJSONFile(path)
     return value
 end
 
+local function readPassword()
+    local originalPullEvent = nativeOs.pullEvent
+    local originalPullEventRaw = nativeOs.pullEventRaw
+    local function pullEventWithoutTerminate(filter)
+        while true do
+            local event = { originalPullEventRaw(filter) }
+            if event[1] ~= "terminate" then return table.unpack(event) end
+        end
+    end
+    nativeOs.pullEvent = pullEventWithoutTerminate
+    nativeOs.pullEventRaw = pullEventWithoutTerminate
+    local ok, password = pcall(read, "*")
+    nativeOs.pullEvent = originalPullEvent
+    nativeOs.pullEventRaw = originalPullEventRaw
+    if not ok then error(password, 0) end
+    return password
+end
+
 local function notificationConfigPath(profilePath)
     if type(profilePath) ~= "string" then
         return nil, "No active profile is available for notification settings."
@@ -492,7 +510,7 @@ local function chooseUser()
         print("PROFILE LOCKED")
         term.setTextColor(colors.white)
         write("Password for " .. username .. ": ")
-        local entered = read("*")
+        local entered = readPassword()
         if entered == expected then return true end
         profileMessage = "Incorrect password. Try again."
         return false
@@ -527,13 +545,13 @@ local function chooseUser()
             term.setCursorPos(1, 1)
             print("Set a profile password")
             write("Password: ")
-            password = read("*")
+            password = readPassword()
             if password == "" then
                 profileMessage = "Password cannot be empty."
                 return false
             end
             write("Confirm password: ")
-            if read("*") ~= password then
+            if readPassword() ~= password then
                 profileMessage = "Passwords did not match."
                 return false
             end
@@ -778,7 +796,7 @@ local function authorizeProfileAccess(username)
     term.setTextColor(colors.white)
     print("Enter " .. username .. "'s password, or type sudo as an admin.")
     write("Password: ")
-    local entered = read("*")
+    local entered = readPassword()
     if entered == expected then
         authorizedProfiles[username] = true
         return true
