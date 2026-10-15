@@ -39,7 +39,7 @@
     "name": "Rift-Mail",
     "source": "computercraft/apps/email-client.lua",
     "file": "email-client.lua",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Create saved email accounts and send messages over rednet"
   },
   {
@@ -75,7 +75,7 @@
     "name": "The Market",
     "source": "computercraft/apps/market-client.lua",
     "file": "market-client.lua",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Allows users to shop for items that are available for sale in the market"
   }
 ]
