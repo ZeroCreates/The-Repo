@@ -10,7 +10,7 @@ local games = {
     { name = "Blackjack", file = "blackjack.lua", source = "computercraft/apps/blackjack.lua", argument = "blackjack" },
     { name = "Texas Hold'em", file = "texas-holdem.lua", source = "computercraft/apps/texas-holdem.lua", argument = "holdem" },
 }
-local appDirectory = fs.getDir(shell.getRunningProgram())
+local GAMES_DIRECTORY = "/games"
 local balance
 local statusMessage = ""
 
@@ -110,7 +110,7 @@ local function openModems()
 end
 
 local function gamePath(game)
-    return fs.combine(appDirectory, game.file)
+    return fs.combine(GAMES_DIRECTORY, game.file)
 end
 
 local function gameInstalled(game)
@@ -130,7 +130,7 @@ local function downloadGame(game)
     response.close()
     if type(contents) ~= "string" or contents == "" then return false, "The downloaded game was empty." end
 
-    fs.makeDir(appDirectory)
+    fs.makeDir(GAMES_DIRECTORY)
     local destination = gamePath(game)
     local temporary = destination .. ".casino-tmp"
     local backup = destination .. ".casino-bak"
