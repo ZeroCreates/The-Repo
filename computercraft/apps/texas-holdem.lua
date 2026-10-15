@@ -3,7 +3,10 @@ if type(riftCasino) ~= "table" then
     return
 end
 local casino = riftCasino
-local BOT_STACK_FILE = "texas-holdem-bots.db"
+local BOT_STACK_STORAGE = "casino/holdem-bot-stacks"
+local LEGACY_BOT_STACK_FILE = "texas-holdem-bots.db"
+local LEGACY_STACK_FILE = "texas-holdem-stacks.db"
+local storage = require("storage")
 local STARTING_STACK = 1000
 local SMALL_BLIND = 5
 local BIG_BLIND = 10
@@ -104,29 +107,69 @@ end
 local function saveStacks()
     local savedStacks = {}
     for seat = 2, SEAT_COUNT do savedStacks[seat - 1] = players[seat].stack end
-    local file = fs.open(BOT_STACK_FILE, "w")
-    if not file then return false end
-    file.write(textutils.serialize(savedStacks))
-    file.close()
-    return true
+    local saved, saveError = storage.write(BOT_STACK_STORAGE, savedStacks)
+    if not saved then error("Could not save Casino bot stacks: " .. tostring(saveError), 0) end
+end
+
+local function applyBotStacks(savedStacks)
+    if type(savedStacks) ~= "table" then
+        error("Casino bot stack storage is invalid; refusing to reset bot stacks.")
+    end
+    for seat = 2, SEAT_COUNT do
+        local stack = savedStacks[seat - 1]
+        if type(stack) ~= "number" or stack < 0 or stack % 1 ~= 0 then
+            error("Casino bot stack storage is invalid; refusing to reset bot stacks.")
+        end
+        players[seat].stack = stack
+    end
+end
+
+local function removeLegacyStackFiles()
+    for _, path in ipairs({ LEGACY_BOT_STACK_FILE, LEGACY_STACK_FILE }) do
+        if fs.exists(path) then pcall(fs.delete, path) end
+    end
+end
+
+local function readLegacyBotStacks()
+    for _, path in ipairs({ LEGACY_BOT_STACK_FILE, LEGACY_STACK_FILE }) do
+        if fs.exists(path) then
+            local file = fs.open(path, "r")
+            if not file then error("Could not read legacy Hold'em stacks; refusing to reset bot stacks.") end
+            local contents = file.readAll()
+            file.close()
+            local ok, legacy = pcall(textutils.unserialize, contents)
+            if not ok or type(legacy) ~= "table" then
+                error("Could not parse legacy Hold'em stacks; refusing to reset bot stacks.")
+            end
+            local savedStacks = {}
+            for seat = 2, SEAT_COUNT do
+                local index = path == LEGACY_STACK_FILE and seat or seat - 1
+                local stack = legacy[index]
+                if type(stack) ~= "number" or stack < 0 or stack % 1 ~= 0 then
+                    error("Legacy Hold'em stacks are invalid; refusing to reset bot stacks.")
+                end
+                savedStacks[seat - 1] = stack
+            end
+            return savedStacks
+        end
+    end
 end
 
 local function loadStacks()
-    if fs.exists(BOT_STACK_FILE) then
-        local file = fs.open(BOT_STACK_FILE, "r")
-        if file then
-            local contents = file.readAll()
-            file.close()
-            local ok, savedStacks = pcall(textutils.unserialize, contents)
-            if ok and type(savedStacks) == "table" then
-                for seat = 2, SEAT_COUNT do
-                    local stack = savedStacks[seat - 1]
-                    if type(stack) == "number" and stack >= 0 and stack % 1 == 0 then
-                        players[seat].stack = stack
-                    end
-                end
-            end
+    local savedStacks, storageError = storage.read(BOT_STACK_STORAGE)
+    if savedStacks ~= nil then
+        applyBotStacks(savedStacks)
+        removeLegacyStackFiles()
+    elseif storageError == "Stored data was not found." then
+        local legacyStacks = readLegacyBotStacks()
+        if legacyStacks then
+            local saved, saveError = storage.write(BOT_STACK_STORAGE, legacyStacks)
+            if not saved then error("Could not migrate Hold'em bot stacks: " .. tostring(saveError), 0) end
+            applyBotStacks(legacyStacks)
+            removeLegacyStackFiles()
         end
+    else
+        error("Could not load Hold'em bot stacks: " .. tostring(storageError), 0)
     end
     local response, err = casino.getBalance()
     if not response then error(err) end
