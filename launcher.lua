@@ -24,6 +24,8 @@ local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
 local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
 local LEGACY_SETTINGS_PATH = "/.launcher-settings.json"
+local STARTUP_PATH = "/startup.lua"
+local STARTUP_TEMPORARY_PATH = SYSTEM_DIRECTORY .. "/startup.lua.tmp"
 local THEMES = {
     { name = "Ocean", accent = colors.cyan, highlight = colors.blue },
     { name = "Forest", accent = colors.lime, highlight = colors.green },
@@ -159,6 +161,53 @@ local function saveSettings()
     end
     if fs.exists(backup) then fs.delete(backup) end
     message = "Settings saved."
+    return true
+end
+
+local function ensureStartupProgram()
+    if fs.exists(STARTUP_PATH) then
+        if fs.isDir(STARTUP_PATH) then
+            return false, "Cannot create startup program: /startup.lua is a directory."
+        end
+        return true
+    end
+
+    local made, makeError = pcall(fs.makeDir, SYSTEM_DIRECTORY)
+    if not made then
+        return false, "Could not create startup folder: " .. tostring(makeError)
+    end
+    if fs.exists(STARTUP_TEMPORARY_PATH) then
+        if fs.isDir(STARTUP_TEMPORARY_PATH) then
+            return false, "Cannot create startup program: temporary path is a directory."
+        end
+        fs.delete(STARTUP_TEMPORARY_PATH)
+    end
+
+    local file = fs.open(STARTUP_TEMPORARY_PATH, "w")
+    if not file then
+        return false, "Could not create the temporary startup program."
+    end
+    local wrote, writeError = pcall(file.write,
+        'if not shell.run("/launcher.lua") then\n'
+            .. '    printError("Could not start /launcher.lua.")\n'
+            .. "end\n"
+    )
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        if fs.exists(STARTUP_TEMPORARY_PATH) then fs.delete(STARTUP_TEMPORARY_PATH) end
+        return false, "Could not write the startup program: "
+            .. tostring(not wrote and writeError or closeError)
+    end
+    if fs.exists(STARTUP_PATH) then
+        fs.delete(STARTUP_TEMPORARY_PATH)
+        return true
+    end
+
+    local moved, moveError = pcall(fs.move, STARTUP_TEMPORARY_PATH, STARTUP_PATH)
+    if not moved then
+        if fs.exists(STARTUP_TEMPORARY_PATH) then fs.delete(STARTUP_TEMPORARY_PATH) end
+        return false, "Could not install the startup program: " .. tostring(moveError)
+    end
     return true
 end
 
@@ -332,47 +381,6 @@ local function chooseUser()
     local userFirstVisible = 1
     local profileMessage = ""
 
-    local function askPasswordOption()
-        local width, height = term.getSize()
-        local buttons = {
-            { label = "NO PASSWORD", action = "none" },
-            { label = "SET PASSWORD", action = "set" },
-            { label = "CANCEL", action = "cancel" },
-        }
-        term.setBackgroundColor(colors.black)
-        term.setTextColor(colors.white)
-        term.clear()
-        term.setCursorPos(1, 1)
-        term.setTextColor(colors.cyan)
-        print("PROFILE PASSWORD")
-        term.setTextColor(colors.lightGray)
-        print("This password only gates access through the launcher.")
-        print("It is saved unencrypted; other programs can read profile files.")
-        local slotWidth = math.max(1, math.floor(width / #buttons))
-        for index, option in ipairs(buttons) do
-            local left = (index - 1) * slotWidth + 1
-            local buttonWidth = index == #buttons and width - left + 1 or slotWidth
-            term.setCursorPos(left, height)
-            term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
-            term.setTextColor(colors.white)
-            term.write(("[" .. option.label .. "]"):sub(1, buttonWidth))
-            option.left = left
-            option.right = left + buttonWidth - 1
-        end
-        while true do
-            local event, button, x, y = os.pullEventRaw()
-            if event == "mouse_click" and button == 1 and y == height then
-                for _, option in ipairs(buttons) do
-                    if x >= option.left and x <= option.right then
-                        if option.action == "none" then return false end
-                        if option.action == "set" then return true end
-                        return nil
-                    end
-                end
-            end
-        end
-    end
-
     local function authenticate(username)
         local expected = profilePasswords[username]
         if not expected then return true end
@@ -390,11 +398,23 @@ local function chooseUser()
         return false
     end
 
-    local function createProfile()
+    local function createInitialAccount()
         term.setBackgroundColor(colors.black)
         term.setTextColor(colors.white)
         term.clear()
         term.setCursorPos(1, 1)
+        term.setTextColor(colors.cyan)
+        print("CREATE YOUR ADMIN ACCOUNT")
+        term.setTextColor(colors.white)
+        print("This is the first account on this computer.")
+        print("A password is required.")
+        if profileMessage ~= "" then
+            term.setTextColor(colors.yellow)
+            print(profileMessage)
+            term.setTextColor(colors.white)
+            profileMessage = ""
+        end
+        print("")
         write("New username: ")
         local username = read()
         if not username or not username:match("^[%w_-]+$") then
@@ -406,76 +426,16 @@ local function chooseUser()
             profileMessage = "That profile already exists. Select it from the list."
             return false
         end
-        local setPassword = askPasswordOption()
-        if setPassword == nil then
-            profileMessage = "Profile creation cancelled."
+        write("Password: ")
+        local password = readPassword()
+        if password == "" then
+            profileMessage = "Password cannot be empty."
             return false
         end
-        local password
-        if setPassword then
-            term.setBackgroundColor(colors.black)
-            term.setTextColor(colors.white)
-            term.clear()
-            term.setCursorPos(1, 1)
-            print("Set a profile password")
-            write("Password: ")
-            password = readPassword()
-            if password == "" then
-                profileMessage = "Password cannot be empty."
-                return false
-            end
-            write("Confirm password: ")
-            if readPassword() ~= password then
-                profileMessage = "Passwords did not match."
-                return false
-            end
-        end
-
-        term.setBackgroundColor(colors.black)
-        term.setTextColor(colors.white)
-        term.clear()
-        term.setCursorPos(1, 1)
-        term.setTextColor(colors.cyan)
-        print("ADMIN PROFILE")
-        term.setTextColor(colors.lightGray)
-        print("Admin profiles can use sudo to access other profiles.")
-        local adminExists = next(profileAdmins) ~= nil
-        if adminExists then
-            print("An admin profile already exists; only standard profiles can be created here.")
-        else
-            print("The first profile must be an admin.")
-        end
-        local adminButtons = adminExists
-            and { { label = "STANDARD PROFILE", admin = false } }
-            or { { label = "MAKE ADMIN", admin = true } }
-        table.insert(adminButtons, { label = "CANCEL", cancel = true })
-        local width, height = term.getSize()
-        local slotWidth = math.max(1, math.floor(width / #adminButtons))
-        for index, option in ipairs(adminButtons) do
-            local left = (index - 1) * slotWidth + 1
-            local buttonWidth = index == #adminButtons and width - left + 1 or slotWidth
-            term.setCursorPos(left, height)
-            term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
-            term.setTextColor(colors.white)
-            term.write(("[" .. option.label .. "]"):sub(1, buttonWidth))
-            option.left = left
-            option.right = left + buttonWidth - 1
-        end
-        local isAdmin
-        while isAdmin == nil do
-            local event, button, x, y = os.pullEventRaw()
-            if event == "mouse_click" and button == 1 and y == height then
-                for _, option in ipairs(adminButtons) do
-                    if x >= option.left and x <= option.right then
-                        if option.cancel then
-                            profileMessage = "Profile creation cancelled."
-                            return false
-                        end
-                        isAdmin = option.admin
-                        break
-                    end
-                end
-            end
+        write("Confirm password: ")
+        if readPassword() ~= password then
+            profileMessage = "Passwords did not match."
+            return false
         end
 
         local created, createError = pcall(fs.makeDir, path)
@@ -483,11 +443,7 @@ local function chooseUser()
             profileMessage = "Could not create profile: " .. tostring(createError)
             return false
         end
-        if password then
-            profilePasswords[username] = password
-        else
-            profilePasswords[username] = nil
-        end
+        profilePasswords[username] = password
         local saved, saveError = saveProfilePasswords(profilePasswords)
         if not saved then
             profilePasswords[username] = nil
@@ -495,28 +451,21 @@ local function chooseUser()
             profileMessage = saveError
             return false
         end
-        if isAdmin and next(profileAdmins) ~= nil then
-            profilePasswords[username] = nil
-            local rollbackSaved, rollbackError = saveProfilePasswords(profilePasswords)
-            pcall(fs.delete, path)
-            profileMessage = "An admin profile already exists; cannot create another."
-            if not rollbackSaved then
-                profileMessage = profileMessage .. " Password rollback failed: " .. tostring(rollbackError)
-            end
-            return false
-        end
-        if isAdmin then
-            profileAdmins[username] = true
-        end
+        profileAdmins[username] = true
         local adminsSaved, adminsError = saveProfileAdmins(profileAdmins)
         if not adminsSaved then
             profilePasswords[username] = nil
             profileAdmins[username] = nil
             local rollbackSaved, rollbackError = saveProfilePasswords(profilePasswords)
+            local rollbackAdminsSaved, rollbackAdminsError = saveProfileAdmins(profileAdmins)
             pcall(fs.delete, path)
             profileMessage = adminsError
             if not rollbackSaved then
                 profileMessage = profileMessage .. " Password rollback also failed: " .. tostring(rollbackError)
+            end
+            if not rollbackAdminsSaved then
+                profileMessage = profileMessage .. " Admin rollback also failed: "
+                    .. tostring(rollbackAdminsError)
             end
             return false
         end
@@ -534,6 +483,9 @@ local function chooseUser()
             end
         end
         table.sort(users, function(first, second) return first:lower() < second:lower() end)
+        if #users == 0 then
+            if createInitialAccount() then return true end
+        else
         local width, height = term.getSize()
         local visibleRows = math.max(1, height - 9)
         if userSelected < 1 or userSelected > #users then userSelected = 1 end
@@ -577,10 +529,6 @@ local function chooseUser()
             term.setCursorPos(2, height - 3)
             term.setTextColor(colors.yellow)
             term.write(profileMessage:sub(1, math.max(0, width - 2)))
-        elseif #users == 0 then
-            term.setCursorPos(2, 6)
-            term.setTextColor(colors.lightGray)
-            term.write("No profiles yet. Create one to get started.")
         else
             term.setCursorPos(2, height - 3)
             term.setTextColor(colors.lightGray)
@@ -592,25 +540,20 @@ local function chooseUser()
 
         local buttons = {}
         if currentUser then
-            buttons = {
-                { label = "CANCEL", action = "cancel" },
-                { label = "CREATE PROFILE", action = "create" },
-            }
-        else
-            buttons = {
-                { label = "CREATE PROFILE", action = "create" },
-            }
+            buttons = { { label = "CANCEL", action = "cancel" } }
         end
-        local slotWidth = math.max(1, math.floor(width / #buttons))
-        for index, profileButton in ipairs(buttons) do
-            local left = (index - 1) * slotWidth + 1
-            local buttonWidth = index == #buttons and width - left + 1 or slotWidth
-            term.setCursorPos(left, height)
-            term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
-            term.setTextColor(colors.white)
-            term.write(("[" .. profileButton.label .. "]"):sub(1, buttonWidth))
-            profileButton.left = left
-            profileButton.right = left + buttonWidth - 1
+        if #buttons > 0 then
+            local slotWidth = math.max(1, math.floor(width / #buttons))
+            for index, profileButton in ipairs(buttons) do
+                local left = (index - 1) * slotWidth + 1
+                local buttonWidth = index == #buttons and width - left + 1 or slotWidth
+                term.setCursorPos(left, height)
+                term.setBackgroundColor(term.isColor() and colors.gray or colors.black)
+                term.setTextColor(colors.white)
+                term.write(("[" .. profileButton.label .. "]"):sub(1, buttonWidth))
+                profileButton.left = left
+                profileButton.right = left + buttonWidth - 1
+            end
         end
         term.setBackgroundColor(colors.black)
 
@@ -634,12 +577,11 @@ local function chooseUser()
             elseif y == height then
                 for _, profileButton in ipairs(buttons) do
                     if x >= profileButton.left and x <= profileButton.right then
-                        if profileButton.action == "cancel" then return false end
-                        if createProfile() then return true end
-                        break
+                        return false
                     end
                 end
             end
+        end
         end
     end
 end
@@ -1486,6 +1428,7 @@ local function launcherMain()
 local migrateLegacySettings = not fs.exists(SETTINGS_PATH) and fs.exists(LEGACY_SETTINGS_PATH)
 loadSettings()
 applyTheme()
+local _, startupError = ensureStartupProgram()
 if migrateLegacySettings and saveSettings() then
     fs.delete(LEGACY_SETTINGS_PATH)
 end
@@ -1505,7 +1448,9 @@ if downloaded then
 end
 
 refreshApps()
-if systemAppInstallMessage then
+if startupError then
+    message = startupError
+elseif systemAppInstallMessage then
     message = systemAppInstallMessage
 elseif downloaded and systemAppsInstalled then
     message = "System apps are ready."
