@@ -6,6 +6,11 @@ const path = require("node:path");
 
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, "public");
+try {
+    process.loadEnvFile(path.join(ROOT, ".env"));
+} catch (error) {
+    if (error.code !== "ENOENT") throw error;
+}
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const SCRIPT_PATH = /^(?:launcher\.lua|computercraft\/.+\.lua)$/i;

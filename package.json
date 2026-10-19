@@ -4,9 +4,9 @@
   "private": true,
   "description": "Self-hosted catalog and script host for Rift ComputerCraft",
   "scripts": {
-    "start": "node --env-file=.env server.js"
+    "start": "node server.js"
   },
   "engines": {
-    "node": ">=20.6"
+    "node": ">=20.12"
   }
 }

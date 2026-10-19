@@ -4,7 +4,7 @@ This project includes a self-hosted Node.js catalog and file server for Rift Com
 
 ## Start the host
 
-Install Node.js 20.6 or newer on the machine that will host the scripts. Create your local environment file from the example:
+Install Node.js 20.12 or newer on the machine that will host the scripts. The server starts with default settings (`0.0.0.0:3000`) even if no `.env` file exists. To customize them, create a local environment file from the example:
 
 ```powershell
 Copy-Item .env.example .env
@@ -18,7 +18,7 @@ npm start
 
 The website is available at `https://rift.zerocreates.org/`. The catalog API is at `/api/catalog`, the launcher has a dedicated `/launcher` endpoint, `/api/scripts` lists all ComputerCraft Lua scripts, and scripts are served at their project-relative paths, such as `/computercraft/apps/calculator.lua` or `/computercraft/server/rift-server.lua`. KubeJS scripts are not exposed. For local development, the Node server is available at `http://localhost:3000/`.
 
-The `.env` file controls `HOST` and `PORT`; the example binds to `0.0.0.0:3000`. `.env` is git-ignored and should hold machine-specific settings. To keep the host running, use a process manager or run it as a service. For public internet access, put it behind a TLS-enabled reverse proxy.
+The optional `.env` file controls `HOST` and `PORT`; the example binds to `0.0.0.0:3000`. `.env` is git-ignored and should hold machine-specific settings. To keep the host running, use a process manager or run it as a service. For public internet access, put it behind a TLS-enabled reverse proxy.
 
 ## Connect ComputerCraft
 
