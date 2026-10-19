@@ -1,4 +1,7 @@
 local function loadTheme()
+    if type(launcherTheme) == "table" and type(launcherTheme.accent) == "number" then
+        return term.isColor() and launcherTheme.accent or colors.gray
+    end
     local path = "/.launcher/settings.json"
     if not fs.exists(path) then return colors.cyan end
     local file = fs.open(path, "r")

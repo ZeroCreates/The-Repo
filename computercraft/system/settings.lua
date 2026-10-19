@@ -3,6 +3,7 @@ local USER_ROOT = "/users"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
 local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
+local ENCRYPTION_KEY_PATH = SYSTEM_DIRECTORY .. "/data-key"
 local LAUNCHER_PATH = "/launcher.lua"
 local REPOSITORY_BASE_URL = "https://raw.githubusercontent.com/ZeroCreates/The-Repo/main/"
 local THEMES = {
@@ -34,6 +35,72 @@ if type(currentUser) ~= "string" or not currentUser:match("^[%w_-]+$")
     error("System Settings must be opened from an active user profile.", 0)
 end
 
+local keyFile = fs.open(ENCRYPTION_KEY_PATH, "r")
+if not keyFile then error("Could not read the local data key.", 0) end
+local encryptionKey = keyFile.readAll()
+keyFile.close()
+if type(encryptionKey) ~= "string" or #encryptionKey ~= 64 or encryptionKey:find("[^%x]") then
+    error("The local data key is invalid.", 0)
+end
+encryptionKey = encryptionKey:upper()
+
+local function xorByte(first, second)
+    local result, bit = 0, 1
+    while first > 0 or second > 0 do
+        if first % 2 ~= second % 2 then result = result + bit end
+        first = math.floor(first / 2)
+        second = math.floor(second / 2)
+        bit = bit * 2
+    end
+    return result
+end
+
+local function cryptData(contents)
+    local keyBytes = {}
+    for index = 1, #encryptionKey, 2 do
+        keyBytes[#keyBytes + 1] = tonumber(encryptionKey:sub(index, index + 1), 16)
+    end
+    local state = 1
+    for _, value in ipairs(keyBytes) do
+        state = (state * 257 + value) % 2147483647
+    end
+    local output = {}
+    for index = 1, #contents do
+        state = (state * 48271) % 2147483647
+        local mask = (state % 256 + keyBytes[(index - 1) % #keyBytes + 1]) % 256
+        output[index] = string.char(xorByte(contents:byte(index), mask))
+    end
+    return table.concat(output)
+end
+
+local function encryptData(contents)
+    local encrypted = cryptData(contents)
+    local encoded = {}
+    for index = 1, #encrypted do
+        encoded[index] = string.format("%02X", encrypted:byte(index))
+    end
+    return "CCLOCAL1:" .. table.concat(encoded)
+end
+
+local function decryptData(contents)
+    local prefix = "CCLOCAL1:"
+    if contents:sub(1, #prefix) ~= prefix then return contents, false end
+    local encoded = contents:sub(#prefix + 1)
+    if #encoded % 2 ~= 0 or encoded:find("[^%x]") then
+        return nil, true, "Encrypted data is malformed."
+    end
+    local encrypted = {}
+    for index = 1, #encoded, 2 do
+        encrypted[#encrypted + 1] = string.char(tonumber(encoded:sub(index, index + 1), 16))
+    end
+    return cryptData(table.concat(encrypted)), true
+end
+
+local function isSensitiveDataPath(path)
+    return path == SETTINGS_PATH or path == PROFILE_PASSWORDS_PATH
+end
+
+local saveJSON
 local function readJSON(path, default)
     if not fs.exists(path) then return default end
     if fs.isDir(path) then return nil, path .. " is a directory." end
@@ -41,18 +108,30 @@ local function readJSON(path, default)
     if not file then return nil, "Could not read " .. path .. "." end
     local contents = file.readAll()
     file.close()
+    local decrypted, wasEncrypted, decryptError = decryptData(contents)
+    if not decrypted then
+        return nil, "Could not decrypt " .. path .. ": " .. tostring(decryptError)
+    end
+    contents = decrypted
     local ok, value = pcall(textutils.unserializeJSON, contents)
     if not ok or type(value) ~= "table" then
         return nil, "Invalid JSON data in " .. path .. "."
     end
+    if isSensitiveDataPath(path) and not wasEncrypted then
+        local saved, saveError = saveJSON(path, value)
+        if not saved then
+            return nil, "Could not encrypt existing data in " .. path .. ": " .. tostring(saveError)
+        end
+    end
     return value
 end
 
-local function saveJSON(path, value)
+saveJSON = function(path, value)
     local serialized, contents = pcall(textutils.serializeJSON, value)
     if not serialized or type(contents) ~= "string" then
         return false, "Could not serialize " .. path .. "."
     end
+    if isSensitiveDataPath(path) then contents = encryptData(contents) end
     local made, makeError = pcall(fs.makeDir, SYSTEM_DIRECTORY)
     if not made then return false, "Could not create system settings folder: " .. tostring(makeError) end
 
@@ -135,7 +214,7 @@ local isAdmin = profileAdmins[currentUser] == true
 local page = "settings"
 local selectedUser = 1
 local firstVisible = 1
-local message = "Theme row: click left/right; choose Custom to use the hex colors."
+local message = "Local data obfuscation is not secure against filesystem access."
 
 local function countAdmins(admins)
     local count = 0
@@ -194,7 +273,7 @@ local function createAccount()
 
     print("")
     print("A password is required for new accounts.")
-    print("Launcher passwords are stored unencrypted.")
+    print("Private data is obfuscated with a key stored on this computer.")
     write("Password: ")
     local password = read("*")
     if type(password) ~= "string" or password == "" then

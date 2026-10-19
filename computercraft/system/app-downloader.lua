@@ -111,6 +111,11 @@ local function appVersionStatus(app)
 end
 
 local function loadTheme()
+    if type(launcherTheme) == "table" and type(launcherTheme.index) == "number"
+        and themes[launcherTheme.index] then
+        themeIndex = launcherTheme.index
+        return
+    end
     local path = SYSTEM_DIRECTORY .. "/settings.json"
     if not fs.exists(path) then return end
     local file = fs.open(path, "r")

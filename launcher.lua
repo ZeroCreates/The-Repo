@@ -23,6 +23,7 @@ local SYSTEM_DIRECTORY = "/.launcher"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
 local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
+local ENCRYPTION_KEY_PATH = SYSTEM_DIRECTORY .. "/data-key"
 local LEGACY_SETTINGS_PATH = "/.launcher-settings.json"
 local STARTUP_PATH = "/startup.lua"
 local STARTUP_TEMPORARY_PATH = SYSTEM_DIRECTORY .. "/startup.lua.tmp"
@@ -52,6 +53,151 @@ local settings = {
     customHighlight = "#3366CC",
     alphabetical = true,
 }
+local encryptionKey
+local settingsNeedEncryption = false
+local settingsProtectionError
+
+local function xorByte(first, second)
+    local result, bit = 0, 1
+    while first > 0 or second > 0 do
+        if first % 2 ~= second % 2 then result = result + bit end
+        first = math.floor(first / 2)
+        second = math.floor(second / 2)
+        bit = bit * 2
+    end
+    return result
+end
+
+local function cryptData(contents)
+    if type(encryptionKey) ~= "string" then
+        return nil, "The local data key has not been loaded."
+    end
+    local keyBytes = {}
+    for index = 1, #encryptionKey, 2 do
+        keyBytes[#keyBytes + 1] = tonumber(encryptionKey:sub(index, index + 1), 16)
+    end
+    local state = 1
+    for _, value in ipairs(keyBytes) do
+        state = (state * 257 + value) % 2147483647
+    end
+    local output = {}
+    for index = 1, #contents do
+        state = (state * 48271) % 2147483647
+        local mask = (state % 256 + keyBytes[(index - 1) % #keyBytes + 1]) % 256
+        output[index] = string.char(xorByte(contents:byte(index), mask))
+    end
+    return table.concat(output)
+end
+
+local function encryptData(contents)
+    local encrypted, encryptError = cryptData(contents)
+    if not encrypted then return nil, encryptError end
+    local encoded = {}
+    for index = 1, #encrypted do
+        encoded[index] = string.format("%02X", encrypted:byte(index))
+    end
+    return "CCLOCAL1:" .. table.concat(encoded)
+end
+
+local function decryptData(contents)
+    local prefix = "CCLOCAL1:"
+    if contents:sub(1, #prefix) ~= prefix then return contents, false end
+    local encoded = contents:sub(#prefix + 1)
+    if #encoded % 2 ~= 0 or encoded:find("[^%x]") then
+        return nil, true, "Encrypted data is malformed."
+    end
+    local encrypted = {}
+    for index = 1, #encoded, 2 do
+        encrypted[#encrypted + 1] = string.char(tonumber(encoded:sub(index, index + 1), 16))
+    end
+    local plaintext, decryptError = cryptData(table.concat(encrypted))
+    if not plaintext then return nil, true, decryptError end
+    return plaintext, true
+end
+
+local function ensureEncryptionKey()
+    if fs.exists(ENCRYPTION_KEY_PATH) then
+        if fs.isDir(ENCRYPTION_KEY_PATH) then
+            return false, "The local data key path is a directory."
+        end
+        local file = fs.open(ENCRYPTION_KEY_PATH, "r")
+        if not file then return false, "Could not read the local data key." end
+        local savedKey = file.readAll()
+        file.close()
+        if type(savedKey) ~= "string" or #savedKey ~= 64 or savedKey:find("[^%x]") then
+            return false, "The local data key is invalid; refusing to overwrite it."
+        end
+        encryptionKey = savedKey:upper()
+        return true
+    end
+
+    local function containsEncryptedData(path)
+        if not fs.exists(path) then return false end
+        if fs.isDir(path) then
+            for _, name in ipairs(fs.list(path)) do
+                if containsEncryptedData(fs.combine(path, name)) then return true end
+            end
+            return false
+        end
+        local file = fs.open(path, "r")
+        if not file then return false end
+        local contents = file.readAll()
+        file.close()
+        return type(contents) == "string" and contents:sub(1, 9) == "CCLOCAL1:"
+    end
+    if containsEncryptedData(SETTINGS_PATH)
+        or containsEncryptedData(PROFILE_PASSWORDS_PATH)
+        or containsEncryptedData("/.launcher/user-data") then
+        return false, "Encrypted data exists but the local data key is missing. Restore /.launcher/data-key."
+    end
+
+    local made, makeError = pcall(fs.makeDir, SYSTEM_DIRECTORY)
+    if not made then return false, "Could not create the local data folder: " .. tostring(makeError) end
+    local seedSource
+    if type(nativeOs.epoch) == "function" then
+        local ok, epoch = pcall(nativeOs.epoch, "utc")
+        if ok and type(epoch) == "number" then seedSource = epoch end
+    end
+    if not seedSource then
+        seedSource = (nativeOs.time() or 0) * 1000 + (nativeOs.clock() or 0) * 1000
+    end
+    local computerId = type(nativeOs.getComputerID) == "function" and nativeOs.getComputerID() or 0
+    local state = (math.floor(seedSource) + computerId * 104729) % 2147483647
+    if state < 1 then state = 1 end
+    local generated = {}
+    for index = 1, 32 do
+        state = (state * 48271) % 2147483647
+        generated[index] = string.format("%02X", state % 256)
+    end
+    local newKey = table.concat(generated)
+    local temporary = ENCRYPTION_KEY_PATH .. ".tmp"
+    if fs.exists(temporary) then
+        if fs.isDir(temporary) then
+            return false, "Cannot create the local data key: temporary path is a directory."
+        end
+        fs.delete(temporary)
+    end
+    local file = fs.open(temporary, "w")
+    if not file then return false, "Could not create the temporary local data key." end
+    local wrote, writeError = pcall(file.write, newKey)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        return false, "Could not save the local data key: "
+            .. tostring(not wrote and writeError or closeError)
+    end
+    if fs.exists(ENCRYPTION_KEY_PATH) then
+        fs.delete(temporary)
+        return ensureEncryptionKey()
+    end
+    local moved, moveError = pcall(fs.move, temporary, ENCRYPTION_KEY_PATH)
+    if not moved then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        return false, "Could not install the local data key: " .. tostring(moveError)
+    end
+    encryptionKey = newKey
+    return true
+end
 
 local function applyTheme()
     if not term.isColor() then return true end
@@ -74,11 +220,19 @@ end
 local function getThemeInfo()
     local theme = THEMES[settings.theme] or THEMES[1]
     return {
+        index = settings.theme,
         accent = theme.accent,
         highlight = theme.highlight,
         accentHex = settings.customAccent,
         highlightHex = settings.customHighlight,
     }
+end
+
+local function createSystemEnvironment()
+    local environment = {}
+    for name, value in pairs(_ENV) do environment[name] = value end
+    environment.launcherTheme = getThemeInfo()
+    return environment
 end
 
 local function readPassword()
@@ -113,9 +267,20 @@ local function loadSettings()
     end
     local contents = file.readAll()
     file.close()
+    local decrypted, wasEncrypted, decryptError = decryptData(contents)
+    if not decrypted then
+        message = "Could not decrypt launcher settings: " .. tostring(decryptError)
+        settingsProtectionError = message
+        return
+    end
+    contents = decrypted
+    if path == SETTINGS_PATH and not wasEncrypted then
+        settingsNeedEncryption = true
+    end
     local ok, saved = pcall(textutils.unserializeJSON, contents)
     if not ok or type(saved) ~= "table" then
         message = "Launcher settings are invalid; using defaults."
+        if wasEncrypted then settingsProtectionError = "Encrypted launcher settings could not be decoded." end
         return
     end
     if type(saved.theme) == "number" and THEMES[saved.theme] then
@@ -142,8 +307,28 @@ local function saveSettings()
         message = "Could not save launcher settings."
         return false
     end
-    file.write(textutils.serializeJSON(settings))
-    file.close()
+    local serialized, json = pcall(textutils.serializeJSON, settings)
+    if not serialized or type(json) ~= "string" then
+        file.close()
+        fs.delete(temporary)
+        message = "Could not serialize launcher settings."
+        return false
+    end
+    local protected, protectError = encryptData(json)
+    if not protected then
+        file.close()
+        fs.delete(temporary)
+        message = "Could not encrypt launcher settings: " .. tostring(protectError)
+        return false
+    end
+    local wrote, writeError = pcall(file.write, protected)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        message = "Could not write launcher settings: "
+            .. tostring(not wrote and writeError or closeError)
+        return false
+    end
     if fs.exists(SETTINGS_PATH) then
         local backedUp, backupError = pcall(fs.move, SETTINGS_PATH, backup)
         if not backedUp then
@@ -160,6 +345,7 @@ local function saveSettings()
         return false
     end
     if fs.exists(backup) then fs.delete(backup) end
+    settingsNeedEncryption = false
     message = "Settings saved."
     return true
 end
@@ -212,13 +398,18 @@ local function ensureStartupProgram()
 end
 
 local function loadProfilePasswords()
-    if not fs.exists(PROFILE_PASSWORDS_PATH) then return {} end
+    if not fs.exists(PROFILE_PASSWORDS_PATH) then return {}, nil, true end
     local file = fs.open(PROFILE_PASSWORDS_PATH, "r")
     if not file then
         return nil, "Could not read profile passwords from " .. PROFILE_PASSWORDS_PATH .. "."
     end
     local contents = file.readAll()
     file.close()
+    local decrypted, wasEncrypted, decryptError = decryptData(contents)
+    if not decrypted then
+        return nil, "Could not decrypt profile passwords: " .. tostring(decryptError)
+    end
+    contents = decrypted
     local ok, passwords = pcall(textutils.unserializeJSON, contents)
     if not ok or type(passwords) ~= "table" then
         return nil, "Profile password data is invalid. Refusing to bypass profile passwords."
@@ -229,7 +420,7 @@ local function loadProfilePasswords()
             return nil, "Profile password data is invalid. Refusing to bypass profile passwords."
         end
     end
-    return passwords
+    return passwords, nil, wasEncrypted
 end
 
 local function saveProfilePasswords(passwords)
@@ -240,8 +431,25 @@ local function saveProfilePasswords(passwords)
     if fs.exists(backup) then fs.delete(backup) end
     local file = fs.open(temporary, "w")
     if not file then return false, "Could not create " .. temporary .. "." end
-    file.write(textutils.serializeJSON(passwords))
-    file.close()
+    local serialized, json = pcall(textutils.serializeJSON, passwords)
+    if not serialized or type(json) ~= "string" then
+        file.close()
+        fs.delete(temporary)
+        return false, "Could not serialize profile passwords."
+    end
+    local protected, protectError = encryptData(json)
+    if not protected then
+        file.close()
+        fs.delete(temporary)
+        return false, "Could not encrypt profile passwords: " .. tostring(protectError)
+    end
+    local wrote, writeError = pcall(file.write, protected)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        return false, "Could not write profile passwords: "
+            .. tostring(not wrote and writeError or closeError)
+    end
 
     if fs.exists(PROFILE_PASSWORDS_PATH) then
         local backedUp, backupError = pcall(fs.move, PROFILE_PASSWORDS_PATH, backup)
@@ -371,9 +579,15 @@ end
 
 local function chooseUser()
     fs.makeDir(USER_ROOT)
-    local loadedPasswords, passwordError = loadProfilePasswords()
+    local loadedPasswords, passwordError, passwordsEncrypted = loadProfilePasswords()
     if not loadedPasswords then error(passwordError, 0) end
     profilePasswords = loadedPasswords
+    if not passwordsEncrypted then
+        local migrated, migrationError = saveProfilePasswords(profilePasswords)
+        if not migrated then
+            error("Could not encrypt existing profile passwords: " .. tostring(migrationError), 0)
+        end
+    end
     local loadedAdmins, adminError = loadProfileAdmins()
     if not loadedAdmins then error(adminError, 0) end
     profileAdmins = loadedAdmins
@@ -408,6 +622,7 @@ local function chooseUser()
         term.setTextColor(colors.white)
         print("This is the first account on this computer.")
         print("A password is required.")
+        print("Private data is obfuscated with a key stored on this computer.")
         if profileMessage ~= "" then
             term.setTextColor(colors.yellow)
             print(profileMessage)
@@ -1013,8 +1228,20 @@ local function runHomeProgram(programPath, profileContext, ...)
             if not file then return nil, "Could not open stored data." end
             local contents = file.readAll()
             file.close()
+            local decrypted, wasEncrypted, decryptError = decryptData(contents)
+            if not decrypted then
+                return nil, "Could not decrypt stored data: " .. tostring(decryptError)
+            end
+            contents = decrypted
             local ok, value = pcall(textutils.unserializeJSON, contents)
             if not ok then return nil, "Stored data is not valid JSON." end
+            if not wasEncrypted then
+                local saved, saveError = api.write(path, value)
+                if not saved then
+                    return nil, "Stored data was read, but could not be encrypted: "
+                        .. tostring(saveError)
+                end
+            end
             return value
         end
 
@@ -1025,6 +1252,11 @@ local function runHomeProgram(programPath, profileContext, ...)
             if not serialized or type(contents) ~= "string" then
                 return false, "Value must be serializable as JSON."
             end
+            local protected, protectError = encryptData(contents)
+            if not protected then
+                return false, "Could not encrypt stored data: " .. tostring(protectError)
+            end
+            contents = protected
             if nativeFs.exists(target) and nativeFs.isDir(target) then
                 return false, "Stored data name refers to a folder."
             end
@@ -1079,6 +1311,74 @@ local function runHomeProgram(programPath, profileContext, ...)
             if not nativeFs.exists(target) then return {} end
             if not nativeFs.isDir(target) then return nil, "Storage path is not a folder." end
             return nativeFs.list(target)
+        end
+
+        local function migrateLegacyDirectory(directory, relativeDirectory)
+            if not nativeFs.exists(directory) then return end
+            for _, name in ipairs(nativeFs.list(directory)) do
+                local path = nativeFs.combine(directory, name)
+                local relativePath = relativeDirectory == ""
+                    and name or relativeDirectory .. "/" .. name
+                if nativeFs.isDir(path) then
+                    migrateLegacyDirectory(path, relativePath)
+                else
+                    local file = nativeFs.open(path, "r")
+                    if not file then
+                        error("Could not read existing private storage file " .. relativePath .. ".", 0)
+                    end
+                    local contents = file.readAll()
+                    file.close()
+                    local plaintext, wasEncrypted, decryptError = decryptData(contents)
+                    if not plaintext then
+                        error("Could not decrypt private storage file " .. relativePath .. ": "
+                            .. tostring(decryptError), 0)
+                    end
+                    if not wasEncrypted then
+                        local protected, protectError = encryptData(plaintext)
+                        if not protected then
+                            error("Could not encrypt private storage file " .. relativePath
+                                .. ": " .. tostring(protectError), 0)
+                        end
+                        local temporary, backup = path .. ".enc-tmp", path .. ".enc-bak"
+                        if nativeFs.exists(temporary) or nativeFs.exists(backup) then
+                            error("Could not encrypt private storage file " .. relativePath
+                                .. ": an encryption recovery file already exists.", 0)
+                        end
+                        local output = nativeFs.open(temporary, "w")
+                        if not output then
+                            error("Could not create encryption staging file for " .. relativePath .. ".", 0)
+                        end
+                        local wrote, writeError = pcall(output.write, protected)
+                        local closed, closeError = pcall(output.close)
+                        if not wrote or not closed then
+                            if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
+                            error("Could not write encrypted storage file " .. relativePath .. ": "
+                                .. tostring(not wrote and writeError or closeError), 0)
+                        end
+                        local backedUp, backupError = pcall(nativeFs.move, path, backup)
+                        if not backedUp then
+                            nativeFs.delete(temporary)
+                            error("Could not back up private storage file " .. relativePath .. ": "
+                                .. tostring(backupError), 0)
+                        end
+                        local moved, moveError = pcall(nativeFs.move, temporary, path)
+                        if not moved then
+                            if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
+                            local restored, restoreError = pcall(nativeFs.move, backup, path)
+                            error("Could not install encrypted storage file " .. relativePath .. ": "
+                                .. tostring(moveError)
+                                .. (restored and "" or "; restoring the backup also failed: "
+                                    .. tostring(restoreError)), 0)
+                        end
+                        nativeFs.delete(backup)
+                    end
+                end
+            end
+        end
+
+        local migrated, migrationError = pcall(migrateLegacyDirectory, storageRoot, "")
+        if not migrated then
+            error("Could not migrate private storage: " .. tostring(migrationError), 0)
         end
 
         return api
@@ -1352,14 +1652,14 @@ local function launchSelected(openInTab)
             return authorizeProfileAccess(username, profileContext)
         end
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
-        ok, result = pcall(runner, _ENV, app.path, profileContext.homeDirectory,
+        ok, result = pcall(runner, createSystemEnvironment(), app.path, profileContext.homeDirectory,
             runProfileProgram, listLaunchProfiles, authorizeLaunchProfile)
     elseif app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "") then
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
-        ok, result = pcall(runner, _ENV, app.path, homeDirectory, currentUser, getThemeInfo())
+        ok, result = pcall(runner, createSystemEnvironment(), app.path, homeDirectory, currentUser, getThemeInfo())
     else
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
-        ok, result = pcall(runner, _ENV, app.path, homeDirectory)
+        ok, result = pcall(runner, createSystemEnvironment(), app.path, homeDirectory)
     end
     shell.setDir(previousDirectory)
     if openInTab then
@@ -1406,7 +1706,7 @@ local function openSystemSettings()
     term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(1, 1)
-    local ok, result = pcall(nativeOs.run, _ENV, SETTINGS_PROGRAM_PATH,
+    local ok, result = pcall(nativeOs.run, createSystemEnvironment(), SETTINGS_PROGRAM_PATH,
         homeDirectory, currentUser, getThemeInfo())
     shell.setDir(previousDirectory)
     loadSettings()
@@ -1426,11 +1726,17 @@ end
 
 local function launcherMain()
 local migrateLegacySettings = not fs.exists(SETTINGS_PATH) and fs.exists(LEGACY_SETTINGS_PATH)
+local keyReady, keyError = ensureEncryptionKey()
+if not keyReady then error(keyError, 0) end
 loadSettings()
+if settingsProtectionError then error(settingsProtectionError, 0) end
 applyTheme()
 local _, startupError = ensureStartupProgram()
-if migrateLegacySettings and saveSettings() then
-    fs.delete(LEGACY_SETTINGS_PATH)
+if migrateLegacySettings or settingsNeedEncryption then
+    if not saveSettings() then
+        error("Could not encrypt existing launcher settings: " .. message, 0)
+    end
+    if migrateLegacySettings then fs.delete(LEGACY_SETTINGS_PATH) end
 end
 
 chooseUser()

@@ -4,14 +4,14 @@
     "source": "computercraft/system/app-downloader.lua",
     "file": "app-downloader.lua",
     "scope": "system",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Download and update ComputerCraft apps"
   },
   {
     "name": "Calculator",
     "source": "computercraft/apps/calculator.lua",
     "file": "calculator.lua",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Basic two-number calculator"
   },
   {
@@ -25,21 +25,21 @@
     "name": "Clock",
     "source": "computercraft/apps/clock.lua",
     "file": "clock.lua",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Live date and time display"
   },
   {
     "name": "Countdown Timer",
     "source": "computercraft/apps/countdown.lua",
     "file": "countdown.lua",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Simple seconds countdown"
   },
   {
     "name": "Dice Roller",
     "source": "computercraft/apps/dice.lua",
     "file": "dice.lua",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Roll configurable dice"
   },
   {
@@ -54,7 +54,7 @@
     "source": "computercraft/system/file-browser.lua",
     "file": "file-browser.lua",
     "scope": "system",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Browse and edit files; hold Alt to show hidden files and private data"
   },
   {
@@ -62,8 +62,8 @@
     "source": "computercraft/system/settings.lua",
     "file": "settings.lua",
     "scope": "system",
-    "version": "1.0.1",
-    "description": "Manage launcher preferences and user accounts"
+    "version": "1.0.2",
+    "description": "Manage launcher preferences, user accounts, and system maintenance"
   },
   {
     "name": "Lua Console",
@@ -83,7 +83,7 @@
     "name": "Notes",
     "source": "computercraft/apps/notes.lua",
     "file": "notes.lua",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Read and write local notes"
   },
   {
