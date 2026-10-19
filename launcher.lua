@@ -1,4 +1,3 @@
-local LAUNCHER_NAME = "launcher.lua"
 local SYSTEM_APP_DIRECTORY = "/.launcher/apps"
 local DOWNLOADER_PATH = SYSTEM_APP_DIRECTORY .. "/app-downloader.lua"
 local SYSTEM_FILE_BROWSER_PATH = SYSTEM_APP_DIRECTORY .. "/file-browser.lua"
@@ -13,8 +12,6 @@ local selected = 1
 local firstVisible = 1
 local message = "Select a program to launch."
 local shiftDown = false
-local screen = "apps"
-local selectedSetting = 1
 local currentUser
 local homeDirectory
 local profilePasswords = {}
@@ -314,69 +311,6 @@ local function installDownloader()
     end
     if fs.exists(backup) then fs.delete(backup) end
     return true
-end
-
-local function updateLauncher()
-    if not http or not http.get then
-        message = "Enable the ComputerCraft HTTP API to update the launcher."
-        return
-    end
-
-    local destination = "/" .. LAUNCHER_NAME
-    local temporary = destination .. ".update-tmp"
-    local backup = destination .. ".update-bak"
-    local ok, response, requestError = pcall(http.get, REPOSITORY_BASE_URL .. LAUNCHER_NAME)
-    if not ok then
-        message = "Launcher update request failed: " .. tostring(response)
-        return
-    end
-    if not response then
-        message = "Launcher update request failed: " .. tostring(requestError or "HTTP request failed.")
-        return
-    end
-
-    local responseCode = response.getResponseCode and response.getResponseCode()
-    if responseCode and responseCode ~= 200 then
-        response.close()
-        message = "Launcher update failed: GitHub returned HTTP " .. responseCode .. "."
-        return
-    end
-
-    local contents = response.readAll()
-    response.close()
-    if not contents or contents == "" then
-        message = "Launcher update failed: the downloaded file was empty."
-        return
-    end
-
-    if fs.exists(temporary) then fs.delete(temporary) end
-    if fs.exists(backup) then fs.delete(backup) end
-    local file = fs.open(temporary, "w")
-    if not file then
-        message = "Could not create " .. temporary .. "."
-        return
-    end
-    file.write(contents)
-    file.close()
-
-    if fs.exists(destination) then
-        local backedUp, backupError = pcall(fs.move, destination, backup)
-        if not backedUp then
-            fs.delete(temporary)
-            message = "Could not back up the current launcher: " .. tostring(backupError)
-            return
-        end
-    end
-
-    local moved, moveError = pcall(fs.move, temporary, destination)
-    if not moved then
-        if fs.exists(temporary) then fs.delete(temporary) end
-        if fs.exists(backup) then fs.move(backup, destination) end
-        message = "Could not install the launcher update: " .. tostring(moveError)
-        return
-    end
-    if fs.exists(backup) then fs.delete(backup) end
-    message = "Launcher updated. Restart to use the new version."
 end
 
 local function displayName(path)
@@ -965,65 +899,38 @@ local function draw()
     term.setBackgroundColor(backgroundColor)
     term.setCursorPos(2, 2)
     term.setTextColor(mutedColor)
-    local subtitle = screen == "apps" and "YOUR PROGRAMS" or "LAUNCHER CUSTOMISATION"
-    term.write(subtitle:sub(1, math.max(0, width - 2)))
+    term.write(("YOUR PROGRAMS"):sub(1, math.max(0, width - 2)))
 
-    if screen == "apps" then
-        local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
-        for index = firstVisible, lastVisible do
-            local row = index - firstVisible + 4
-            term.setCursorPos(2, row)
-            if index == selected then
-                term.setBackgroundColor(highlightColor)
-                term.setTextColor(textColor)
-                term.write(("  > " .. apps[index].name):sub(1, math.max(0, width - 2)))
-                term.setBackgroundColor(backgroundColor)
-            else
-                term.setTextColor(textColor)
-                term.write(("    " .. apps[index].name):sub(1, math.max(0, width - 2)))
-            end
+    local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
+    for index = firstVisible, lastVisible do
+        local row = index - firstVisible + 4
+        term.setCursorPos(2, row)
+        if index == selected then
+            term.setBackgroundColor(highlightColor)
+            term.setTextColor(textColor)
+            term.write(("  > " .. apps[index].name):sub(1, math.max(0, width - 2)))
+            term.setBackgroundColor(backgroundColor)
+        else
+            term.setTextColor(textColor)
+            term.write(("    " .. apps[index].name):sub(1, math.max(0, width - 2)))
         end
-        term.setCursorPos(2, height - 6)
-        term.setTextColor(titleColor)
-        local selectedApp = apps[selected]
-        local detail = selectedApp and "Ready to launch" or "No programs found"
-        term.write(detail:sub(1, math.max(0, width - 2)))
-        firstButtons = {
-            { label = "UPDATE", action = "update" },
-            { label = "OPEN TAB", action = "tab" },
-            { label = "SETTINGS", action = "settings" },
-        }
-        secondButtons = {
-            { label = "SWITCH USER", action = "user" },
-            { label = "REFRESH", action = "refresh" },
-        }
-        drawButtons(firstButtons, height - 2, width, isColor)
-        drawButtons(secondButtons, height - 1, width, isColor)
-    elseif screen == "settings" then
-        local options = {
-            "Accent theme: " .. theme.name,
-            "Sort programs alphabetically: " .. (settings.alphabetical and "On" or "Off"),
-            "UPDATE LAUNCHER",
-            "WIPE ENTIRE COMPUTER",
-            "OPEN SYSTEM SETTINGS",
-        }
-        for index, option in ipairs(options) do
-            local row = index + 4
-            term.setCursorPos(2, row)
-            if selectedSetting == index then
-                term.setBackgroundColor(highlightColor)
-                term.setTextColor(textColor)
-                term.write(("  > " .. option):sub(1, math.max(0, width - 2)))
-                term.setBackgroundColor(backgroundColor)
-            else
-                term.setTextColor(textColor)
-                term.write(("    " .. option):sub(1, math.max(0, width - 2)))
-            end
-        end
-        firstButtons = {}
-        secondButtons = { { label = "BACK TO PROGRAMS", action = "back" } }
-        drawButtons(secondButtons, height - 1, width, isColor)
     end
+    term.setCursorPos(2, height - 6)
+    term.setTextColor(titleColor)
+    local selectedApp = apps[selected]
+    local detail = selectedApp and "Ready to launch" or "No programs found"
+    term.write(detail:sub(1, math.max(0, width - 2)))
+    firstButtons = {
+        { label = "UPDATE", action = "update" },
+        { label = "OPEN TAB", action = "tab" },
+        { label = "SETTINGS", action = "settings" },
+    }
+    secondButtons = {
+        { label = "SWITCH USER", action = "user" },
+        { label = "REFRESH", action = "refresh" },
+    }
+    drawButtons(firstButtons, height - 2, width, isColor)
+    drawButtons(secondButtons, height - 1, width, isColor)
 
     term.setCursorPos(2, height - 4)
     term.setTextColor(mutedColor)
@@ -1545,16 +1452,6 @@ local function launchSelected(openInTab)
     refreshApps()
 end
 
-local function changeSetting(direction)
-    if selectedSetting == 1 then
-        settings.theme = ((settings.theme - 1 + direction) % #THEMES) + 1
-    elseif selectedSetting == 2 then
-        settings.alphabetical = not settings.alphabetical
-        refreshApps()
-    end
-    if saveSettings() then applyTheme() end
-end
-
 local function openSystemSettings()
     if not fs.exists(SETTINGS_PROGRAM_PATH) then
         message = "System Settings is not installed. Refresh system apps and try again."
@@ -1583,77 +1480,6 @@ local function openSystemSettings()
     else
         message = "Returned from System Settings."
     end
-end
-
-local function uninstallLauncher()
-    local width, height = term.getSize()
-    local confirmationButtons = {
-        { label = "CANCEL", action = false },
-        { label = "WIPE COMPUTER", action = true },
-    }
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.white)
-    term.clear()
-    term.setCursorPos(1, 1)
-    term.setTextColor(colors.red)
-    print("WIPE COMPUTER")
-    term.setTextColor(colors.white)
-    print("This permanently deletes every file and folder")
-    print("on this computer, including all user profiles,")
-    print("apps, settings, and startup files.")
-    term.setTextColor(colors.yellow)
-    print("")
-    print("Click WIPE COMPUTER below to confirm.")
-    drawButtons(confirmationButtons, height - 1, width, term.isColor())
-    local confirmed = false
-    while true do
-        local event, button, x, y = os.pullEventRaw()
-        if event == "mouse_click" and button == 1 and y == height - 1 then
-            for _, choice in ipairs(confirmationButtons) do
-                if x >= choice.left and x <= choice.right then
-                    confirmed = choice.action
-                    break
-                end
-            end
-            break
-        end
-    end
-    if not confirmed then
-        message = "Computer wipe cancelled."
-        return
-    end
-
-    local failures = {}
-    local rootEntries = fs.list("/")
-    for _, entry in ipairs(rootEntries) do
-        if entry:lower() ~= "rom" then
-            local path = fs.combine("/", entry)
-            local ok, err = pcall(fs.delete, path)
-            if not ok or fs.exists(path) then
-                table.insert(failures, path .. ": " .. tostring(err or "could not remove"))
-            end
-        end
-    end
-
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.white)
-    term.clear()
-    term.setCursorPos(1, 1)
-    if #failures > 0 then
-        term.setTextColor(colors.red)
-        print("Computer wipe was incomplete:")
-        for _, failure in ipairs(failures) do print(failure) end
-        print("Some files or folders could not be removed.")
-        waitForReturn()
-        return
-    end
-
-    term.setTextColor(colors.lime)
-    print("Computer filesystem wiped.")
-    term.setTextColor(colors.white)
-    print("The ROM folder was preserved.")
-    print("Turn off or reboot the computer.")
-    while true do os.pullEventRaw() end
 end
 
 local function launcherMain()
@@ -1694,66 +1520,44 @@ while true do
     local event, button, x, y = os.pullEventRaw()
     if event == "mouse_scroll" then
         local _, height = term.getSize()
-        if screen == "apps" and y >= 4 and y < 4 + math.max(1, height - 12) then
+        if y >= 4 and y < 4 + math.max(1, height - 12) then
             selected = math.max(1, math.min(#apps, selected + button))
         end
     elseif event == "mouse_click" and button == 1 then
         local _, height = term.getSize()
-        if screen == "apps" then
-            local visibleRows = math.max(1, height - 12)
-            local clickedIndex = firstVisible + y - 4
-            if y >= 4 and y < 4 + visibleRows
-                and clickedIndex >= firstVisible and clickedIndex <= #apps then
-                local wasSelected = selected == clickedIndex
-                selected = clickedIndex
-                if wasSelected then launchSelected() end
-            elseif y == height - 2 then
-                local action = buttonAt(firstButtons, x)
-                if action == "open" then
-                    launchSelected()
-                elseif action == "update" then
-                    updateSelected()
-                elseif action == "settings" then
-                    screen = "settings"
-                    message = "Click a setting to change it."
-                elseif action == "tab" then
-                    launchSelected(true)
-                end
-            elseif y == height - 1 then
-                local action = buttonAt(secondButtons, x)
-                if action == "user" then
-                    if chooseUser() then
-                        selected = 1
-                        firstVisible = 1
-                        refreshApps()
-                        message = "Switched to " .. currentUser .. "."
-                    else
-                        message = "Profile switch cancelled."
-                    end
-                elseif action == "refresh" then
-                    refreshApps()
-                    message = "Program list refreshed."
-                elseif action == "exit" then
-                    return
-                end
-            end
-        elseif y >= 5 and y <= 9 then
-            selectedSetting = y - 4
-            if selectedSetting == 1 then
-                local direction = x <= math.floor(select(1, term.getSize()) / 2) and -1 or 1
-                changeSetting(direction)
-            elseif selectedSetting == 2 then
-                changeSetting(1)
-            elseif selectedSetting == 3 then
-                updateLauncher()
-            elseif selectedSetting == 4 then
-                uninstallLauncher()
-            elseif selectedSetting == 5 then
+        local visibleRows = math.max(1, height - 12)
+        local clickedIndex = firstVisible + y - 4
+        if y >= 4 and y < 4 + visibleRows
+            and clickedIndex >= firstVisible and clickedIndex <= #apps then
+            local wasSelected = selected == clickedIndex
+            selected = clickedIndex
+            if wasSelected then launchSelected() end
+        elseif y == height - 2 then
+            local action = buttonAt(firstButtons, x)
+            if action == "open" then
+                launchSelected()
+            elseif action == "update" then
+                updateSelected()
+            elseif action == "settings" then
                 openSystemSettings()
+            elseif action == "tab" then
+                launchSelected(true)
             end
-        elseif y == height - 1 and buttonAt(secondButtons, x) == "back" then
-            screen = "apps"
-            message = "Back to your programs."
+        elseif y == height - 1 then
+            local action = buttonAt(secondButtons, x)
+            if action == "user" then
+                if chooseUser() then
+                    selected = 1
+                    firstVisible = 1
+                    refreshApps()
+                    message = "Switched to " .. currentUser .. "."
+                else
+                    message = "Profile switch cancelled."
+                end
+            elseif action == "refresh" then
+                refreshApps()
+                message = "Program list refreshed."
+            end
         end
     end
 end

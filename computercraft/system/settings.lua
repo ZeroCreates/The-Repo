@@ -3,6 +3,8 @@ local USER_ROOT = "/users"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
 local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
+local LAUNCHER_PATH = "/launcher.lua"
+local REPOSITORY_BASE_URL = "https://raw.githubusercontent.com/ZeroCreates/The-Repo/main/"
 local THEMES = {
     { name = "Ocean", accent = colors.cyan, highlight = colors.blue },
     { name = "Forest", accent = colors.lime, highlight = colors.green },
@@ -373,6 +375,77 @@ local function editCustomColor(field, label)
     savePreferences()
 end
 
+local function updateLauncher()
+    if not http or type(http.get) ~= "function" then
+        message = "Enable the ComputerCraft HTTP API to update the launcher."
+        return
+    end
+
+    local temporary = LAUNCHER_PATH .. ".update-tmp"
+    local backup = LAUNCHER_PATH .. ".update-bak"
+    local requested, response, requestError = pcall(
+        http.get, REPOSITORY_BASE_URL .. "launcher.lua"
+    )
+    if not requested then
+        message = "Launcher update request failed: " .. tostring(response)
+        return
+    end
+    if not response then
+        message = "Launcher update request failed: "
+            .. tostring(requestError or "HTTP request failed.")
+        return
+    end
+
+    local responseCode = response.getResponseCode and response.getResponseCode()
+    if responseCode and responseCode ~= 200 then
+        response.close()
+        message = "Launcher update failed: GitHub returned HTTP " .. responseCode .. "."
+        return
+    end
+
+    local contents = response.readAll()
+    response.close()
+    if not contents or contents == "" then
+        message = "Launcher update failed: the downloaded file was empty."
+        return
+    end
+
+    if fs.exists(temporary) then fs.delete(temporary) end
+    if fs.exists(backup) then fs.delete(backup) end
+    local file = fs.open(temporary, "w")
+    if not file then
+        message = "Could not create " .. temporary .. "."
+        return
+    end
+    local wrote, writeError = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        message = "Could not write the launcher update: "
+            .. tostring(not wrote and writeError or closeError)
+        return
+    end
+
+    if fs.exists(LAUNCHER_PATH) then
+        local backedUp, backupError = pcall(fs.move, LAUNCHER_PATH, backup)
+        if not backedUp then
+            fs.delete(temporary)
+            message = "Could not back up the current launcher: " .. tostring(backupError)
+            return
+        end
+    end
+
+    local moved, moveError = pcall(fs.move, temporary, LAUNCHER_PATH)
+    if not moved then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        if fs.exists(backup) then fs.move(backup, LAUNCHER_PATH) end
+        message = "Could not install the launcher update: " .. tostring(moveError)
+        return
+    end
+    if fs.exists(backup) then fs.delete(backup) end
+    message = "Launcher updated. Restart to use the new version."
+end
+
 local function drawButtons(buttons, width, row, isColor)
     local slotWidth = math.max(1, math.floor(width / #buttons))
     for index, button in ipairs(buttons) do
@@ -393,6 +466,76 @@ local function buttonAt(buttons, x)
     end
 end
 
+local function wipeComputer()
+    local width, height = term.getSize()
+    local confirmationButtons = {
+        { label = "CANCEL", action = false },
+        { label = "WIPE COMPUTER", action = true },
+    }
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.red)
+    print("WIPE COMPUTER")
+    term.setTextColor(colors.white)
+    print("This permanently deletes every file and folder")
+    print("on this computer, except the ROM folder.")
+    print("")
+    print("Click WIPE COMPUTER below to confirm.")
+    drawButtons(confirmationButtons, width, height - 1, term.isColor())
+
+    local confirmed = false
+    while true do
+        local event, button, x, y = os.pullEventRaw()
+        if event == "mouse_click" and button == 1 and y == height - 1 then
+            for _, choice in ipairs(confirmationButtons) do
+                if x >= choice.left and x <= choice.right then
+                    confirmed = choice.action
+                    break
+                end
+            end
+            break
+        end
+    end
+    if not confirmed then
+        message = "Computer wipe cancelled."
+        return
+    end
+
+    local failures = {}
+    for _, entry in ipairs(fs.list("/")) do
+        if entry:lower() ~= "rom" then
+            local path = fs.combine("/", entry)
+            local removed, removeError = pcall(fs.delete, path)
+            if not removed or fs.exists(path) then
+                table.insert(failures, path .. ": " .. tostring(removeError or "could not remove"))
+            end
+        end
+    end
+
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    if #failures > 0 then
+        term.setTextColor(colors.red)
+        print("Computer wipe was incomplete:")
+        for _, failure in ipairs(failures) do print(failure) end
+        print("Press any key to return to Settings.")
+        os.pullEventRaw()
+        message = "Computer wipe was incomplete; see the error list."
+        return
+    end
+
+    term.setTextColor(colors.lime)
+    print("Computer filesystem wiped.")
+    term.setTextColor(colors.white)
+    print("The ROM folder was preserved.")
+    print("Turn off or reboot the computer.")
+    while true do os.pullEventRaw() end
+end
+
 local function draw()
     local width, height = term.getSize()
     local isColor = term.isColor()
@@ -409,8 +552,9 @@ local function draw()
     term.setBackgroundColor(colors.black)
     term.setCursorPos(2, 2)
     term.setTextColor(colors.lightGray)
-    term.write((page == "settings" and "LAUNCHER PREFERENCES" or "USER ACCOUNTS")
-        :sub(1, math.max(0, width - 2)))
+    local pageTitle = page == "settings" and "LAUNCHER PREFERENCES"
+        or page == "accounts" and "USER ACCOUNTS" or "SYSTEM MAINTENANCE"
+    term.write(pageTitle:sub(1, math.max(0, width - 2)))
 
     if page == "settings" then
         local options = {
@@ -434,6 +578,30 @@ local function draw()
         term.write(message:sub(1, math.max(0, width - 2)))
         buttons = {
             { label = isAdmin and "ACCOUNTS" or "NO ADMIN ACCESS", action = "accounts" },
+            { label = "MAINTENANCE", action = "maintenance" },
+            { label = "EXIT", action = "exit" },
+        }
+    elseif page == "maintenance" then
+        local options = {
+            "Update launcher",
+            "Wipe entire computer",
+        }
+        selectedUser = math.max(1, math.min(selectedUser, #options))
+        for index, option in ipairs(options) do
+            term.setCursorPos(2, index + 4)
+            if index == selectedUser then
+                term.setBackgroundColor(highlight)
+                term.write(("  > " .. option):sub(1, math.max(0, width - 2)))
+                term.setBackgroundColor(colors.black)
+            else
+                term.write(("    " .. option):sub(1, math.max(0, width - 2)))
+            end
+        end
+        term.setCursorPos(2, height - 2)
+        term.setTextColor(colors.lightGray)
+        term.write(message:sub(1, math.max(0, width - 2)))
+        buttons = {
+            { label = "BACK", action = "preferences" },
             { label = "EXIT", action = "exit" },
         }
     else
@@ -475,7 +643,7 @@ local function draw()
             { label = "CREATE", action = "create" },
             { label = "ROLE", action = "role" },
             { label = "DELETE", action = "delete" },
-            { label = "SETTINGS", action = "preferences" },
+            { label = "PREFERENCES", action = "preferences" },
         }
         drawButtons(buttons, width, height, isColor)
         return buttons, users, firstVisible, visibleRows
@@ -511,6 +679,12 @@ while true do
             selectedUser = 4
             settings.alphabetical = not settings.alphabetical
             savePreferences()
+        elseif page == "maintenance" and y == 5 then
+            selectedUser = 1
+            updateLauncher()
+        elseif page == "maintenance" and y == 6 then
+            selectedUser = 2
+            wipeComputer()
         elseif y == height then
             local action = buttonAt(buttons, x)
             if action == "exit" then return end
@@ -525,6 +699,10 @@ while true do
             elseif action == "preferences" then
                 page = "settings"
                 message = "Theme row: click left/right; choose Custom to use the hex colors."
+            elseif action == "maintenance" then
+                page = "maintenance"
+                selectedUser = 1
+                message = "Launcher update and computer wipe controls."
             elseif action == "create" then
                 local created, result, createdUsername = createAccount()
                 message = result
