@@ -284,7 +284,8 @@ local function draw()
     term.setTextColor(colors.yellow)
     term.write(message:sub(1, math.max(0, width - 2)))
     local buttons = {
-        { label = "INSTALL/UPDATE", action = "update" },
+        { label = "UPDATE/GET", action = "update" },
+        { label = "REMOVE", action = "uninstall" },
         { label = "REFRESH", action = "refresh" },
         { label = "QUIT", action = "quit" },
     }
@@ -344,6 +345,56 @@ local function saveCatalogName(fileName, appName)
         if fs.exists(APP_NAMES_PATH) then fs.delete(APP_NAMES_PATH) end
         if fs.exists(backup) then fs.move(backup, APP_NAMES_PATH) end
         return false, tostring(moveError)
+    end
+    if fs.exists(backup) then fs.delete(backup) end
+    return true
+end
+
+local function removeCatalogName(fileName)
+    if not fs.exists(APP_NAMES_PATH) then return true end
+    local file = fs.open(APP_NAMES_PATH, "r")
+    if not file then return false, "Could not read " .. APP_NAMES_PATH .. "." end
+    local contents = file.readAll()
+    file.close()
+    local ok, names = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(names) ~= "table" then
+        return false, "Could not parse " .. APP_NAMES_PATH .. "."
+    end
+    if names[fileName] == nil then return true end
+    names[fileName] = nil
+
+    local temporary = APP_NAMES_PATH .. ".tmp"
+    local backup = APP_NAMES_PATH .. ".bak"
+    if fs.exists(temporary) then fs.delete(temporary) end
+    if fs.exists(backup) then fs.delete(backup) end
+    local output = fs.open(temporary, "w")
+    if not output then return false, "Could not create " .. temporary .. "." end
+    local wrote, writeError = pcall(output.write, textutils.serializeJSON(names))
+    local closed, closeError = pcall(output.close)
+    if not wrote or not closed then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        return false, "Could not write app catalog names: "
+            .. tostring(not wrote and writeError or closeError)
+    end
+
+    if fs.exists(APP_NAMES_PATH) then
+        local backedUp, backupError = pcall(fs.move, APP_NAMES_PATH, backup)
+        if not backedUp then
+            fs.delete(temporary)
+            return false, "Could not back up app catalog names: " .. tostring(backupError)
+        end
+    end
+    local moved, moveError = pcall(fs.move, temporary, APP_NAMES_PATH)
+    if not moved then
+        if fs.exists(temporary) then fs.delete(temporary) end
+        if fs.exists(backup) then
+            local restored, restoreError = pcall(fs.move, backup, APP_NAMES_PATH)
+            if not restored then
+                return false, "Could not save app catalog names: " .. tostring(moveError)
+                    .. "; restoring the backup also failed: " .. tostring(restoreError)
+            end
+        end
+        return false, "Could not save app catalog names: " .. tostring(moveError)
     end
     if fs.exists(backup) then fs.delete(backup) end
     return true
@@ -507,6 +558,77 @@ local function updateApp(app)
     downloadApp(app, true)
 end
 
+local function uninstallApp(app)
+    if not app then
+        message = "Select an app to uninstall."
+        return
+    end
+    if app.scope == "system" then
+        message = app.name .. " is a system app and is restored automatically at startup."
+        return
+    end
+
+    local destination = fs.combine(appDirectory, app.file)
+    if not fs.exists(destination) then
+        message = app.name .. " is not installed for " .. username .. "."
+        return
+    end
+    if fs.isDir(destination) then
+        message = "Could not uninstall " .. app.name .. ": its install path is a directory."
+        return
+    end
+
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.yellow)
+    print("UNINSTALL " .. app.name)
+    term.setTextColor(colors.white)
+    print("This removes the app from " .. username .. "'s profile:")
+    print(destination)
+    print("Press Y to confirm or N/Escape to cancel.")
+    while true do
+        local event, key = os.pullEventRaw()
+        if event == "char" then
+            if key:lower() == "y" then break end
+            if key:lower() == "n" then
+                message = "Uninstall cancelled."
+                return
+            end
+        elseif event == "key" and key == keys.escape then
+            message = "Uninstall cancelled."
+            return
+        end
+    end
+
+    local removed, removeError = pcall(fs.delete, destination)
+    if not removed or fs.exists(destination) then
+        message = "Could not uninstall " .. app.name .. ": "
+            .. tostring(removeError or "the app file still exists.")
+        return
+    end
+
+    local key = versionKey(app)
+    local previousVersion = installedVersions[key]
+    installedVersions[key] = nil
+    local versionSaved, versionError = saveInstalledVersions()
+    if not versionSaved then
+        installedVersions[key] = previousVersion
+        message = app.name .. " was removed, but installed-version data could not be updated: "
+            .. versionError
+        return
+    end
+
+    local nameSaved, nameError = removeCatalogName(app.file)
+    if not nameSaved then
+        message = app.name .. " was removed, but its saved catalog name could not be cleared: "
+            .. nameError
+        return
+    end
+    message = app.name .. " was uninstalled from " .. username .. "'s profile."
+end
+
 local mode, target, requestedHome = ...
 if mode == "install-system" then
     requestedHome = target
@@ -667,8 +789,8 @@ while true do
             if wasSelected then downloadApp(apps[selected]) end
         elseif key == 1 and y == height - 1 then
             local action = buttonAt(buttons, x)
-            if action == "download" then
-                downloadApp(apps[selected])
+            if action == "uninstall" then
+                uninstallApp(apps[selected])
             elseif action == "update" then
                 updateApp(apps[selected])
             elseif action == "refresh" then
