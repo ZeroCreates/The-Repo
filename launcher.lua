@@ -23,7 +23,7 @@ local SYSTEM_DIRECTORY = "/.launcher"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
 local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
-local ENCRYPTION_KEY_PATH = SYSTEM_DIRECTORY .. "/data-key"
+local ENCRYPTION_KEY_PATH = SYSTEM_DIRECTORY .. "/.data-key"
 local LEGACY_SETTINGS_PATH = "/.launcher-settings.json"
 local STARTUP_PATH = "/startup.lua"
 local STARTUP_TEMPORARY_PATH = SYSTEM_DIRECTORY .. "/startup.lua.tmp"
@@ -148,7 +148,7 @@ local function ensureEncryptionKey()
     if containsEncryptedData(SETTINGS_PATH)
         or containsEncryptedData(PROFILE_PASSWORDS_PATH)
         or containsEncryptedData("/.launcher/user-data") then
-        return false, "Encrypted data exists but the local data key is missing. Restore /.launcher/data-key."
+        return false, "Encrypted data exists but the local data key is missing. Restore /.launcher/.data-key."
     end
 
     local made, makeError = pcall(fs.makeDir, SYSTEM_DIRECTORY)
