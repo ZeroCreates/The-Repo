@@ -666,12 +666,17 @@ local function tokenizeCommand(line)
 end
 
 local function commandPrompt()
-    local workingDirectory = homeDirectory
+    local workingDirectory = isWithinRoot(currentDirectory, homeDirectory)
+        and currentDirectory or homeDirectory
     local history = {}
     local width = term.getSize()
     local function writePromptLine(text, foreground)
         term.setTextColor(foreground or colors.white)
         print(tostring(text):sub(1, width))
+    end
+    local function showPromptHelp()
+        writePromptLine("Commands: cd, dir/ls, pwd, mkdir/md, rm/del/delete, cp/copy, mv/move")
+        writePromptLine("edit, run, cls/clear, help, exit. Quote paths with spaces.")
     end
     local function drawPromptHeader()
         term.setBackgroundColor(colors.black)
@@ -682,8 +687,31 @@ local function commandPrompt()
         term.write((" PROFILE COMMAND PROMPT"):sub(1, width))
         term.setBackgroundColor(colors.black)
         writePromptLine("Only programs and files in your home directory are available.", colors.lightGray)
-        writePromptLine("Commands: help, pwd, ls, cd, run, clear, exit", colors.lightGray)
+        showPromptHelp()
         writePromptLine("Paths and programs stay within your home directory.", colors.lightGray)
+    end
+    local function resolvePath(input)
+        local path = resolveHomePath(workingDirectory, input)
+        if not path then return nil, "Path is outside your home directory or invalid." end
+        return path
+    end
+    local function resolveCopyDestination(source, destinationInput)
+        local destination, pathError = resolvePath(destinationInput)
+        if not destination then return nil, pathError end
+        if fs.isDir(destination) then
+            destination = fs.combine(destination, fs.getName(source))
+        end
+        if not isWithinRoot(destination, homeDirectory) or destination == homeDirectory then
+            return nil, "Destination must be inside your home directory."
+        end
+        if destination == source then return nil, "Source and destination are the same." end
+        if fs.exists(destination) then return nil, "Destination already exists." end
+        local parent = fs.getDir(destination)
+        if not fs.isDir(parent) then return nil, "Destination directory does not exist." end
+        if fs.isDir(source) and isWithinRoot(destination, source) then
+            return nil, "A directory cannot be moved or copied into itself."
+        end
+        return destination
     end
     local function resolveProgram(command)
         local paths = {}
@@ -717,9 +745,19 @@ local function commandPrompt()
         local command = beforePrefix:match("^%s*(%S+)")
         local candidates = {}
         if not command then
-            candidates = { "help", "pwd", "ls", "cd", "run", "clear", "exit" }
+            for _, candidate in ipairs({ "cd", "dir", "ls", "pwd", "mkdir", "md",
+                "rm", "del", "delete", "cp", "copy", "mv", "move", "edit",
+                "run", "cls", "clear", "help", "exit" }) do
+                if candidate:sub(1, #prefix):lower() == prefix:lower() then
+                    table.insert(candidates, candidate:sub(#prefix + 1))
+                end
+            end
         elseif command:lower() == "cd" or command:lower() == "ls"
-            or command:lower() == "run" then
+            or command:lower() == "dir" or command:lower() == "run"
+            or command:lower() == "rm" or command:lower() == "del" or command:lower() == "delete"
+            or command:lower() == "cp" or command:lower() == "copy"
+            or command:lower() == "mv" or command:lower() == "move"
+            or command:lower() == "edit" then
             local pathPrefix = prefix:gsub("\\", "/")
             local parent, leaf = pathPrefix:match("^(.*)/([^/]*)$")
             leaf = leaf or pathPrefix
@@ -739,16 +777,20 @@ local function commandPrompt()
                             and name:sub(1, #leaf):lower() == leaf:lower() then
                             local candidatePath = fs.combine(searchDirectory, name)
                             local isDirectory = fs.isDir(candidatePath)
-                            if (command:lower() ~= "cd" or isDirectory)
+                            local commandName = command:lower()
+                            local wantsDirectory = commandName == "cd"
+                            if (not wantsDirectory or isDirectory)
                                 and (command:lower() ~= "run"
                                     or isDirectory or name:lower():match("%.lua$")) then
-                                local candidate = (parent and parent ~= "" and parent .. "/" or "")
-                                    .. name .. (isDirectory and "/" or "")
-                                if inApps and directoryIndex == 2 then
-                                    candidate = name .. (isDirectory and "/" or "")
-                                end
-                                if candidate:sub(1, #prefix):lower() == prefix:lower() then
-                                    table.insert(candidates, candidate:sub(#prefix + 1))
+                                if commandName ~= "edit" or not isDirectory then
+                                    local candidate = (parent and parent ~= "" and parent .. "/" or "")
+                                        .. name .. (isDirectory and "/" or "")
+                                    if inApps and directoryIndex == 2 then
+                                        candidate = name .. (isDirectory and "/" or "")
+                                    end
+                                    if candidate:sub(1, #prefix):lower() == prefix:lower() then
+                                        table.insert(candidates, candidate:sub(#prefix + 1))
+                                    end
                                 end
                             end
                         end
@@ -777,9 +819,8 @@ local function commandPrompt()
             if command == "exit" or command == "quit" then
                 break
             elseif command == "help" then
-                writePromptLine("Commands: help, pwd, ls [path], cd [path], run <program> [args], clear, exit")
-                writePromptLine("Programs are limited to Lua files in your home directory.")
-            elseif command == "clear" then
+                showPromptHelp()
+            elseif command == "clear" or command == "cls" then
                 term.clear()
                 term.setCursorPos(1, 1)
             elseif command == "pwd" then
@@ -791,7 +832,7 @@ local function commandPrompt()
                 else
                     workingDirectory = destination
                 end
-            elseif command == "ls" then
+            elseif command == "ls" or command == "dir" then
                 local directory = resolveHomePath(workingDirectory, arguments[2] or ".")
                 if not directory or not fs.isDir(directory) then
                     writePromptLine("Directory not found in your home directory.", colors.red)
@@ -809,6 +850,77 @@ local function commandPrompt()
                         end
                     end
                     if shown == 0 then writePromptLine("Directory is empty.", colors.lightGray) end
+                end
+            elseif command == "mkdir" or command == "md" then
+                if not arguments[2] then
+                    writePromptLine("Usage: mkdir <directory>", colors.red)
+                else
+                    local directory = resolveHomePath(workingDirectory, arguments[2])
+                    if not directory or directory == homeDirectory then
+                        writePromptLine("Choose a directory inside your home directory.", colors.red)
+                    elseif fs.exists(directory) then
+                        writePromptLine("That path already exists.", colors.red)
+                    else
+                        local ok, err = pcall(fs.makeDir, directory)
+                        writePromptLine(ok and "Directory created."
+                            or ("Could not create directory: " .. tostring(err)),
+                            ok and colors.lime or colors.red)
+                    end
+                end
+            elseif command == "rm" or command == "del" or command == "delete" then
+                if not arguments[2] then
+                    writePromptLine("Usage: rm <file or directory>", colors.red)
+                else
+                    local path = resolveHomePath(workingDirectory, arguments[2])
+                    if not path or path == homeDirectory or not fs.exists(path) then
+                        writePromptLine("File or directory not found inside your home directory.", colors.red)
+                    else
+                        local ok, err = pcall(fs.delete, path)
+                        writePromptLine(ok and "Removed " .. displayPath(path) .. "."
+                            or ("Could not remove path: " .. tostring(err)),
+                            ok and colors.lime or colors.red)
+                    end
+                end
+            elseif command == "cp" or command == "copy"
+                or command == "mv" or command == "move" then
+                if not arguments[2] or not arguments[3] then
+                    writePromptLine("Usage: " .. command .. " <source> <destination>", colors.red)
+                else
+                    local source = resolveHomePath(workingDirectory, arguments[2])
+                    if not source or source == homeDirectory or not fs.exists(source) then
+                        writePromptLine("Source not found inside your home directory.", colors.red)
+                    else
+                        local destination, destinationError =
+                            resolveCopyDestination(source, arguments[3])
+                        if not destination then
+                            writePromptLine(destinationError, colors.red)
+                        else
+                            local isCopy = command == "cp" or command == "copy"
+                            local operation = isCopy and fs.copy or fs.move
+                            local ok, operationError = pcall(operation, source, destination)
+                            writePromptLine(ok and "Completed " .. command .. "."
+                                or ("Could not " .. command .. ": " .. tostring(operationError)),
+                                ok and colors.lime or colors.red)
+                        end
+                    end
+                end
+            elseif command == "edit" then
+                local path = arguments[2] and resolveHomePath(workingDirectory, arguments[2])
+                local editorPath = shell.resolveProgram("edit")
+                if not path or path == homeDirectory or not fs.exists(path) or fs.isDir(path) then
+                    writePromptLine("Usage: edit <file inside your home directory>", colors.red)
+                elseif not editorPath then
+                    writePromptLine("The built-in edit program could not be found.", colors.red)
+                else
+                    local ok, result = pcall(os.run, _ENV, editorPath, "/" .. path)
+                    loadTheme()
+                    width = term.getSize()
+                    drawPromptHeader()
+                    if not ok then
+                        writePromptLine("Could not run edit: " .. tostring(result), colors.red)
+                    elseif result == false then
+                        writePromptLine("The edit command did not complete successfully.", colors.red)
+                    end
                 end
             else
                 local firstArgument = command == "run" and 2 or 1
