@@ -1686,7 +1686,7 @@ elseif downloaded and systemAppsInstalled then
 elseif downloaded then
     message = "App downloader is ready."
 else
-    message = downloadMessage
+    message = "Select a program to launch."
 end
 
 while true do
