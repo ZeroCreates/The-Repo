@@ -677,8 +677,9 @@ local function commandPrompt()
         print(tostring(text):sub(1, width))
     end
     local function showPromptHelp()
-        writePromptLine("Commands: cd, dir/ls, pwd, mkdir/md, rm/del/delete, cp/copy, mv/move")
-        writePromptLine("edit, Lua script paths, cls/clear, help, exit. Quote paths with spaces.")
+        writePromptLine("Commands: cd, ls, pwd, mkdir, rm, cp, mv, wget")
+        writePromptLine("Aliases: dir, md, del, delete, copy, move, edit")
+        writePromptLine("Lua paths, clear/cls, help, exit. Quote paths with spaces.")
     end
     local function drawPromptHeader()
         term.setBackgroundColor(colors.black)
@@ -714,6 +715,68 @@ local function commandPrompt()
             return nil, "A directory cannot be moved or copied into itself."
         end
         return destination
+    end
+    local function downloadFile(url, destinationInput)
+        if type(http) ~= "table" or type(http.get) ~= "function" then
+            return false, "Enable the ComputerCraft HTTP API to use wget."
+        end
+        if type(url) ~= "string" or not url:lower():match("^https?://") then
+            return false, "wget only supports HTTP and HTTPS URLs."
+        end
+
+        local destinationName
+        if not destinationInput then
+            local urlPath = url:match("^[Hh][Tt][Tt][Pp][Ss]?://[^/]+([^?#]*)")
+            destinationName = urlPath and urlPath:gsub("/+$", ""):match("([^/]+)$")
+            if not destinationName or destinationName == "." or destinationName == ".." then
+                return false, "Provide a destination filename for this URL."
+            end
+        end
+        local destination, pathError = resolvePath(destinationInput or destinationName)
+        if not destination then return false, pathError end
+        if destination == homeDirectory or fs.isDir(destination) then
+            return false, "Destination must be a file inside your home directory."
+        end
+        if fs.exists(destination) then
+            return false, "Destination already exists; remove it before downloading."
+        end
+        if not fs.isDir(fs.getDir(destination)) then
+            return false, "Destination directory does not exist."
+        end
+
+        local requestOk, response, requestError = pcall(http.get, url, nil, true)
+        if not requestOk then return false, "HTTP request failed: " .. tostring(response) end
+        if not response then return false, "HTTP request failed: " .. tostring(requestError or "no response") end
+
+        local responseCode
+        if type(response.getResponseCode) == "function" then
+            local codeOk, code = pcall(response.getResponseCode)
+            if not codeOk then
+                pcall(response.close)
+                return false, "Could not read the HTTP response status: " .. tostring(code)
+            end
+            responseCode = code
+        end
+        if responseCode and (responseCode < 200 or responseCode >= 300) then
+            pcall(response.close)
+            return false, "Download failed with HTTP " .. tostring(responseCode) .. "."
+        end
+
+        local readOk, contents = pcall(response.readAll)
+        local closeOk, closeError = pcall(response.close)
+        if not readOk then return false, "Could not read the download: " .. tostring(contents) end
+        if not closeOk then return false, "Could not close the HTTP response: " .. tostring(closeError) end
+        if type(contents) ~= "string" then return false, "The HTTP response did not contain file data." end
+
+        local file, openError = fs.open(destination, "wb")
+        if not file then return false, "Could not create destination file: " .. tostring(openError) end
+        local writeOk, writeError = pcall(file.write, contents)
+        local fileCloseOk, fileCloseError = pcall(file.close)
+        if not writeOk or not fileCloseOk then
+            pcall(fs.delete, destination)
+            return false, "Could not save download: " .. tostring(writeOk and fileCloseError or writeError)
+        end
+        return true, "Downloaded " .. tostring(#contents) .. " bytes to " .. displayPath(destination) .. "."
     end
     local function resolveProgram(command)
         local paths = {}
@@ -805,7 +868,7 @@ local function commandPrompt()
             local commandQuote = rawPrefix:match("^([\"'])")
             local commandPrefix = commandQuote and rawPrefix:sub(2) or rawPrefix
             for _, candidate in ipairs({ "cd", "dir", "ls", "pwd", "mkdir", "md",
-                "rm", "del", "delete", "cp", "copy", "mv", "move", "edit",
+                "rm", "del", "delete", "cp", "copy", "mv", "move", "wget", "edit",
                 "cls", "clear", "help", "exit" }) do
                 if not commandQuote
                     and candidate:sub(1, #rawPrefix):lower() == rawPrefix:lower() then
@@ -848,10 +911,12 @@ local function commandPrompt()
                 or commandName == "rm" or commandName == "del" or commandName == "delete"
                 or commandName == "cp" or commandName == "copy"
                 or commandName == "mv" or commandName == "move" or commandName == "edit"
+                or commandName == "wget"
             local supportsTwoPaths = commandName == "cp" or commandName == "copy"
                 or commandName == "mv" or commandName == "move"
             local needsPath = supportsTwoPaths and #previousArguments <= 2
-                or not supportsTwoPaths and #previousArguments == 1
+                or commandName == "wget" and #previousArguments == 2
+                or not supportsTwoPaths and commandName ~= "wget" and #previousArguments == 1
             if not supportsPaths or not needsPath then return candidates end
 
             local quoteCharacter = rawPrefix:match("^([\"'])")
@@ -994,6 +1059,13 @@ local function commandPrompt()
                                 ok and colors.lime or colors.red)
                         end
                     end
+                end
+            elseif command == "wget" then
+                if not arguments[2] or #arguments > 3 then
+                    writePromptLine("Usage: wget <http(s)://url> [destination]", colors.red)
+                else
+                    local ok, result = downloadFile(arguments[2], arguments[3])
+                    writePromptLine(result, ok and colors.lime or colors.red)
                 end
             elseif command == "edit" then
                 local path = arguments[2] and resolveHomePath(workingDirectory, arguments[2])
