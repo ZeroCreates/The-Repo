@@ -38,6 +38,8 @@ For example: `local HOST_BASE_URL = "https://scripts.example.com/"`. Also enable
 
 To bootstrap a new ComputerCraft computer, run `wget https://rift.zerocreates.org/launcher launcher.lua`, then run `launcher.lua`.
 
+Cloud Catcher is installed with the system apps. Start it from System Settings using the **CLOUD** button and enter the 32-character connection code. File hosting is limited to the active profile home; remote terminal access is disabled in this mode.
+
 ## Add or update apps
 
 Edit `app-catalog.json` to change the app catalog entries. Each `source` is a project-relative Lua path served by the host. All Lua files under `computercraft/` and the launcher are publicly served; other project files, including KubeJS scripts, are not exposed.

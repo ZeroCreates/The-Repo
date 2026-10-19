@@ -5,6 +5,7 @@ local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
 local ENCRYPTION_KEY_PATH = SYSTEM_DIRECTORY .. "/.data-key"
 local LAUNCHER_PATH = "/launcher.lua"
+local CLOUD_PROGRAM_PATH = SYSTEM_DIRECTORY .. "/apps/cloud.lua"
 local HOST_BASE_URL = "https://rift.zerocreates.org/"
 local THEMES = {
     { name = "Ocean", accent = colors.cyan, highlight = colors.blue },
@@ -580,6 +581,62 @@ local function updateLauncher()
     message = "Launcher updated. Restart to use the new version."
 end
 
+local function startCloud()
+    if not fs.exists(CLOUD_PROGRAM_PATH) then
+        message = "Cloud Catcher is not installed. Refresh system apps and try again."
+        return
+    end
+    if not http or type(http.websocket) ~= "function" then
+        message = "Enable the ComputerCraft HTTP API and allow the Cloud Catcher host."
+        return
+    end
+
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("CLOUD CATCHER")
+    print("Enter the 32-character connection code.")
+    write("Code: ")
+    local code = read("*")
+    if not code or code == "" then
+        message = "Cloud Catcher was not started."
+        return
+    end
+    if #code ~= 32 or code:find("[^%a%d]") then
+        message = "Cloud Catcher code must be 32 letters or numbers."
+        return
+    end
+
+    local environment = {}
+    for name, value in pairs(_ENV) do environment[name] = value end
+    environment.profileHomeDirectory = homeDirectory
+    local cloudShell = {}
+    for name, value in pairs(shell) do cloudShell[name] = value end
+    cloudShell.run = nil
+    cloudShell.execute = nil
+    environment.shell = cloudShell
+
+    local previousDirectory = shell.dir()
+    shell.setDir(homeDirectory)
+    local originalPrintError = printError
+    local runtimeError
+    printError = function(text)
+        runtimeError = tostring(text)
+        originalPrintError(text)
+    end
+    local ok, result = pcall(os.run, environment, CLOUD_PROGRAM_PATH, code)
+    printError = originalPrintError
+    shell.setDir(previousDirectory)
+    if not ok then
+        message = "Cloud Catcher error: " .. tostring(result)
+    elseif result == false then
+        message = "Cloud Catcher error: " .. (runtimeError or "program did not complete successfully.")
+    else
+        message = "Cloud Catcher connection ended."
+    end
+end
+
 local function drawButtons(buttons, width, row, isColor)
     local slotWidth = math.max(1, math.floor(width / #buttons))
     for index, button in ipairs(buttons) do
@@ -724,6 +781,7 @@ local function draw()
         term.write(message:sub(1, math.max(0, width - 2)))
         buttons = {
             { label = isAdmin and "ACCOUNTS" or "NO ADMIN ACCESS", action = "accounts" },
+            { label = "CLOUD", action = "cloud" },
             { label = "MAINTENANCE", action = "maintenance" },
             { label = "EXIT", action = "exit" },
         }
@@ -888,6 +946,8 @@ while true do
                 else
                     message = "Only an administrator can manage user accounts."
                 end
+            elseif action == "cloud" then
+                startCloud()
             elseif action == "preferences" then
                 page = "settings"
                 message = "Theme row: click left/right; choose Custom to use the hex colors."

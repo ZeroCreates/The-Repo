@@ -3,3 +3,5 @@
 *.js
 app-catalog.json
 !server.js
+!app-catalog.json
+!computercraft/system/cloud.lua

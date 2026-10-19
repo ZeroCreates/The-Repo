@@ -1,6 +1,7 @@
 local SYSTEM_APP_DIRECTORY = "/.launcher/apps"
 local DOWNLOADER_PATH = SYSTEM_APP_DIRECTORY .. "/app-downloader.lua"
 local SYSTEM_FILE_BROWSER_PATH = SYSTEM_APP_DIRECTORY .. "/file-browser.lua"
+local SYSTEM_CLOUD_PATH = SYSTEM_APP_DIRECTORY .. "/cloud.lua"
 local SETTINGS_PROGRAM_PATH = SYSTEM_APP_DIRECTORY .. "/settings.lua"
 local HOST_BASE_URL = "https://rift.zerocreates.org/"
 local nativeFs = fs
@@ -964,7 +965,7 @@ local function refreshApps()
     fs.makeDir(SYSTEM_APP_DIRECTORY)
     for _, name in ipairs(fs.list(SYSTEM_APP_DIRECTORY)) do
         local path = fs.combine(SYSTEM_APP_DIRECTORY, name)
-        if isLuaFile(path) and not available[path] then
+        if isLuaFile(path) and path ~= SYSTEM_CLOUD_PATH and not available[path] then
             table.insert(available, {
                 path = path,
                 name = catalogNames[name] or displayName(name),
@@ -1125,7 +1126,7 @@ local function waitForReturn()
     term.setTextColor(colors.lightGray)
     print("")
     print("Exiting the program and returning to the launcher.")
-    sleep(.1)
+    sleep(.5)
 end
 
 local function updateSelected()
@@ -1657,6 +1658,39 @@ local function runHomeProgram(programPath, profileContext, ...)
     return nativeOs.run(environment, target, ...)
 end
 
+local function createProfileCloudRunner(profileContext)
+    return function(command, ...)
+        if type(command) ~= "string" or command:find("[%c:]") then
+            return false, "Invalid program path."
+        end
+        local normalized = command:gsub("\\", "/"):gsub("^/+", "")
+        local candidates = {}
+        local function addCandidate(path)
+            local candidate = nativeFs.combine(profileContext.homeDirectory, path)
+            if isInHomeDirectory(candidate) then
+                candidates[#candidates + 1] = candidate
+                if not candidate:lower():match("%.lua$") then
+                    candidates[#candidates + 1] = candidate .. ".lua"
+                end
+            end
+        end
+        addCandidate(normalized)
+        if not normalized:find("/", 1, true) then
+            addCandidate("apps/" .. normalized)
+            addCandidate("shell/" .. normalized)
+        end
+        for _, candidate in ipairs(candidates) do
+            if nativeFs.exists(candidate) and not nativeFs.isDir(candidate)
+                and candidate:lower():match("%.lua$") then
+                local ok, result = pcall(runHomeProgram, candidate, profileContext, ...)
+                if not ok then return false, tostring(result) end
+                return result
+            end
+        end
+        return false, "Program not found in the active profile home."
+    end
+end
+
 local function launchSelected(openInTab)
     local app = apps[selected]
     if not app then
@@ -1727,9 +1761,23 @@ local function launchSelected(openInTab)
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
         ok, result = pcall(runner, createSystemEnvironment(), app.path, profileContext.homeDirectory,
             runProfileProgram, listLaunchProfiles, authorizeLaunchProfile)
-    elseif app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "") then
+    elseif app.path:gsub("^/+", "") == SYSTEM_CLOUD_PATH:gsub("^/+", "") then
+        local environment = createSystemEnvironment()
+        environment.profileHomeDirectory = homeDirectory
+        environment.cloudRunProgram = createProfileCloudRunner(profileContext)
+        local cloudShell = {}
+        for name, value in pairs(shell) do cloudShell[name] = value end
+        cloudShell.run = nil
+        cloudShell.execute = nil
+        environment.shell = cloudShell
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
-        ok, result = pcall(runner, createSystemEnvironment(), app.path, homeDirectory, currentUser, getThemeInfo())
+        ok, result = pcall(runner, environment, app.path)
+    elseif app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "") then
+        local environment = createSystemEnvironment()
+        environment.profileHomeDirectory = homeDirectory
+        environment.cloudRunProgram = createProfileCloudRunner(profileContext)
+        local runner = openInTab and nativeMultishell.launch or nativeOs.run
+        ok, result = pcall(runner, environment, app.path, homeDirectory, currentUser, getThemeInfo())
     else
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
         ok, result = pcall(runner, createSystemEnvironment(), app.path, homeDirectory)
@@ -1799,7 +1847,17 @@ local function openSystemSettings()
     term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(1, 1)
-    local ok, result = pcall(nativeOs.run, createSystemEnvironment(), SETTINGS_PROGRAM_PATH,
+    local profileContext = {
+        user = currentUser,
+        homeDirectory = homeDirectory,
+        passwords = profilePasswords,
+        admins = profileAdmins,
+        authorized = authorizedProfiles,
+    }
+    local environment = createSystemEnvironment()
+    environment.profileHomeDirectory = homeDirectory
+    environment.cloudRunProgram = createProfileCloudRunner(profileContext)
+    local ok, result = pcall(nativeOs.run, environment, SETTINGS_PROGRAM_PATH,
         homeDirectory, currentUser, getThemeInfo())
     shell.setDir(previousDirectory)
     loadSettings()
