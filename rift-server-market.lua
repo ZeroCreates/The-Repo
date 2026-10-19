@@ -45,6 +45,29 @@ local function readProductsState(path)
     return nil
 end
 
+local function generateProductId(products)
+    while true do
+        local parts = {}
+        for index = 1, 24 do
+            parts[index] = string.format("%x", math.random(0, 15))
+        end
+        local candidate = table.concat(parts)
+        local inUse = false
+        for _, product in ipairs(products) do
+            if product.id == candidate then
+                inUse = true
+                break
+            end
+        end
+        if not inUse then return candidate end
+    end
+end
+
+local function isProductId(productId)
+    return type(productId) == "string" and #productId == 24
+        and productId:match("^[%x]+$") ~= nil
+end
+
 local function rebuildProviderAddressesFromProducts(products)
     local providerAddresses = {}
     for _, product in ipairs(products) do
@@ -56,6 +79,7 @@ local function rebuildProviderAddressesFromProducts(products)
 end
 
 local function loadState()
+    math.randomseed((os.epoch("utc") + os.getComputerID() + math.floor(os.clock() * 1000)) % 2147483647)
     local defaultState = { nextId = 1, nextProductId = 1, orders = {}, products = {}, providerAddresses = {} }
     if not fs.exists(DATA_FILE) and not fs.exists(BACKUP_FILE)
         and not fs.exists(PRODUCTS_FILE) and not fs.exists(PRODUCTS_BACKUP_FILE) then
@@ -79,6 +103,19 @@ local function loadState()
     }
 
     loaded.products = type(loaded.products) == "table" and loaded.products or {}
+    for _, product in ipairs(loaded.products) do
+        if not isProductId(product.id) then
+            product.id = generateProductId(loaded.products)
+        end
+    end
+    for index, product in ipairs(loaded.products) do
+        for earlierIndex = 1, index - 1 do
+            if loaded.products[earlierIndex].id == product.id then
+                product.id = generateProductId(loaded.products)
+                break
+            end
+        end
+    end
     loaded.providerAddresses = type(loaded.providerAddresses) == "table" and loaded.providerAddresses or rebuildProviderAddressesFromProducts(loaded.products)
     local derivedProviderAddresses = rebuildProviderAddressesFromProducts(loaded.products)
     for providerId, address in pairs(derivedProviderAddresses) do
@@ -210,8 +247,8 @@ local function createOrder(senderId, username, message)
     local orderProviderKey
     local orderProviderAddress
     for _, requested in ipairs(message.items) do
-        if type(requested) ~= "table" or type(requested.productId) ~= "number"
-            or requested.productId % 1 ~= 0 or type(requested.quantity) ~= "number"
+        if type(requested) ~= "table" or not isProductId(requested.productId)
+            or type(requested.quantity) ~= "number"
             or requested.quantity % 1 ~= 0 or requested.quantity < 1 or requested.quantity > 99 then
             return sendError(senderId, "The order contains an invalid item or quantity.")
         end
@@ -403,7 +440,7 @@ local function publishProduct(senderId, username, message)
 
     local product
     if submitted.id ~= nil then
-        if type(submitted.id) ~= "number" or submitted.id % 1 ~= 0 then
+        if not isProductId(submitted.id) then
             return sendError(senderId, "Invalid product ID.")
         end
         product = findProduct(submitted.id)
@@ -413,11 +450,10 @@ local function publishProduct(senderId, username, message)
         end
     else
         product = {
-            id = state.nextProductId,
+            id = generateProductId(state.products),
             providerUser = username,
             createdAt = os.epoch("utc"),
         }
-        state.nextProductId = state.nextProductId + 1
         table.insert(state.products, product)
     end
 
@@ -541,7 +577,7 @@ local function getDashboardStats()
         return (first.createdAt or 0) > (second.createdAt or 0)
     end)
     table.sort(products, function(first, second)
-        return (first.id or 0) > (second.id or 0)
+        return (first.createdAt or 0) > (second.createdAt or 0)
     end)
     table.sort(recentOrders, function(first, second)
         return (first.createdAt or 0) > (second.createdAt or 0)

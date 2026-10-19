@@ -76,7 +76,7 @@
     "name": "Market Provider",
     "source": "computercraft/apps/market-provider.lua",
     "file": "market-provider.lua",
-    "version": "1.3.9",
+    "version": "1.4.0",
     "description": "Manage products and orders; save your payment address to your Rift account"
   },
   {
@@ -90,7 +90,7 @@
     "name": "Rift Market",
     "source": "computercraft/apps/market-client.lua",
     "file": "market-client.lua",
-    "version": "1.5.9",
+    "version": "1.6.0",
     "description": "Shop, save delivery addresses, track account-based orders, and sign out of Rift"
   },
   {

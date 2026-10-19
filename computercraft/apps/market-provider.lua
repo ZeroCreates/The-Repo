@@ -660,7 +660,7 @@ local function showOrderActions(order)
 end
 
 local function productPage(products, page, errorMessage)
-    drawHeader("MY PRODUCTS", "PUBLISHED LISTINGS  /  MANAGED BY THIS PROVIDER")
+    drawHeader("MY PRODUCTS", "CLICK TO MANAGE  /  SCROLL TO BROWSE")
     sectionTitle(4, "YOUR CATALOG  |  " .. #products)
     local visibleProducts = {}
 
@@ -679,8 +679,7 @@ local function productPage(products, page, errorMessage)
             local product = products[index]
             local y = 5 + index - first
             table.insert(visibleProducts, { product = product, row = y })
-            writeAt(2, y, "#" .. product.id, colors.cyan)
-            writeAt(8, y, product.name:sub(1, math.max(1, width - 23)), colors.white)
+            writeAt(2, y, product.name:sub(1, math.max(1, width - 23)), colors.white)
             writeAt(width - 14, y, money(product.price), colors.yellow)
             writeAt(width - 6, y, product.available and "ON" or "OFF",
                 product.available and colors.lime or colors.gray)
@@ -688,7 +687,7 @@ local function productPage(products, page, errorMessage)
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
 
-    local buttons = drawChoices("a add|n/v pages|b back")
+    local buttons = drawChoices("a add|n/v scroll|b back")
     while true do
         local event, button, x, y = os.pullEvent()
         if event == "mouse_click" and button == 1 then
@@ -700,6 +699,10 @@ local function productPage(products, page, errorMessage)
             for _, entry in ipairs(visibleProducts) do
                 if y == entry.row then return "product", page, entry.product end
             end
+        elseif event == "mouse_scroll" and button > 0 then
+            return "n", page
+        elseif event == "mouse_scroll" then
+            return "v", page
         end
     end
 end
@@ -709,7 +712,7 @@ local toggleProduct
 
 local function productActions(product)
     while true do
-        drawHeader("PRODUCT #" .. product.id, "TAP AN ACTION")
+        drawHeader(product.name, "TAP AN ACTION")
         sectionTitle(4, "LISTING")
         writeAt(2, 6, product.name, colors.white)
         writeAt(2, 8, money(product.price) .. "  |  "
@@ -761,7 +764,7 @@ local function addProduct()
 end
 
 editProduct = function(product)
-    drawHeader("EDIT PRODUCT #" .. product.id, "Leave a field blank to keep it unchanged.")
+    drawHeader("EDIT PRODUCT", "Leave a field blank to keep it unchanged.")
     term.setCursorPos(2, 6)
     write("Name [" .. product.name .. "]: ")
     local name = read()

@@ -656,7 +656,7 @@ end
 
 local function renderCatalog(products, cart, errorMessage, page)
     local visibleProducts = {}
-    drawHeader("RIFT MARKET", "INDEPENDENT PROVIDERS  /  LIVE CATALOG")
+    drawHeader("RIFT MARKET", "CLICK A PRODUCT TO ADD  /  SCROLL TO BROWSE")
     sectionTitle(4, "AVAILABLE PRODUCTS  |  " .. #products)
     if errorMessage then
         writeAt(2, 6, errorMessage, colors.red)
@@ -674,8 +674,7 @@ local function renderCatalog(products, cart, errorMessage, page)
             local product = products[index]
             local y = 5 + (index - first) * 2
             table.insert(visibleProducts, { product = product, firstRow = y })
-            writeAt(2, y, "#" .. product.id, themeAccent)
-            writeAt(8, y, product.name:sub(1, math.max(1, width - 20)), colors.white)
+            writeAt(2, y, product.name:sub(1, math.max(1, width - 14)), colors.white)
             writeAt(width - 9, y, money(product.price), colors.lime)
             local providerName = product.providerUser or product.providerName or "Provider"
             writeAt(4, y + 1, "By " .. providerName .. "  |  IN CART: "
@@ -684,8 +683,8 @@ local function renderCatalog(products, cart, errorMessage, page)
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
 
-    local help = "a add by ID|c cart " .. cartCount(cart)
-        .. "|o my orders|s track|x sign out|n/v pages|r refresh|q quit"
+    local help = "c cart " .. cartCount(cart)
+        .. "|o my orders|s track|x sign out|n/v scroll|r refresh|q quit"
     if not mouseEnabled then return readChoice(help), page end
 
     local buttons = drawChoices(help)
@@ -702,24 +701,15 @@ local function renderCatalog(products, cart, errorMessage, page)
                     return "product", page, entry.product
                 end
             end
+        elseif event == "mouse_scroll" and button > 0 then
+            return "n", page
+        elseif event == "mouse_scroll" then
+            return "v", page
         end
     end
 end
 
 local addSelectedProduct
-
-local function addToCart(products, cart)
-    drawHeader("RIFT MARKET", "ADD TO CART  /  ENTER A PRODUCT ID")
-    term.setCursorPos(2, 6)
-    write("Product ID: ")
-    local productId = tonumber(read())
-    local product = productId and findProduct(products, productId)
-    if not product then
-        showNotice("PRODUCT NOT FOUND", "Refresh the market and choose an available product ID.")
-        return
-    end
-    addSelectedProduct(products, product, cart)
-end
 
 addSelectedProduct = function(products, product, cart)
     for existingId in pairs(cart) do
@@ -746,12 +736,15 @@ local function cartPage(products, cart)
     drawHeader("YOUR CART", "REVIEW ITEMS  /  SERVER PRICES ARE FINAL")
     sectionTitle(4, "ITEMS  |  " .. cartCount(cart))
     local width, height = term.getSize()
-    local entries, total = {}, 0
+    local entries, total, visibleEntries = {}, 0, {}
     for productId, quantity in pairs(cart) do
         table.insert(entries, { id = productId, quantity = quantity })
     end
     table.sort(entries, function(a, b) return a.id < b.id end)
     local visible = math.min(#entries, math.max(0, height - 10))
+    if #entries > 0 then
+        writeAt(2, 5, "Click an item to remove it.", colors.lightGray)
+    end
     for index, entry in ipairs(entries) do
         local product = findProduct(products, entry.id)
         if product then total = total + entry.quantity * product.price end
@@ -761,8 +754,9 @@ local function cartPage(products, cart)
                 writeAt(2, y, entry.quantity .. "x " .. product.name, colors.white)
                 writeAt(width - 9, y, money(entry.quantity * product.price), colors.lime)
             else
-                writeAt(2, y, "#" .. entry.id .. " unavailable", colors.red)
+                writeAt(2, y, "Unavailable item", colors.red)
             end
+            table.insert(visibleEntries, { id = entry.id, row = y })
         end
     end
     if #entries == 0 then
@@ -773,19 +767,20 @@ local function cartPage(products, cart)
             writeAt(2, height - 3, "Some items are below the visible area.", colors.yellow)
         end
     end
-    return readChoice("p place order|d remove by ID|b back")
-end
-
-local function removeFromCart(cart)
-    term.setCursorPos(2, 6)
-    write("Product ID to remove: ")
-    local productId = tonumber(read())
-    if not productId or not cart[productId] then
-        showNotice("ITEM NOT FOUND", "That product ID is not in your cart.")
-        return
+    local buttons = drawChoices("p place order|b back")
+    while true do
+        local event, button, x, y = os.pullEvent()
+        if event == "mouse_click" and button == 1 then
+            for _, choice in ipairs(buttons) do
+                if y == choice.row and x >= choice.left and x <= choice.right then
+                    return choice.key
+                end
+            end
+            for _, entry in ipairs(visibleEntries) do
+                if y == entry.row then return "remove", entry.id end
+            end
+        end
     end
-    cart[productId] = nil
-    showNotice("ITEM REMOVED", "Product removed from your cart.")
 end
 
 local function showOrder(order)
@@ -990,17 +985,14 @@ while true do
     local products, err = fetchCatalog()
     local choice, shownPage, selectedProduct = renderCatalog(products or {}, cart, err, page)
     page = shownPage or page
-    if choice == "a" then
-        if products then addToCart(products, cart)
-        else showNotice("MARKET UNAVAILABLE", err) end
-    elseif choice == "product" then
+    if choice == "product" then
         if products and selectedProduct then addSelectedProduct(products, selectedProduct, cart) end
     elseif choice == "c" then
-        local cartChoice = cartPage(products or {}, cart)
+        local cartChoice, productId = cartPage(products or {}, cart)
         if cartChoice == "p" then
             placeOrder(cart)
-        elseif cartChoice == "d" then
-            removeFromCart(cart)
+        elseif cartChoice == "remove" then
+            cart[productId] = nil
         end
     elseif choice == "s" then
         checkStatus()

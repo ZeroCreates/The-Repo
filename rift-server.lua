@@ -516,8 +516,7 @@ local function drawMonitorDashboard(page, pageNumber, pageCount, rowsPerPage, bo
                 local product = market.products[index]
                 local price = type(product.price) == "number"
                     and ("$" .. string.format("%.2f", product.price / 100)) or "price n/a"
-                add("#" .. tostring(product.id) .. "  "
-                    .. (product.available and "LIVE" or "PAUSED") .. "  "
+                add((product.available and "LIVE" or "PAUSED") .. "  "
                     .. tostring(product.name or "unnamed") .. "  |  " .. price .. "  by "
                     .. tostring(product.providerName or product.providerUser or "unknown"),
                     product.available and good or muted)
