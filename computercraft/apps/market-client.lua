@@ -280,8 +280,13 @@ local function loadUserData()
             file.close()
         end
         if data ~= nil then
-            local ok, saved = pcall(textutils.unserializeJSON, data)
-            if not ok or type(saved) ~= "table" then
+            local saved = data
+            if type(data) == "string" then
+                local ok
+                ok, saved = pcall(textutils.unserializeJSON, data)
+                if not ok then saved = nil end
+            end
+            if type(saved) ~= "table" then
                 error("Saved Market profile data is invalid.")
             end
             userData = saved
@@ -305,7 +310,7 @@ end
 
 local function saveUserData()
     if storage then
-        local saved, saveError = storage.write(USERDATA_FILE_STORED, textutils.serializeJSON(userData))
+        local saved, saveError = storage.write(USERDATA_FILE_STORED, userData)
         if not saved then
             return false, "Could not save account details to private storage: "
                 .. tostring(saveError or "unknown storage error")
@@ -486,17 +491,34 @@ local function saveDeliveryAddresses(addresses)
     if account == nil and readError and readError ~= "Stored data was not found." then
         return false, "Could not read the saved Rift account: " .. tostring(readError)
     end
-    if type(account) ~= "table"
-        or type(account.username) ~= "string"
+    if type(account) ~= "table" or type(account.username) ~= "string"
+        or account.username:lower() ~= tostring(riftAccount.username or ""):lower()
         or type(account.password) ~= "string" then
-        account = riftAccount
+        if readError ~= "Stored data was not found." then
+            return false, "The saved Rift account does not match the signed-in account."
+        end
+        account = {}
+        for key, value in pairs(riftAccount) do account[key] = value end
     end
     account.deliveryAddresses = addresses
     local saved, saveError = writeRiftAccount(RIFT_LOGIN_PATH, account)
     if not saved then
         return false, tostring(saveError or "Could not save Rift account addresses.")
     end
-    riftAccount = account
+    local savedAccount, verifyError = readRiftAccount(RIFT_LOGIN_PATH)
+    if type(savedAccount) ~= "table" or type(savedAccount.deliveryAddresses) ~= "table"
+        or type(savedAccount.username) ~= "string"
+        or savedAccount.username:lower() ~= account.username:lower()
+        or #savedAccount.deliveryAddresses ~= #addresses then
+        return false, "The saved Rift account addresses could not be verified."
+            .. (verifyError and " " .. tostring(verifyError) or "")
+    end
+    for index, address in ipairs(addresses) do
+        if savedAccount.deliveryAddresses[index] ~= address then
+            return false, "The saved Rift account addresses did not match the address list."
+        end
+    end
+    riftAccount = savedAccount
     return true
 end
 
@@ -519,19 +541,22 @@ local function chooseDeliveryAddress()
             if address == legacyAddress then found = true break end
         end
         if not found then
-            table.insert(addresses, legacyAddress)
-            local saved, saveError = saveDeliveryAddresses(addresses)
+            local migratedAddresses = {}
+            for _, address in ipairs(addresses) do
+                table.insert(migratedAddresses, address)
+            end
+            table.insert(migratedAddresses, legacyAddress)
+            local saved, saveError = saveDeliveryAddresses(migratedAddresses)
             if not saved then
                 return nil, "Could not migrate your saved delivery address: " .. saveError
             end
+            addresses = migratedAddresses
         end
         userData.deliveryAddress = nil
-        if storage then
-            local cleared, clearError = saveUserData()
-            if not cleared then
-                showNotice("ADDRESS MIGRATED", "The delivery address is saved in your Rift account, but the old profile copy remains: "
-                    .. tostring(clearError))
-            end
+        local cleared, clearError = saveUserData()
+        if not cleared then
+            showNotice("ADDRESS MIGRATED", "The delivery address is saved in your Rift account, but the old profile copy remains: "
+                .. tostring(clearError))
         end
     end
 
@@ -563,11 +588,16 @@ local function chooseDeliveryAddress()
                 for _, savedAddress in ipairs(addresses) do
                     if savedAddress == address then duplicate = true break end
                 end
-                if not duplicate then table.insert(addresses, address) end
-                local saved, saveError = saveDeliveryAddresses(addresses)
+                local updatedAddresses = {}
+                for _, savedAddress in ipairs(addresses) do
+                    table.insert(updatedAddresses, savedAddress)
+                end
+                if not duplicate then table.insert(updatedAddresses, address) end
+                local saved, saveError = saveDeliveryAddresses(updatedAddresses)
                 if not saved then
                     showNotice("ADDRESS NOT SAVED", saveError)
                 else
+                    addresses = updatedAddresses
                     return address
                 end
             end
