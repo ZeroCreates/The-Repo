@@ -2,7 +2,7 @@ local SYSTEM_APP_DIRECTORY = "/.launcher/apps"
 local DOWNLOADER_PATH = SYSTEM_APP_DIRECTORY .. "/app-downloader.lua"
 local SYSTEM_FILE_BROWSER_PATH = SYSTEM_APP_DIRECTORY .. "/file-browser.lua"
 local SETTINGS_PROGRAM_PATH = SYSTEM_APP_DIRECTORY .. "/settings.lua"
-local REPOSITORY_BASE_URL = "https://raw.githubusercontent.com/ZeroCreates/The-Repo/main/"
+local HOST_BASE_URL = "http://127.0.0.1:3000/"
 local nativeFs = fs
 local nativeOs = os
 local nativeRequire = require
@@ -536,7 +536,7 @@ local function installDownloader()
     end
 
     local ok, response, requestError = pcall(
-        http.get, REPOSITORY_BASE_URL .. "computercraft/system/app-downloader.lua"
+        http.get, HOST_BASE_URL .. "computercraft/system/app-downloader.lua"
     )
     if not ok then return false, "Downloader request failed: " .. tostring(response) end
     if not response then
@@ -546,7 +546,7 @@ local function installDownloader()
     local responseCode = response.getResponseCode and response.getResponseCode()
     if responseCode and responseCode ~= 200 then
         response.close()
-        return false, "Downloader request failed: GitHub returned HTTP " .. responseCode .. "."
+        return false, "Downloader request failed: host returned HTTP " .. responseCode .. "."
     end
 
     local contents = response.readAll()

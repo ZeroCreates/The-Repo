@@ -1,6 +1,4 @@
-local OWNER_REPO = "ZeroCreates/The-Repo"
-local BRANCH = "main"
-local RAW_BASE_URL = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/"
+local HOST_BASE_URL = "http://127.0.0.1:3000/"
 local CATALOG_PATH = "app-catalog.json"
 local USER_ROOT = "/users/"
 local SYSTEM_DIRECTORY = "/.launcher"
@@ -14,7 +12,7 @@ local APP_NAMES_PATH = SYSTEM_DIRECTORY .. "/app-catalog-names.json"
 local apps = {}
 local selected = 1
 local firstVisible = 1
-local message = "Loading app catalog from GitHub..."
+local message = "Loading app catalog from the script host..."
 local installedVersions = {}
 local themeIndex = 1
 local themes = {
@@ -131,7 +129,7 @@ end
 
 local function request(url)
     local ok, response, requestError = pcall(http.get, url, {
-        ["Accept"] = "application/vnd.github+json",
+        ["Accept"] = "application/json, text/plain",
         ["User-Agent"] = "ComputerCraft-App-Downloader",
     })
     if not ok then return nil, tostring(response) end
@@ -139,20 +137,20 @@ local function request(url)
     local responseCode = response.getResponseCode and response.getResponseCode()
     if responseCode and responseCode ~= 200 then
         response.close()
-        return nil, "GitHub returned HTTP " .. responseCode .. "."
+        return nil, "Script host returned HTTP " .. responseCode .. "."
     end
     local contents = response.readAll()
     response.close()
-    if not contents or contents == "" then return nil, "GitHub returned an empty response." end
+    if not contents or contents == "" then return nil, "The script host returned an empty response." end
     return contents
 end
 
 local function loadCatalog()
     if not http or not http.get then
-        return nil, "Enable the ComputerCraft HTTP API to load apps from GitHub."
+        return nil, "Enable the ComputerCraft HTTP API to load apps from the script host."
     end
 
-    local contents, err = request(RAW_BASE_URL .. CATALOG_PATH)
+    local contents, err = request(HOST_BASE_URL .. CATALOG_PATH)
     if not contents then return nil, err end
     contents = contents:gsub("^\239\187\191", "")
     if not textutils or type(textutils.unserializeJSON) ~= "function" then
@@ -239,7 +237,7 @@ local function draw()
     term.setBackgroundColor(colors.black)
     term.setCursorPos(2, 2)
     term.setTextColor(colors.lightGray)
-    term.write(("Apps from " .. OWNER_REPO .. "  |  N/V: PAGE")
+    term.write(("Apps from self-hosted library  |  N/V: PAGE")
         :sub(1, math.max(0, width - 2)))
 
     local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
@@ -487,7 +485,7 @@ local function downloadApp(app, skipOverwriteConfirmation)
         return
     end
 
-    local contents, err = request(RAW_BASE_URL .. app.source)
+    local contents, err = request(HOST_BASE_URL .. app.source)
     if not contents then
         message = "Download failed: " .. err
         return
@@ -661,7 +659,7 @@ if not catalog then
     message = catalogError
 else
     apps = catalog
-    message = "Loaded " .. #apps .. " app(s) from GitHub."
+    message = "Loaded " .. #apps .. " app(s) from the script host."
 end
 
 if mode == "install-system" then
@@ -778,7 +776,7 @@ while true do
                 apps = refreshed
                 selected = math.min(selected, math.max(1, #apps))
                 firstVisible = 1
-                message = "Loaded " .. #apps .. " app(s) from GitHub."
+                message = "Loaded " .. #apps .. " app(s) from the script host."
             else
                 message = refreshError
             end
@@ -810,7 +808,7 @@ while true do
                     apps = refreshed
                     selected = math.min(selected, math.max(1, #apps))
                     firstVisible = 1
-                    message = "Loaded " .. #apps .. " app(s) from GitHub."
+                    message = "Loaded " .. #apps .. " app(s) from the script host."
                 else
                     message = refreshError
                 end

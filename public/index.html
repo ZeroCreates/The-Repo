@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f4ef">
+  <title>Rift Script Library</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #202923;
+      --muted: #647168;
+      --paper: #f3f4ef;
+      --surface: #fff;
+      --line: #dce2d9;
+      --green: #285b49;
+      --mint: #d9eee2;
+      --coral: #d9664d;
+      --yellow: #e5b84f;
+      --mono: Consolas, "Liberation Mono", monospace;
+      --display: Georgia, "Times New Roman", serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Trebuchet MS", sans-serif;
+    }
+    a { color: inherit; }
+    .topbar {
+      min-height: 66px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 5vw;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .brand { display: flex; gap: 12px; align-items: center; font: 700 13px var(--mono); }
+    .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; background: var(--green); color: white; }
+    .server-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 12px var(--mono); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #449368; }
+    main { max-width: 1240px; margin: 0 auto; padding: 42px 28px 72px; }
+    .intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: end; margin-bottom: 30px; }
+    .eyebrow { margin: 0 0 11px; color: var(--coral); font: 700 11px var(--mono); text-transform: uppercase; }
+    h1 { margin: 0; font: 400 clamp(34px, 5vw, 56px) var(--display); }
+    .intro-copy { max-width: 510px; margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
+    .count { padding: 11px 14px; border-left: 2px solid var(--yellow); color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+    .toolbar { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .filters { display: flex; gap: 6px; }
+    .filter { min-height: 36px; padding: 0 13px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 12px var(--mono); cursor: pointer; }
+    .filter[aria-pressed="true"] { border-color: var(--green); background: var(--green); color: white; }
+    .search { width: min(310px, 44vw); height: 38px; border: 1px solid var(--line); background: var(--surface); padding: 0 12px; color: var(--ink); font: 13px "Trebuchet MS", sans-serif; }
+    .section-label { display: flex; align-items: center; gap: 12px; margin: 26px 0 13px; color: var(--muted); font: 700 11px var(--mono); text-transform: uppercase; }
+    .section-label::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+    .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--line); background: var(--line); }
+    .app { min-height: 190px; display: flex; flex-direction: column; padding: 19px; background: var(--surface); animation: arrive .35s both; }
+    .app-top { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+    .app h2 { margin: 0; font: 400 21px var(--display); }
+    .scope { color: var(--green); font: 10px var(--mono); text-transform: uppercase; }
+    .app p { margin: 12px 0 20px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .app-bottom { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: auto; }
+    .version { color: var(--muted); font: 11px var(--mono); }
+    .download { padding: 8px 11px; background: var(--mint); color: var(--green); text-decoration: none; font: 700 11px var(--mono); }
+    .download:hover { background: var(--green); color: white; }
+    .files { display: flex; flex-wrap: wrap; border: 1px solid var(--line); background: var(--surface); }
+    .file-link { display: flex; justify-content: space-between; flex: 1 1 240px; gap: 12px; padding: 15px 17px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-decoration: none; font-size: 13px; }
+    .file-link span:last-child { color: var(--coral); font: 11px var(--mono); }
+    .file-link:hover { background: #e9f2eb; }
+    .empty, .error { grid-column: 1 / -1; padding: 30px; background: var(--surface); color: var(--muted); }
+    footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font: 11px var(--mono); }
+    @keyframes arrive { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-width: 760px) {
+      main { padding: 30px 18px 48px; }
+      .intro { grid-template-columns: 1fr; gap: 14px; }
+      .count { width: max-content; }
+      .catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 520px) {
+      .topbar { padding: 0 18px; }
+      .server-state { font-size: 0; }
+      .server-state .status-dot { width: 10px; height: 10px; }
+      .toolbar { align-items: stretch; flex-direction: column-reverse; }
+      .search { width: 100%; }
+      .filters { overflow-x: auto; }
+      .filter { flex: 1; padding: 0 9px; }
+      .catalog { grid-template-columns: 1fr; }
+      .app { min-height: 165px; }
+      footer { flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">R</span><span>RIFT / SCRIPT LIBRARY</span></div>
+    <div class="server-state"><span class="status-dot"></span><span id="server-status">CONNECTING</span></div>
+  </header>
+  <main>
+    <section class="intro">
+      <div>
+        <p class="eyebrow">Self-hosted ComputerCraft distribution</p>
+        <h1>Script library</h1>
+        <p class="intro-copy">Applications, system tools, and server scripts served directly from your own Rift installation.</p>
+      </div>
+      <div class="count" id="catalog-count">Loading catalog</div>
+    </section>
+    <section aria-label="Application catalog">
+      <div class="toolbar">
+        <div class="filters" role="group" aria-label="Filter catalog">
+          <button class="filter" data-filter="all" aria-pressed="true">All</button>
+          <button class="filter" data-filter="user" aria-pressed="false">Applications</button>
+          <button class="filter" data-filter="system" aria-pressed="false">System</button>
+        </div>
+        <input class="search" id="search" type="search" placeholder="Find a script" aria-label="Find a script">
+      </div>
+      <div class="section-label">ComputerCraft catalog</div>
+      <div class="catalog" id="catalog" aria-live="polite"><div class="empty">Loading catalog…</div></div>
+    </section>
+    <section aria-label="ComputerCraft scripts">
+      <div class="section-label">All ComputerCraft scripts</div>
+      <div class="files" id="computer-files"></div>
+    </section>
+    <footer><span>RIFT SCRIPT LIBRARY</span><span id="host-address"></span></footer>
+  </main>
+  <script>
+    const catalogElement = document.querySelector("#catalog");
+    const searchElement = document.querySelector("#search");
+    const countElement = document.querySelector("#catalog-count");
+    const statusElement = document.querySelector("#server-status");
+    const coreFiles = [["Launcher bootstrap", "launcher", "launcher.lua"]];
+    let entries = [];
+    let activeFilter = "all";
+
+    function renderCatalog() {
+      const term = searchElement.value.trim().toLowerCase();
+      const visible = entries.filter((app) => {
+        const typeMatches = activeFilter === "all" || (app.scope === "system" ? "system" : "user") === activeFilter;
+        const textMatches = `${app.name} ${app.description} ${app.file}`.toLowerCase().includes(term);
+        return typeMatches && textMatches;
+      });
+      countElement.textContent = `${visible.length} / ${entries.length} SCRIPTS`;
+      catalogElement.replaceChildren();
+      if (!visible.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No scripts match this search.";
+        catalogElement.append(empty);
+        return;
+      }
+      for (const [index, app] of visible.entries()) {
+        const card = document.createElement("article");
+        card.className = "app";
+        card.style.animationDelay = `${Math.min(index, 12) * 25}ms`;
+        const top = document.createElement("div");
+        top.className = "app-top";
+        const title = document.createElement("h2");
+        title.textContent = app.name;
+        const scope = document.createElement("span");
+        scope.className = "scope";
+        scope.textContent = app.scope === "system" ? "System" : "Application";
+        top.append(title, scope);
+        const description = document.createElement("p");
+        description.textContent = app.description;
+        const bottom = document.createElement("div");
+        bottom.className = "app-bottom";
+        const version = document.createElement("span");
+        version.className = "version";
+        version.textContent = `v${app.version}`;
+        const download = document.createElement("a");
+        download.className = "download";
+        download.href = `/${app.source}`;
+        download.download = app.file;
+        download.textContent = "DOWNLOAD";
+        bottom.append(version, download);
+        card.append(top, description, bottom);
+        catalogElement.append(card);
+      }
+    }
+
+    function addFileLink(label, file, downloadName) {
+      const link = document.createElement("a");
+      link.className = "file-link";
+      link.href = `/${file}`;
+      link.download = downloadName || file.split("/").pop();
+      const name = document.createElement("span");
+      name.textContent = label;
+      const action = document.createElement("span");
+      action.textContent = "GET FILE";
+      link.append(name, action);
+      document.querySelector("#computer-files").append(link);
+    }
+
+    for (const [label, file, downloadName] of coreFiles) addFileLink(label, file, downloadName);
+
+    document.querySelectorAll(".filter").forEach((button) => {
+      button.addEventListener("click", () => {
+        activeFilter = button.dataset.filter;
+        document.querySelectorAll(".filter").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+        renderCatalog();
+      });
+    });
+    searchElement.addEventListener("input", renderCatalog);
+    document.querySelector("#host-address").textContent = location.host;
+
+    Promise.all([fetch("/api/catalog").then((response) => {
+      if (!response.ok) throw new Error(`Catalog request returned ${response.status}`);
+      return response.json();
+    }), fetch("/api/health"), fetch("/api/scripts").then((response) => {
+      if (!response.ok) throw new Error(`Script list returned ${response.status}`);
+      return response.json();
+    })]).then(([catalog, health, scripts]) => {
+      if (!health.ok || !Array.isArray(catalog) || !Array.isArray(scripts)) throw new Error("Host response was invalid");
+      entries = catalog;
+      for (const file of scripts) addFileLink(file.replace(/^computercraft\//, ""), file);
+      statusElement.textContent = "HOST ONLINE";
+      renderCatalog();
+    }).catch((error) => {
+      statusElement.textContent = "HOST ERROR";
+      countElement.textContent = "CATALOG UNAVAILABLE";
+      catalogElement.replaceChildren();
+      const message = document.createElement("div");
+      message.className = "error";
+      message.textContent = error.message;
+      catalogElement.append(message);
+    });
+  </script>
+</body>
+</html>

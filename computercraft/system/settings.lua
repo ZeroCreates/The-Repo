@@ -5,7 +5,7 @@ local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
 local ENCRYPTION_KEY_PATH = SYSTEM_DIRECTORY .. "/.data-key"
 local LAUNCHER_PATH = "/launcher.lua"
-local REPOSITORY_BASE_URL = "https://raw.githubusercontent.com/ZeroCreates/The-Repo/main/"
+local HOST_BASE_URL = "http://127.0.0.1:3000/"
 local THEMES = {
     { name = "Ocean", accent = colors.cyan, highlight = colors.blue },
     { name = "Forest", accent = colors.lime, highlight = colors.green },
@@ -518,7 +518,7 @@ local function updateLauncher()
     local temporary = LAUNCHER_PATH .. ".update-tmp"
     local backup = LAUNCHER_PATH .. ".update-bak"
     local requested, response, requestError = pcall(
-        http.get, REPOSITORY_BASE_URL .. "launcher.lua"
+        http.get, HOST_BASE_URL .. "launcher.lua"
     )
     if not requested then
         message = "Launcher update request failed: " .. tostring(response)
@@ -533,7 +533,7 @@ local function updateLauncher()
     local responseCode = response.getResponseCode and response.getResponseCode()
     if responseCode and responseCode ~= 200 then
         response.close()
-        message = "Launcher update failed: GitHub returned HTTP " .. responseCode .. "."
+        message = "Launcher update failed: host returned HTTP " .. responseCode .. "."
         return
     end
 

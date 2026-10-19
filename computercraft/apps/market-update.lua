@@ -1,10 +1,9 @@
-local OWNER_REPO = "ZeroCreates/The-Repo"
-local BRANCH = "main"
+local HOST_BASE_URL = "http://127.0.0.1:3000/"
 local CONFIG_NAME = "order-system.cfg"
 local ROLE_FILES = {
     server = {
         name = "rift-server.lua",
-        source = "rift-server.lua",
+        source = "computercraft/server/rift-server.lua",
     },
     provider = {
         name = "market-provider.lua",
@@ -64,11 +63,11 @@ local function fetch(url)
     local code = response.getResponseCode and response.getResponseCode()
     if code and code ~= 200 then
         response.close()
-        return nil, "GitHub returned HTTP " .. code .. "."
+        return nil, "Script host returned HTTP " .. code .. "."
     end
     local contents = response.readAll()
     response.close()
-    if not contents or contents == "" then return nil, "GitHub returned an empty file." end
+    if not contents or contents == "" then return nil, "The script host returned an empty file." end
     return contents
 end
 
@@ -96,30 +95,30 @@ local files = {
 if config.role == "server" then
     table.insert(files, {
         name = "rift-server-jobs.lua",
-        source = "rift-server-jobs.lua",
+        source = "computercraft/server/rift-server-jobs.lua",
         destination = fs.combine(installDirectory, "rift-server-jobs.lua"),
     })
     table.insert(files, {
         name = "rift-server-market.lua",
-        source = "rift-server-market.lua",
+        source = "computercraft/server/rift-server-market.lua",
         destination = fs.combine(installDirectory, "rift-server-market.lua"),
     })
     table.insert(files, {
         name = "rift-server-email.lua",
-        source = "rift-server-email.lua",
+        source = "computercraft/server/rift-server-email.lua",
         destination = fs.combine(installDirectory, "rift-server-email.lua"),
     })
     table.insert(files, {
         name = "rift-server-casino.lua",
-        source = "rift-server-casino.lua",
+        source = "computercraft/server/rift-server-casino.lua",
         destination = fs.combine(installDirectory, "rift-server-casino.lua"),
     })
 end
 
 local staged = {}
-print("Checking GitHub for " .. config.role .. " and updater updates: " .. OWNER_REPO .. " (" .. BRANCH .. ")")
+print("Checking the script host for " .. config.role .. " and updater updates")
 for _, entry in ipairs(files) do
-    local url = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/" .. entry.source
+    local url = HOST_BASE_URL .. entry.source
     local contents, err = fetch(url)
     if not contents then
         for _, temporary in pairs(staged) do

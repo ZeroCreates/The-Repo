@@ -1,6 +1,4 @@
-local OWNER_REPO = "ZeroCreates/The-Repo"
-local BRANCH = "main"
-local BASE_URL = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/"
+local HOST_BASE_URL = "http://127.0.0.1:3000/"
 local CASINO_PROTOCOL = "rift_casino_wallet_v1"
 local CASINO_SERVER = "rift-casino"
 local ACCOUNT_PROTOCOL = "rift_account_v1"
@@ -382,12 +380,12 @@ end
 
 local function downloadGame(game)
     if not http or not http.get then return false, "Enable HTTP to install Casino games." end
-    local response, requestError = http.get(BASE_URL .. game.source)
+    local response, requestError = http.get(HOST_BASE_URL .. game.source)
     if not response then return false, tostring(requestError or "Download failed.") end
     local statusCode = response.getResponseCode and response.getResponseCode()
     if statusCode and statusCode ~= 200 then
         response.close()
-        return false, "GitHub returned HTTP " .. statusCode .. "."
+        return false, "Script host returned HTTP " .. statusCode .. "."
     end
     local contents = response.readAll()
     response.close()

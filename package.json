@@ -1,0 +1,12 @@
+{
+  "name": "rift-script-library",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted catalog and script host for Rift ComputerCraft",
+  "scripts": {
+    "start": "node --env-file=.env server.js"
+  },
+  "engines": {
+    "node": ">=20.6"
+  }
+}
