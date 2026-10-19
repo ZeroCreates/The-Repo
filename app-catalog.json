@@ -62,7 +62,7 @@
     "source": "computercraft/system/settings.lua",
     "file": "settings.lua",
     "scope": "system",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Manage launcher preferences and user accounts"
   },
   {
