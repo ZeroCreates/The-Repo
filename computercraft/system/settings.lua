@@ -622,15 +622,21 @@ end
 
 local function drawButtons(buttons, width, row, isColor)
     local slotWidth = math.max(1, math.floor(width / #buttons))
+    term.setCursorPos(1, row)
+    term.setBackgroundColor(colors.black)
+    term.write(string.rep(" ", width))
     for index, button in ipairs(buttons) do
-        local left = (index - 1) * slotWidth + 1
-        local buttonWidth = index == #buttons and width - left + 1 or slotWidth
+        local slotLeft = (index - 1) * slotWidth + 1
+        local slotRight = index == #buttons and width or slotLeft + slotWidth - 1
+        local slotSize = slotRight - slotLeft + 1
+        local label = ("[" .. button.label .. "]"):sub(1, slotSize)
+        local left = slotLeft + math.floor((slotSize - #label) / 2)
         term.setCursorPos(left, row)
         term.setBackgroundColor(isColor and colors.gray or colors.black)
         term.setTextColor(colors.white)
-        term.write(("[" .. button.label .. "]"):sub(1, buttonWidth))
+        term.write(label)
         button.left = left
-        button.right = left + buttonWidth - 1
+        button.right = left + #label - 1
     end
 end
 
