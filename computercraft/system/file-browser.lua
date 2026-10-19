@@ -885,6 +885,7 @@ local function commandPrompt()
                             end
                         end
                     end
+                end
             end
         end
         return candidates
