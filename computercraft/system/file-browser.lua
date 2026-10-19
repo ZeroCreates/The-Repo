@@ -678,7 +678,7 @@ local function commandPrompt()
     end
     local function showPromptHelp()
         writePromptLine("Commands: cd, dir/ls, pwd, mkdir/md, rm/del/delete, cp/copy, mv/move")
-        writePromptLine("edit, run, cls/clear, help, exit. Quote paths with spaces.")
+        writePromptLine("edit, Lua script paths, cls/clear, help, exit. Quote paths with spaces.")
     end
     local function drawPromptHeader()
         term.setBackgroundColor(colors.black)
@@ -690,7 +690,7 @@ local function commandPrompt()
         term.setBackgroundColor(colors.black)
         writePromptLine("Only programs and files in your home directory are available.", colors.lightGray)
         showPromptHelp()
-        writePromptLine("Scripts in H://shell can be run by name from anywhere.", colors.lightGray)
+        writePromptLine("Enter a script filename or path directly, e.g. apps/market-client.lua.", colors.lightGray)
     end
     local function resolvePath(input)
         local path = resolveHomePath(workingDirectory, input)
@@ -724,7 +724,15 @@ local function commandPrompt()
                 table.insert(paths, path .. ".lua")
             end
         end
-        if not command:find("[/\\]") then
+        if command:find("[/\\]") then
+            local homePath = resolveHomePath(homeDirectory, command)
+            if homePath and homePath ~= path then
+                table.insert(paths, homePath)
+                if not homePath:lower():match("%.lua$") then
+                    table.insert(paths, homePath .. ".lua")
+                end
+            end
+        else
             local shellPath = resolveHomePath(homeDirectory, "shell/" .. command)
             if shellPath then
                 table.insert(paths, shellPath)
@@ -770,46 +778,81 @@ local function commandPrompt()
         local previousArguments = tokenizeCommand(beforePrefix) or {}
         local command = previousArguments[1]
         local candidates = {}
+        local function addFileCompletions(searchDirectory, pathPrefix, rawPathPrefix, quoteCharacter, luaOnly)
+            if not fs.isDir(searchDirectory) then return end
+            local leaf = pathPrefix:match("([^/]*)$") or pathPrefix
+            for _, name in ipairs(fs.list(searchDirectory)) do
+                local path = fs.combine(searchDirectory, name)
+                local isDirectory = fs.isDir(path)
+                if (altHeld or name:sub(1, 1) ~= ".")
+                    and name:sub(1, #leaf):lower() == leaf:lower()
+                    and (not luaOnly or isDirectory or name:lower():match("%.lua$")) then
+                    local completion = pathPrefix:sub(1, #pathPrefix - #leaf)
+                        .. name .. (isDirectory and "/" or "")
+                    if quoteCharacter then
+                        completion = quoteCharacter .. completion
+                        if not isDirectory then completion = completion .. quoteCharacter end
+                    elseif name:find("%s") then
+                        completion = "\"" .. completion .. (isDirectory and "/" or "\"")
+                    end
+                    if completion:sub(1, #rawPathPrefix):lower() == rawPathPrefix:lower() then
+                        table.insert(candidates, completion:sub(#rawPathPrefix + 1))
+                    end
+                end
+            end
+        end
         if #previousArguments == 0 and rawPrefix:find("%s") == nil then
             local commandQuote = rawPrefix:match("^([\"'])")
             local commandPrefix = commandQuote and rawPrefix:sub(2) or rawPrefix
             for _, candidate in ipairs({ "cd", "dir", "ls", "pwd", "mkdir", "md",
                 "rm", "del", "delete", "cp", "copy", "mv", "move", "edit",
-                "run", "cls", "clear", "help", "exit" }) do
+                "cls", "clear", "help", "exit" }) do
                 if not commandQuote
                     and candidate:sub(1, #rawPrefix):lower() == rawPrefix:lower() then
                     table.insert(candidates, candidate:sub(#rawPrefix + 1))
                 end
             end
-            if fs.isDir(shellDirectory) then
-                for _, name in ipairs(fs.list(shellDirectory)) do
-                    local path = fs.combine(shellDirectory, name)
-                    if name:lower():match("%.lua$") and not fs.isDir(path)
-                        and (altHeld or name:sub(1, 1) ~= ".")
-                        and name:sub(1, #commandPrefix):lower() == commandPrefix:lower() then
-                        local completed = (commandQuote or "") .. name
-                        if commandQuote and not name:find("%s") then
-                            completed = completed .. commandQuote
-                        end
-                        table.insert(candidates, completed:sub(#rawPrefix + 1))
+            local rootedPrefix = commandPrefix:gsub("^/+", "")
+            local parent, leaf = rootedPrefix:match("^(.*)/([^/]*)$")
+            if parent then
+                local profilePath = commandPrefix:sub(1, 1) == "/"
+                    or parent == "apps" or parent:sub(1, 5) == "apps/"
+                    or parent == "shell" or parent:sub(1, 6) == "shell/"
+                local searchDirectory = resolveHomePath(
+                    profilePath and homeDirectory or workingDirectory, parent)
+                if searchDirectory then
+                    local relativePathPrefix = rootedPrefix:sub(1, #rootedPrefix - #leaf)
+                    if commandPrefix:sub(1, 1) == "/" then
+                        relativePathPrefix = "/" .. relativePathPrefix
+                    end
+                    addFileCompletions(searchDirectory, relativePathPrefix,
+                        rawPrefix, commandQuote, true)
+                end
+            else
+                addFileCompletions(workingDirectory, "", rawPrefix, commandQuote, true)
+                if fs.isDir(shellDirectory) then
+                    addFileCompletions(shellDirectory, "", rawPrefix, commandQuote, true)
+                end
+                for _, name in ipairs(fs.list(homeDirectory)) do
+                    local path = fs.combine(homeDirectory, name)
+                    if fs.isDir(path) and name:sub(1, #commandPrefix):lower() == commandPrefix:lower()
+                        and (altHeld or name:sub(1, 1) ~= ".") then
+                        table.insert(candidates, name:sub(#commandPrefix + 1) .. "/")
                     end
                 end
             end
         elseif command then
             local commandName = command:lower()
             local supportsPaths = commandName == "cd" or commandName == "ls"
-                or commandName == "dir" or commandName == "run"
+                or commandName == "dir"
                 or commandName == "rm" or commandName == "del" or commandName == "delete"
                 or commandName == "cp" or commandName == "copy"
                 or commandName == "mv" or commandName == "move" or commandName == "edit"
-            local needsProgram = commandName == "run"
-                and #previousArguments == 1
             local supportsTwoPaths = commandName == "cp" or commandName == "copy"
                 or commandName == "mv" or commandName == "move"
-            local needsPath = commandName ~= "run"
-                and (supportsTwoPaths and #previousArguments <= 2
-                    or not supportsTwoPaths and #previousArguments == 1)
-            if not supportsPaths or not (needsProgram or needsPath) then return candidates end
+            local needsPath = supportsTwoPaths and #previousArguments <= 2
+                or not supportsTwoPaths and #previousArguments == 1
+            if not supportsPaths or not needsPath then return candidates end
 
             local quoteCharacter = rawPrefix:match("^([\"'])")
             local prefix = rawPrefix
@@ -820,46 +863,28 @@ local function commandPrompt()
             leaf = leaf or pathPrefix
             local directory = resolveHomePath(workingDirectory, parent or ".")
             if directory and fs.isDir(directory) then
-                local inApps = commandName == "run" and parent == nil
-                local directories = { directory }
-                if inApps then
-                    if fs.isDir(shellDirectory) then
-                        table.insert(directories, shellDirectory)
-                    end
-                    local appsDirectory = resolveHomePath(homeDirectory, "apps")
-                    if appsDirectory and fs.isDir(appsDirectory) then
-                        table.insert(directories, appsDirectory)
-                    end
-                end
-                for directoryIndex, searchDirectory in ipairs(directories) do
-                    for _, name in ipairs(fs.list(searchDirectory)) do
-                        if (altHeld or name:sub(1, 1) ~= ".")
-                            and name:sub(1, #leaf):lower() == leaf:lower() then
-                            local candidatePath = fs.combine(searchDirectory, name)
-                            local isDirectory = fs.isDir(candidatePath)
-                            local wantsDirectory = commandName == "cd"
-                            local wantsFile = commandName == "edit" or commandName == "run"
-                            if (not wantsDirectory or isDirectory)
-                                and (not wantsFile or not isDirectory)
-                                and (commandName ~= "run" or name:lower():match("%.lua$")) then
-                                local candidate = (parent and parent ~= "" and parent .. "/" or "")
-                                    .. name
-                                if inApps and directoryIndex > 1 then
-                                    candidate = name
+                for _, name in ipairs(fs.list(directory)) do
+                    if (altHeld or name:sub(1, 1) ~= ".")
+                        and name:sub(1, #leaf):lower() == leaf:lower() then
+                        local candidatePath = fs.combine(directory, name)
+                        local isDirectory = fs.isDir(candidatePath)
+                        local wantsDirectory = commandName == "cd"
+                        local wantsFile = commandName == "edit"
+                        if (not wantsDirectory or isDirectory)
+                            and (not wantsFile or not isDirectory) then
+                            local candidate = (parent and parent ~= "" and parent .. "/" or "")
+                                .. name
+                            if candidate:sub(1, #prefix):lower() == prefix:lower()
+                                and (quoteCharacter or not name:find("%s")) then
+                                local completed = (quoteCharacter or "") .. candidate
+                                    .. (isDirectory and "/" or "")
+                                if quoteCharacter and not isDirectory then
+                                    completed = completed .. quoteCharacter
                                 end
-                                if candidate:sub(1, #prefix):lower() == prefix:lower()
-                                    and (quoteCharacter or not name:find("%s")) then
-                                    local completed = (quoteCharacter or "") .. candidate
-                                        .. (isDirectory and "/" or "")
-                                    if quoteCharacter and not isDirectory then
-                                        completed = completed .. quoteCharacter
-                                    end
-                                    table.insert(candidates, completed:sub(#rawPrefix + 1))
-                                end
+                                table.insert(candidates, completed:sub(#rawPrefix + 1))
                             end
                         end
                     end
-                end
             end
         end
         return candidates
@@ -879,7 +904,8 @@ local function commandPrompt()
         if not arguments then
             writePromptLine(parseError, colors.red)
         elseif #arguments > 0 then
-            local command = arguments[1]:lower()
+            local commandText = arguments[1]
+            local command = commandText:lower()
             if command == "exit" or command == "quit" then
                 break
             elseif command == "help" then
@@ -987,19 +1013,15 @@ local function commandPrompt()
                     end
                 end
             else
-                local firstArgument = command == "run" and 2 or 1
-                local programName = arguments[firstArgument]
-                if not programName then
-                    writePromptLine("Usage: run <program> [args]", colors.red)
-                elseif type(runProfileProgram) ~= "function" then
+                if type(runProfileProgram) ~= "function" then
                     writePromptLine("The profile-safe program runner is unavailable.", colors.red)
                 else
-                    local programPath = resolveProgram(programName)
+                    local programPath = resolveProgram(commandText)
                     if not programPath then
                         writePromptLine("Program not found in your home directory.", colors.red)
                     else
                         local programArguments = {}
-                        for index = firstArgument + 1, #arguments do
+                        for index = 2, #arguments do
                             table.insert(programArguments, arguments[index])
                         end
                         local status, statusColor
