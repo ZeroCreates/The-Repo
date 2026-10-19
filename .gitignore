@@ -1,4 +1,5 @@
 .env
 *.lua
 *.js
+app-catalog.json
 !server.js
