@@ -4,6 +4,7 @@ local homeDirectory = normalizedHome and normalizedHome:match("^users/[%w_-]+$")
     and normalizedHome or "users/default"
 local username = homeDirectory:match("^users/([%w_-]+)$")
 local privateDataDirectory = fs.combine(".launcher", "user-data", username)
+local encryptionKeyPath = "/.launcher/.data-key"
 local profilesDirectory = "users"
 local currentDirectory = fs.combine(homeDirectory, "desktop")
 local currentRoot = homeDirectory
@@ -18,6 +19,7 @@ local message = "Hold ALT to show hidden files and Private Data."
 local clipboard
 local controlHeld = false
 local altHeld = false
+local privateEditSequence = 0
 local themeIndex = 1
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
@@ -47,6 +49,100 @@ end
 
 local function isWithinRoot(path, root)
     return path == root or path:sub(1, #root + 1) == root .. "/"
+end
+
+local function isPrivateDataPath(path)
+    return isWithinRoot(path, privateDataDirectory) and path ~= privateDataDirectory
+end
+
+local function loadEncryptionKey()
+    local file = fs.open(encryptionKeyPath, "r")
+    if not file then return nil, "Could not read the local data key." end
+    local key = file.readAll()
+    file.close()
+    if type(key) ~= "string" or #key ~= 64 or key:find("[^%x]") then
+        return nil, "The local data key is invalid."
+    end
+    key = key:upper()
+    local keyBytes = {}
+    for index = 1, #key, 2 do
+        keyBytes[#keyBytes + 1] = tonumber(key:sub(index, index + 1), 16)
+    end
+    return keyBytes
+end
+
+local function xorByte(first, second)
+    local result, bit = 0, 1
+    while first > 0 or second > 0 do
+        if first % 2 ~= second % 2 then result = result + bit end
+        first = math.floor(first / 2)
+        second = math.floor(second / 2)
+        bit = bit * 2
+    end
+    return result
+end
+
+local function cryptData(contents, keyBytes)
+    local state = 1
+    for _, value in ipairs(keyBytes) do
+        state = (state * 257 + value) % 2147483647
+    end
+    local output = {}
+    for index = 1, #contents do
+        state = (state * 48271) % 2147483647
+        local mask = (state % 256 + keyBytes[(index - 1) % #keyBytes + 1]) % 256
+        output[index] = string.char(xorByte(contents:byte(index), mask))
+    end
+    return table.concat(output)
+end
+
+local function decryptPrivateData(contents, keyBytes)
+    local prefix = "CCLOCAL1:"
+    if contents:sub(1, #prefix) ~= prefix then return contents end
+    local encoded = contents:sub(#prefix + 1)
+    if #encoded % 2 ~= 0 or encoded:find("[^%x]") then
+        return nil, "Encrypted private data is malformed."
+    end
+    local encrypted = {}
+    for index = 1, #encoded, 2 do
+        encrypted[#encrypted + 1] = string.char(tonumber(encoded:sub(index, index + 1), 16))
+    end
+    return cryptData(table.concat(encrypted), keyBytes)
+end
+
+local function encryptPrivateData(contents, keyBytes)
+    local encrypted = cryptData(contents, keyBytes)
+    local encoded = {}
+    for index = 1, #encrypted do
+        encoded[index] = string.format("%02X", encrypted:byte(index))
+    end
+    return "CCLOCAL1:" .. table.concat(encoded)
+end
+
+local function readFile(path)
+    local file = fs.open(path, "r")
+    if not file then return nil, "Could not open the selected file." end
+    local contents = file.readAll()
+    file.close()
+    return contents
+end
+
+local function writeFile(path, contents)
+    local file = fs.open(path, "w")
+    if not file then return false, "Could not create " .. path .. "." end
+    local wrote, writeError = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        return false, "Could not write " .. path .. ": "
+            .. tostring(not wrote and writeError or closeError)
+    end
+    return true
+end
+
+local function deleteFile(path)
+    local deleted, deleteError = pcall(fs.delete, path)
+    if not deleted then return false, tostring(deleteError) end
+    return true
 end
 
 local function displayPath(path)
@@ -339,6 +435,101 @@ local function editSelected()
     local editorPath = shell.resolveProgram("edit")
     if not editorPath then
         message = "The built-in edit program could not be found."
+        return
+    end
+
+    if isPrivateDataPath(entry.path) then
+        local keyBytes, keyError = loadEncryptionKey()
+        if not keyBytes then
+            message = keyError
+            return
+        end
+        local encryptedContents, readError = readFile(entry.path)
+        if not encryptedContents then
+            message = readError
+            return
+        end
+        local plaintext, decryptError = decryptPrivateData(encryptedContents, keyBytes)
+        if not plaintext then
+            message = "Could not decrypt private data: " .. tostring(decryptError)
+            return
+        end
+
+        privateEditSequence = privateEditSequence + 1
+        local epoch = type(os.epoch) == "function" and os.epoch("utc") or os.time()
+        local temporaryPath
+        repeat
+            temporaryPath = fs.combine("/.launcher",
+                ".file-browser-edit-" .. tostring(epoch) .. "-" .. privateEditSequence)
+            if fs.exists(temporaryPath) then privateEditSequence = privateEditSequence + 1 end
+        until not fs.exists(temporaryPath)
+
+        local temporarySaved, temporaryError = writeFile(temporaryPath, plaintext)
+        if not temporarySaved then
+            message = temporaryError
+            return
+        end
+        local ran, result = pcall(os.run, _ENV, editorPath, temporaryPath)
+        if not ran or result == false then
+            local removed, removeError = deleteFile(temporaryPath)
+            message = not ran and ("Could not run edit: " .. tostring(result))
+                or "The edit command did not complete successfully."
+            if not removed then
+                message = message .. " Plaintext remains at " .. temporaryPath
+                    .. ": " .. removeError
+            end
+            return
+        end
+
+        local editedContents, editedReadError = readFile(temporaryPath)
+        if not editedContents then
+            message = editedReadError .. " The original remains encrypted; plaintext recovery file: "
+                .. temporaryPath .. "."
+            return
+        end
+        local protectedContents = encryptPrivateData(editedContents, keyBytes)
+        local encryptedTemporary = entry.path .. ".enc-tmp"
+        local backup = entry.path .. ".enc-bak"
+        if fs.exists(encryptedTemporary) or fs.exists(backup) then
+            message = "Could not re-encrypt private data: a recovery file already exists. "
+                .. "Plaintext remains at " .. temporaryPath .. "."
+            return
+        end
+        local wrote, writeError = writeFile(encryptedTemporary, protectedContents)
+        if not wrote then
+            local removed = deleteFile(encryptedTemporary)
+            message = writeError .. " Plaintext remains at " .. temporaryPath .. "."
+                .. (removed and "" or " Encrypted staging-file cleanup failed.")
+            return
+        end
+        local backedUp, backupError = pcall(fs.move, entry.path, backup)
+        if not backedUp then
+            deleteFile(encryptedTemporary)
+            message = "Could not protect private data: " .. tostring(backupError)
+                .. " Plaintext remains at " .. temporaryPath .. "."
+            return
+        end
+        local installed, installError = pcall(fs.move, encryptedTemporary, entry.path)
+        if not installed then
+            if fs.exists(encryptedTemporary) then deleteFile(encryptedTemporary) end
+            local restored, restoreError = pcall(fs.move, backup, entry.path)
+            message = "Could not re-encrypt private data: " .. tostring(installError)
+                .. (restored and "" or "; restoring the original failed: " .. tostring(restoreError))
+                .. " Plaintext remains at " .. temporaryPath .. "."
+            return
+        end
+        local backupRemoved, backupRemoveError = deleteFile(backup)
+        local plaintextRemoved, plaintextRemoveError = deleteFile(temporaryPath)
+        message = "Re-encrypted " .. entry.name .. " after editing."
+        if not backupRemoved then
+            message = message .. " The old encrypted backup remains at " .. backup .. ": "
+                .. backupRemoveError
+        end
+        if not plaintextRemoved then
+            message = message .. " Plaintext remains at " .. temporaryPath .. ": "
+                .. plaintextRemoveError
+        end
+        refreshEntries()
         return
     end
 
