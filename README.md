@@ -38,7 +38,7 @@ For example: `local HOST_BASE_URL = "https://scripts.example.com/"`. Also enable
 
 To bootstrap a new ComputerCraft computer, run `wget https://rift.zerocreates.org/launcher launcher.lua`, then run `launcher.lua`.
 
-Cloud Catcher is installed with the system apps. Start it from System Settings using the **CLOUD** button and enter the 32-character connection code. File hosting is limited to the active profile home; remote terminal access is disabled in this mode.
+Cloud Catcher is installed with the system apps. Start it from System Settings using the **CLOUD** button and enter the 32-character connection code. It runs in the background and mirrors the launcher and active program screen; remote keyboard and mouse input control the active UI. File hosting is limited to the active profile home.
 
 ## Add or update apps
 

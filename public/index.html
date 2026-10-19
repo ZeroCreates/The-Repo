@@ -228,7 +228,8 @@
       if (!health.ok || !Array.isArray(catalog) || !Array.isArray(scripts)) throw new Error("Host response was invalid");
       entries = catalog;
       serverFiles = scripts.filter((file) => file.startsWith("computercraft/server/"));
-      systemFiles = scripts.filter((file) => file.startsWith("computercraft/system/"));
+      systemFiles = scripts.filter((file) => file.startsWith("computercraft/system/")
+        && file.toLowerCase() !== "computercraft/system/cloud.lua");
       statusElement.textContent = "HOST ONLINE";
       countElement.textContent = `${entries.filter((app) => app.scope !== "system").length} APPS · ${serverFiles.length} SERVER · ${systemFiles.length} SYSTEM`;
       renderCatalog();

@@ -605,36 +605,19 @@ local function startCloud()
     end
     if #code ~= 32 or code:find("[^%a%d]") then
         message = "Cloud Catcher code must be 32 letters or numbers."
-        return
+        return false
     end
-
-    local environment = {}
-    for name, value in pairs(_ENV) do environment[name] = value end
-    environment.profileHomeDirectory = homeDirectory
-    local cloudShell = {}
-    for name, value in pairs(shell) do cloudShell[name] = value end
-    cloudShell.run = nil
-    cloudShell.execute = nil
-    environment.shell = cloudShell
-
-    local previousDirectory = shell.dir()
-    shell.setDir(homeDirectory)
-    local originalPrintError = printError
-    local runtimeError
-    printError = function(text)
-        runtimeError = tostring(text)
-        originalPrintError(text)
+    if type(cloudStartService) ~= "function" then
+        message = "The launcher cannot start Cloud Catcher in screen-mirror mode."
+        return false
     end
-    local ok, result = pcall(os.run, environment, CLOUD_PROGRAM_PATH, code)
-    printError = originalPrintError
-    shell.setDir(previousDirectory)
-    if not ok then
-        message = "Cloud Catcher error: " .. tostring(result)
-    elseif result == false then
-        message = "Cloud Catcher error: " .. (runtimeError or "program did not complete successfully.")
-    else
-        message = "Cloud Catcher connection ended."
+    local started, startError = cloudStartService(code)
+    if not started then
+        message = "Cloud Catcher error: " .. tostring(startError)
+        return false
     end
+    message = "Cloud Catcher is running. Returning to the launcher."
+    return true
 end
 
 local function drawButtons(buttons, width, row, isColor)
@@ -947,7 +930,7 @@ while true do
                     message = "Only an administrator can manage user accounts."
                 end
             elseif action == "cloud" then
-                startCloud()
+                if startCloud() then return end
             elseif action == "preferences" then
                 page = "settings"
                 message = "Theme row: click left/right; choose Custom to use the hex colors."

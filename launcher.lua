@@ -8,6 +8,11 @@ local nativeFs = fs
 local nativeOs = os
 local nativeRequire = require
 local nativeMultishell = multishell
+local nativeLoadfile = loadfile
+local nativePrintError = printError
+local nativeSettingsApi = _G.settings
+local nativePullEvent = nativeOs.pullEvent
+local nativePullEventRaw = nativeOs.pullEventRaw
 local apps = {}
 local selected = 1
 local firstVisible = 1
@@ -20,6 +25,97 @@ local profileAdmins = {}
 local authorizedProfiles = {}
 local launchHomeProgramInTab = false
 local autoLaunchSession = false
+local cloudService
+local cloudServiceFilter
+local cloudServicePreviousTerm
+local cloudServiceTerminal
+local cloudServiceStatus
+local cloudServiceErrorPath
+local cloudServiceCode
+
+local function createCloudMirrorTerminal(parent, mirror)
+    local terminal = {}
+    local methods = {
+        "write", "blit", "clear", "clearLine", "getCursorPos", "setCursorPos",
+        "getCursorBlink", "setCursorBlink", "getSize", "scroll",
+        "getTextColor", "getTextColour", "setTextColor", "setTextColour",
+        "getBackgroundColor", "getBackgroundColour", "setBackgroundColor", "setBackgroundColour",
+        "isColor", "isColour", "getPaletteColor", "getPaletteColour",
+        "setPaletteColor", "setPaletteColour",
+    }
+    local aliases = {
+        getTextColor = "getTextColour",
+        getTextColour = "getTextColor",
+        setTextColor = "setTextColour",
+        setTextColour = "setTextColor",
+        getBackgroundColor = "getBackgroundColour",
+        getBackgroundColour = "getBackgroundColor",
+        setBackgroundColor = "setBackgroundColour",
+        setBackgroundColour = "setBackgroundColor",
+        isColor = "isColour",
+        isColour = "isColor",
+        getPaletteColor = "getPaletteColour",
+        getPaletteColour = "getPaletteColor",
+        setPaletteColor = "setPaletteColour",
+        setPaletteColour = "setPaletteColor",
+    }
+    local readOnly = {
+        getCursorPos = true,
+        getCursorBlink = true,
+        getSize = true,
+        getTextColor = true,
+        getTextColour = true,
+        getBackgroundColor = true,
+        getBackgroundColour = true,
+        isColor = true,
+        isColour = true,
+        getPaletteColor = true,
+        getPaletteColour = true,
+    }
+    for _, name in ipairs(methods) do
+        local methodName = name
+        terminal[methodName] = function(...)
+            local parentMethod = parent[methodName] or parent[aliases[methodName] or ""]
+            if readOnly[methodName] then
+                return parentMethod(...)
+            end
+            local result = table.pack(parentMethod(...))
+            local mirrorMethod = mirror[methodName] or mirror[aliases[methodName] or ""]
+            if mirrorMethod then mirrorMethod(...) end
+            return table.unpack(result, 1, result.n)
+        end
+    end
+    return terminal
+end
+
+local function restoreCloudMirrorTerminal()
+    if cloudServiceTerminal then term.redirect(cloudServiceTerminal) end
+end
+
+local function saveCloudServiceError(err)
+    if not cloudServiceErrorPath then return false, "Cloud error log path is unavailable." end
+    local contents = tostring(err)
+    if cloudServiceCode then contents = contents:gsub(cloudServiceCode, "[redacted]") end
+    local file, openError = nativeFs.open(cloudServiceErrorPath, "w")
+    if not file then return false, tostring(openError or "Could not create the error log.") end
+    local wrote, writeError = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not wrote then return false, tostring(writeError) end
+    if not closed then return false, tostring(closeError) end
+    return true
+end
+
+local function reportCloudServiceError(err)
+    local saved, saveError = saveCloudServiceError(err)
+    if saved then
+        cloudServiceStatus = "Failed; details in " .. nativeFs.getName(cloudServiceErrorPath)
+        message = "Cloud Catcher: " .. cloudServiceStatus
+    else
+        cloudServiceStatus = "Failed: " .. tostring(saveError)
+        message = "Cloud Catcher: " .. cloudServiceStatus
+    end
+    nativePrintError("Cloud Catcher stopped: " .. tostring(err))
+end
 local USER_ROOT = "/users"
 local SYSTEM_DIRECTORY = "/.launcher"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
@@ -965,7 +1061,8 @@ local function refreshApps()
     fs.makeDir(SYSTEM_APP_DIRECTORY)
     for _, name in ipairs(fs.list(SYSTEM_APP_DIRECTORY)) do
         local path = fs.combine(SYSTEM_APP_DIRECTORY, name)
-        if isLuaFile(path) and path ~= SYSTEM_CLOUD_PATH and not available[path] then
+        if isLuaFile(path) and path ~= SYSTEM_CLOUD_PATH
+            and fs.getName(path):lower() ~= "cloud.lua" and not available[path] then
             table.insert(available, {
                 path = path,
                 name = catalogNames[name] or displayName(name),
@@ -998,7 +1095,8 @@ local function refreshApps()
     local function addAppsFrom(directory, includeLegacyRoot)
         for _, name in ipairs(fs.list(directory)) do
             local fullPath = fs.combine(directory, name)
-            if isLuaFile(fullPath) and not available[fullPath]
+            if isLuaFile(fullPath) and fs.getName(fullPath):lower() ~= "cloud.lua"
+                and not available[fullPath]
                 and (not includeLegacyRoot or name ~= "launcher.lua" and name ~= "app-downloader.lua"
                     and not fs.exists(fs.combine(appDirectory, name))) then
                 table.insert(otherPaths, fullPath)
@@ -1691,6 +1789,145 @@ local function createProfileCloudRunner(profileContext)
     end
 end
 
+local function resumeCloudService(...)
+    if not cloudService then return end
+    local ok, yielded = coroutine.resume(cloudService, ...)
+    if not ok then
+        reportCloudServiceError(yielded)
+        cloudService = nil
+        cloudServiceFilter = nil
+        if cloudServicePreviousTerm then term.redirect(cloudServicePreviousTerm) end
+        cloudServicePreviousTerm = nil
+        cloudServiceTerminal = nil
+        cloudServiceCode = nil
+        cloudServiceErrorPath = nil
+    elseif coroutine.status(cloudService) == "dead" then
+        cloudService = nil
+        cloudServiceFilter = nil
+        if cloudServicePreviousTerm then term.redirect(cloudServicePreviousTerm) end
+        cloudServicePreviousTerm = nil
+        cloudServiceTerminal = nil
+        if yielded == false then
+            cloudServiceStatus = cloudServiceStatus or "Stopped with an error; check the terminal output."
+        else
+            cloudServiceStatus = "Connection ended."
+        end
+        message = "Cloud Catcher: " .. cloudServiceStatus
+        cloudServiceCode = nil
+        cloudServiceErrorPath = nil
+    else
+        cloudServiceFilter = yielded
+    end
+end
+
+local function pullEventWithCloud(filter, raw)
+    while true do
+        local event = table.pack(nativePullEventRaw())
+        if cloudService and coroutine.running() ~= cloudService
+            and (cloudServiceFilter == nil or cloudServiceFilter == event[1] or event[1] == "terminate") then
+            resumeCloudService(table.unpack(event, 1, event.n))
+        end
+        if filter == nil or event[1] == filter then
+            if event[1] == "terminate" and not raw then error("Terminated", 0) end
+            return table.unpack(event, 1, event.n)
+        end
+        if event[1] == "terminate" and not raw then error("Terminated", 0) end
+    end
+end
+
+nativeOs.pullEvent = function(filter)
+    return pullEventWithCloud(filter, false)
+end
+nativeOs.pullEventRaw = function(filter)
+    return pullEventWithCloud(filter, true)
+end
+
+local function startCloudService(code, profileContext)
+    if cloudService then return false, "Cloud Catcher is already running." end
+    cloudServiceStatus = nil
+    cloudServiceCode = code
+    local errorPath = nativeFs.combine(profileContext.homeDirectory, "cloud-catcher-error.txt")
+    local suffix = 1
+    while nativeFs.exists(errorPath) do
+        errorPath = nativeFs.combine(profileContext.homeDirectory,
+            "cloud-catcher-error-" .. suffix .. ".txt")
+        suffix = suffix + 1
+    end
+    cloudServiceErrorPath = errorPath
+    cloudServicePreviousTerm = term.current()
+    local environment = createSystemEnvironment()
+    environment.profileHomeDirectory = profileContext.homeDirectory
+    environment.cloudMirrorParentTerm = cloudServicePreviousTerm
+    environment.cloudMirrorMode = true
+    environment.cloudMirrorStatus = function(status)
+        cloudServiceStatus = status
+        message = "Cloud Catcher: " .. status
+    end
+    local cloudOs = {}
+    for name, value in pairs(nativeOs) do cloudOs[name] = value end
+    cloudOs.pullEvent = nativePullEvent
+    cloudOs.pullEventRaw = nativePullEventRaw
+    environment.os = cloudOs
+    environment.cloudRunProgram = createProfileCloudRunner(profileContext)
+    environment.cloudRemoteEvent = function(...)
+        nativeOs.queueEvent(...)
+    end
+    local cloudShell = {}
+    for name, value in pairs(shell) do cloudShell[name] = value end
+    cloudShell.run = nil
+    cloudShell.execute = nil
+    environment.shell = cloudShell
+
+    local previousDirectory = shell.dir()
+    shell.setDir(profileContext.homeDirectory)
+    cloudService = coroutine.create(function()
+        setmetatable(environment, { __index = _G })
+        if nativeSettingsApi and nativeSettingsApi.get
+            and nativeSettingsApi.get("bios.strict_globals", false) then
+            environment._ENV = environment
+            getmetatable(environment).__newindex = function(_, name)
+                error("Attempt to create global " .. tostring(name), 2)
+            end
+        end
+        local program, loadError = nativeLoadfile(SYSTEM_CLOUD_PATH, nil, environment)
+        if not program then
+            reportCloudServiceError(loadError)
+            return false
+        end
+        local ok, result = pcall(program, code)
+        if not ok then
+            reportCloudServiceError(result)
+            return false
+        end
+        return true, result
+    end)
+    local started = table.pack(coroutine.resume(cloudService))
+    shell.setDir(previousDirectory)
+    if not started[1] then
+        reportCloudServiceError(started[2])
+        cloudService = nil
+        cloudServicePreviousTerm = nil
+        cloudServiceTerminal = nil
+        cloudServiceCode = nil
+        cloudServiceErrorPath = nil
+        return false, tostring(started[2])
+    end
+    if started[2] ~= "cloud_mirror_terminal" or type(started[3]) ~= "table" then
+        local startError = cloudServiceStatus or "Cloud Catcher did not provide its screen-mirror terminal."
+        cloudService = nil
+        cloudServicePreviousTerm = nil
+        cloudServiceTerminal = nil
+        cloudServiceCode = nil
+        cloudServiceErrorPath = nil
+        return false, startError
+    end
+    cloudServiceTerminal = createCloudMirrorTerminal(cloudServicePreviousTerm, started[3])
+    restoreCloudMirrorTerminal()
+    cloudServiceFilter = "cloud_catcher_start"
+    nativeOs.queueEvent(cloudServiceFilter)
+    return true
+end
+
 local function launchSelected(openInTab)
     local app = apps[selected]
     if not app then
@@ -1712,6 +1949,7 @@ local function launchSelected(openInTab)
         admins = profileAdmins,
         authorized = authorizedProfiles,
     }
+    restoreCloudMirrorTerminal()
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
     term.clear()
@@ -1776,6 +2014,9 @@ local function launchSelected(openInTab)
         local environment = createSystemEnvironment()
         environment.profileHomeDirectory = homeDirectory
         environment.cloudRunProgram = createProfileCloudRunner(profileContext)
+        environment.cloudStartService = function(code)
+            return startCloudService(code, profileContext)
+        end
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
         ok, result = pcall(runner, environment, app.path, homeDirectory, currentUser, getThemeInfo())
     else
@@ -1783,6 +2024,11 @@ local function launchSelected(openInTab)
         ok, result = pcall(runner, createSystemEnvironment(), app.path, homeDirectory)
     end
     shell.setDir(previousDirectory)
+    restoreCloudMirrorTerminal()
+    if app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "")
+        and cloudServiceStatus then
+        message = "Cloud Catcher: " .. cloudServiceStatus
+    end
     if openInTab then
         if not ok then
             message = "Could not open " .. app.name .. " in a tab: " .. tostring(result)
@@ -1828,7 +2074,12 @@ local function launchSelected(openInTab)
         return
     end
     waitForReturn()
-    message = "Returned from " .. app.name .. "."
+    if app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "")
+        and cloudServiceStatus then
+        message = "Cloud Catcher: " .. cloudServiceStatus
+    else
+        message = "Returned from " .. app.name .. "."
+    end
     if app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "") then
         loadSettings()
     end
@@ -1843,6 +2094,7 @@ local function openSystemSettings()
 
     local previousDirectory = shell.dir()
     shell.setDir(homeDirectory)
+    restoreCloudMirrorTerminal()
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
     term.clear()
@@ -1857,9 +2109,13 @@ local function openSystemSettings()
     local environment = createSystemEnvironment()
     environment.profileHomeDirectory = homeDirectory
     environment.cloudRunProgram = createProfileCloudRunner(profileContext)
+    environment.cloudStartService = function(code)
+        return startCloudService(code, profileContext)
+    end
     local ok, result = pcall(nativeOs.run, environment, SETTINGS_PROGRAM_PATH,
         homeDirectory, currentUser, getThemeInfo())
     shell.setDir(previousDirectory)
+    restoreCloudMirrorTerminal()
     loadSettings()
     refreshApps()
     term.setBackgroundColor(colors.black)
@@ -1868,6 +2124,8 @@ local function openSystemSettings()
     term.setCursorPos(1, 1)
     if not ok then
         message = "System Settings error: " .. tostring(result)
+    elseif cloudServiceStatus then
+        message = "Cloud Catcher: " .. cloudServiceStatus
     elseif result == false then
         message = "System Settings did not complete successfully."
     else
@@ -1939,6 +2197,7 @@ if settings.autoLaunchPath then
 end
 
 while true do
+    restoreCloudMirrorTerminal()
     local firstButtons, secondButtons = draw()
     local event, button, x, y = os.pullEventRaw()
     if event == "key" and (button == keys.n or button == keys.v) then

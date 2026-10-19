@@ -656,6 +656,7 @@ arguments:add({ "token" }, { required = false, doc = "The token to use when conn
 arguments:add({ "--term", "-t" }, { value = true, doc = "Terminal dimensions or none to hide" })
 arguments:add({ "--dir",  "-d" }, { value = true, doc = "The directory to sync to. Defaults to the current one." })
 arguments:add({ "--http", "-H" }, { value = false, doc = "Use HTTP instead of HTTPs" })
+arguments:add({ "--mirror" }, { value = false, doc = "Mirror the current program instead of opening a shell" })
 local all_arguments = table.pack(...)
 local extra_args
 for i = 1, #all_arguments do
@@ -665,6 +666,7 @@ for i = 1, #all_arguments do
   end
 end
 local args = arguments:parse(table.unpack(all_arguments, 1, extra_args))
+local mirror_mode = args.mirror or cloudMirrorMode == true
 local token = args.token
 if not token then
   write("Cloud Catcher code: ")
@@ -707,6 +709,7 @@ local function parseCommand(line)
   if current ~= "" then arguments[#arguments + 1] = current end
   return arguments
 end
+if not mirror_mode then
 shell.execute = function()
   while true do
     write(shell.dir() .. "> ")
@@ -746,10 +749,14 @@ shell.execute = function()
     end
   end
 end
+end
 local capabilities = {}
+local buffer
 local term_opts = args.term
 local previous_term, parent_term = term.current()
-if term_opts == nil then
+if mirror_mode and cloudMirrorParentTerm then
+  parent_term = cloudMirrorParentTerm
+elseif term_opts == nil then
   parent_term = previous_term or framebuffer.empty(true, term.getSize())
 else if term_opts == "none" then
   parent_term = nil
@@ -768,13 +775,31 @@ if parent_term then
   local w, h = parent_term.getSize()
   if w * h > 5000 then error("Terminal is too large to handle", 0) end
 end
-local sync_dir = resolve_path(args.dir or "./")
+if mirror_mode and parent_term then
+  buffer = framebuffer.buffer(framebuffer.empty(true, parent_term.getSize()))
+  coroutine.yield("cloud_mirror_terminal", buffer)
+end
+local sync_dir = resolve_path(args.dir or (mirror_mode and profileHomeDirectory) or "./")
 if not fs.isDir(sync_dir) then error(("%q is not a directory"):format(sync_dir), 0) end
 table.insert(capabilities, "file:host")
 local url = ("%s://cloud-catcher.squiddev.cc/connect?id=%s&capabilities=%s"):format(
   args.http and "ws" or "wss", token, table.concat(capabilities, ","))
-local remote, err = http.websocket(url)
-if not remote then error("Cannot connect to cloud-catcher server: " .. err, 0) end
+local remote, err
+if mirror_mode then
+  if type(http.websocketAsync) ~= "function" then
+    error("This ComputerCraft version does not support asynchronous WebSockets.", 0)
+  end
+  if type(cloudMirrorStatus) == "function" then cloudMirrorStatus("Connecting to server...") end
+  local started, start_error = http.websocketAsync(url)
+  if not started then
+    local failure = "Cannot connect to cloud-catcher server: " .. tostring(start_error)
+    if type(cloudMirrorStatus) == "function" then cloudMirrorStatus(failure) end
+    error(failure, 0)
+  end
+else
+  remote, err = http.websocket(url)
+  if not remote then error("Cannot connect to cloud-catcher server: " .. tostring(err), 0) end
+end
 local server_term, server_file_edit, server_file_host = false, false, false
 do
   local max_packet_size = 16384
@@ -835,11 +860,13 @@ do
     end
   end)
 end
-local co, buffer
+local co
 if parent_term ~= nil then
-  buffer = framebuffer.buffer(parent_term)
-  co = coroutine.create(shell.execute or shell.run)
-  term.redirect(buffer)
+  if not mirror_mode then
+    buffer = framebuffer.buffer(parent_term)
+    co = coroutine.create(shell.execute or shell.run)
+    term.redirect(buffer)
+  end
 end
 local info_dirty, last_label, get_label = true, nil, os.getComputerLabel
 local function send_info()
@@ -884,6 +911,12 @@ while ok and (not co or coroutine.status(co) ~= "dead") do
   if pending_n >= 1 then
     event = table.remove(pending_events, 1)
     pending_n = pending_n - 1
+    if mirror_mode then
+      if type(cloudRemoteEvent) ~= "function" then
+        error("Remote input cannot be forwarded to the active program.", 0)
+      end
+      cloudRemoteEvent(table.unpack(event, 1, event.n))
+    end
   else
     event = table.pack(coroutine.yield())
   end
@@ -895,8 +928,24 @@ while ok and (not co or coroutine.status(co) ~= "dead") do
       if info_dirty then send_info() end
     end
   elseif event[1] == "websocket_closed" and event[2] == url then
-    ok, res = false, "Connection lost"
+    res = "Connection closed by server: " .. tostring(event[3] or "no reason provided")
+    if type(cloudMirrorStatus) == "function" then cloudMirrorStatus(res) end
+    ok = false
     remote = nil
+  elseif event[1] == "websocket_success" and event[2] == url then
+    remote = event[3]
+    if not remote then
+      ok, res = false, "WebSocket connection succeeded without a connection handle"
+    else
+      if type(cloudMirrorStatus) == "function" then
+        cloudMirrorStatus("Connected; waiting for viewer access...")
+      end
+      send_info()
+    end
+  elseif event[1] == "websocket_failure" and event[2] == url then
+    res = "Cannot connect to cloud-catcher server: " .. tostring(event[3])
+    if type(cloudMirrorStatus) == "function" then cloudMirrorStatus(res) end
+    ok = false
   elseif event[1] == "websocket_message" and event[2] == url then
     local packet = json.try_parse(event[3])
     local code = packet and packet.packet
@@ -915,6 +964,9 @@ while ok and (not co or coroutine.status(co) ~= "dead") do
           elseif cap == "file:edit" then
             server_file_edit = true
           end
+        end
+        if type(cloudMirrorStatus) == "function" then
+          cloudMirrorStatus(server_term and "Viewer connected." or "Connected; viewer has not enabled terminal access.")
         end
       elseif code == 0x02 then -- ConnectionPing
         remote.send([[{"packet":2}]])
@@ -1007,8 +1059,8 @@ while ok and (not co or coroutine.status(co) ~= "dead") do
     end
   end
 end
-term.redirect(previous_term)
-if previous_term == parent_term then
+if not mirror_mode then term.redirect(previous_term) end
+if previous_term == parent_term and not mirror_mode then
   term.clear()
   term.setCursorPos(1, 1)
   if previous_term.endPrivateMode then previous_term.endPrivateMode() end
