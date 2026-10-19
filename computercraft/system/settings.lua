@@ -625,7 +625,7 @@ local function startCloud()
         runtimeError = tostring(text)
         originalPrintError(text)
     end
-    local ok, result = pcall(os.run, environment, CLOUD_PROGRAM_PATH, code, "--term", "hide")
+    local ok, result = pcall(os.run, environment, CLOUD_PROGRAM_PATH, code)
     printError = originalPrintError
     shell.setDir(previousDirectory)
     if not ok then

@@ -750,7 +750,7 @@ local capabilities = {}
 local term_opts = args.term
 local previous_term, parent_term = term.current()
 if term_opts == nil then
-  parent_term = previous_term
+  parent_term = previous_term or framebuffer.empty(true, term.getSize())
 else if term_opts == "none" then
   parent_term = nil
 elseif term_opts == "hide" then

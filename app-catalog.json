@@ -12,7 +12,7 @@
     "source": "computercraft/system/cloud.lua",
     "file": "cloud.lua",
     "scope": "system",
-    "version": "1.0.2",
+    "version": "1.0.4",
     "description": "Connect to Cloud Catcher to share files from the active profile home"
   },
   {
@@ -70,7 +70,7 @@
     "source": "computercraft/system/settings.lua",
     "file": "settings.lua",
     "scope": "system",
-    "version": "1.0.8",
+    "version": "1.0.10",
     "description": "Manage launcher preferences, start Cloud Catcher, manage accounts, and maintain the computer"
   },
   {
