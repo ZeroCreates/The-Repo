@@ -67,6 +67,16 @@
     .form-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 18px; }
     .form-actions > div { display: flex; gap: 8px; }
     .empty { padding: 22px 12px; color: var(--muted); font-size: 13px; }
+    .compare-dialog { width: min(1180px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); padding: 22px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+    .compare-dialog::backdrop { background: rgba(23, 34, 28, .68); }
+    .compare-heading { display: flex; justify-content: space-between; align-items: start; gap: 18px; }
+    .compare-heading h2 { font: 400 27px var(--display); }
+    .compare-path { margin: 7px 0 18px; color: var(--muted); font: 11px var(--mono); overflow-wrap: anywhere; }
+    .compare-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .compare-pane { min-width: 0; border: 1px solid var(--line); background: var(--surface); }
+    .compare-pane h3 { margin: 0; padding: 11px 13px; border-bottom: 1px solid var(--line); font: 700 11px var(--mono); text-transform: uppercase; }
+    .compare-pane pre { height: min(58vh, 620px); overflow: auto; margin: 0; padding: 14px; color: var(--ink); font: 12px/1.55 var(--mono); tab-size: 4; white-space: pre; }
+    .compare-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
     [hidden] { display: none !important; }
     @media (max-width: 720px) {
       main { padding: 28px 18px 48px; }
@@ -80,6 +90,9 @@
       .form-grid { grid-template-columns: 1fr; gap: 0; }
       .form-actions { flex-direction: column; }
       .form-actions button { flex: 1; }
+      .compare-dialog { padding: 15px; }
+      .compare-grid { grid-template-columns: 1fr; }
+      .compare-pane pre { height: 31vh; }
     }
   </style>
 </head>
@@ -157,6 +170,29 @@
       </section>
     </section>
   </main>
+  <dialog class="compare-dialog" id="compare-dialog" aria-labelledby="compare-title">
+    <div class="compare-heading">
+      <div>
+        <p class="eyebrow">Review before publishing</p>
+        <h2 id="compare-title">Compare script versions</h2>
+        <p class="compare-path" id="compare-path"></p>
+      </div>
+    </div>
+    <div class="compare-grid">
+      <section class="compare-pane" aria-label="Current hosted script">
+        <h3 id="current-heading">Current hosted script</h3>
+        <pre id="current-script"><code></code></pre>
+      </section>
+      <section class="compare-pane" aria-label="Uploaded script">
+        <h3 id="uploaded-heading">Selected upload</h3>
+        <pre id="uploaded-script"><code></code></pre>
+      </section>
+    </div>
+    <div class="compare-actions">
+      <button class="secondary" id="cancel-compare" type="button">CANCEL</button>
+      <button id="apply-update" type="button">APPLY UPDATE</button>
+    </div>
+  </dialog>
   <script>
     const authForm = document.querySelector("#auth-form");
     const authNotice = document.querySelector("#auth-notice");
@@ -169,6 +205,7 @@
     const passwordInput = document.querySelector("#password");
     const filenameInput = document.querySelector("#filename");
     const scriptInput = document.querySelector("#script-file");
+    const compareDialog = document.querySelector("#compare-dialog");
     let managerPassword = "";
     let apps = [];
     let managedScripts = [];
@@ -178,6 +215,23 @@
     function showNotice(element, message, kind = "") {
       element.textContent = message;
       element.dataset.kind = kind;
+    }
+
+    function showScriptComparison(source, currentContents, uploadedContents, uploadName) {
+      const currentPane = document.querySelector("#current-script");
+      const uploadedPane = document.querySelector("#uploaded-script");
+      document.querySelector("#compare-path").textContent = source;
+      document.querySelector("#current-heading").textContent = `Current hosted · ${currentContents.split("\n").length} lines`;
+      document.querySelector("#uploaded-heading").textContent = `Upload ${uploadName} · ${uploadedContents.split("\n").length} lines`;
+      currentPane.querySelector("code").textContent = currentContents;
+      uploadedPane.querySelector("code").textContent = uploadedContents;
+      compareDialog.returnValue = "cancel";
+      compareDialog.showModal();
+
+      return new Promise((resolve) => {
+        const finish = () => resolve(compareDialog.returnValue === "apply");
+        compareDialog.addEventListener("close", finish, { once: true });
+      });
     }
 
     async function managerRequest(url, options = {}) {
@@ -340,6 +394,20 @@
 
     document.querySelector("#new-app").addEventListener("click", startNewApp);
     document.querySelector("#cancel-edit").addEventListener("click", startNewApp);
+    document.querySelector("#cancel-compare").addEventListener("click", () => compareDialog.close("cancel"));
+    document.querySelector("#apply-update").addEventListener("click", () => compareDialog.close("apply"));
+    let syncingCompareScroll = false;
+    for (const pane of [document.querySelector("#current-script"), document.querySelector("#uploaded-script")]) {
+      pane.addEventListener("scroll", () => {
+        if (syncingCompareScroll) return;
+        syncingCompareScroll = true;
+        const otherPane = pane.id === "current-script"
+          ? document.querySelector("#uploaded-script") : document.querySelector("#current-script");
+        otherPane.scrollTop = pane.scrollTop;
+        otherPane.scrollLeft = pane.scrollLeft;
+        syncingCompareScroll = false;
+      });
+    }
     document.querySelector("#logout").addEventListener("click", () => {
       managerPassword = "";
       apps = [];
@@ -358,7 +426,7 @@
         showNotice(managerNotice, "Lua scripts must be 1 MB or smaller.", "error");
         return;
       }
-      if (!selectedFile && !upload) {
+      if (!selectedFile && !selectedScript && !upload) {
         showNotice(managerNotice, "Choose a Lua script to create this app.", "error");
         return;
       }
@@ -370,6 +438,17 @@
       };
       if (upload) payload.contents = await upload.text();
       try {
+        if (upload && (selectedScript || selectedFile)) {
+          const source = selectedScript ? selectedScript.source : `computercraft/apps/${selectedFile}`;
+          const currentResponse = await fetch(`/${source}`);
+          if (!currentResponse.ok) throw new Error(`Could not load current script (${currentResponse.status}).`);
+          const currentContents = await currentResponse.text();
+          const approved = await showScriptComparison(source, currentContents, payload.contents, upload.name);
+          if (!approved) {
+            showNotice(managerNotice, "Update canceled. No files were changed.");
+            return;
+          }
+        }
         if (selectedScript) {
           await managerRequest(`/api/manager/scripts/${encodeURIComponent(selectedScript.source)}`, {
             method: "PUT",
