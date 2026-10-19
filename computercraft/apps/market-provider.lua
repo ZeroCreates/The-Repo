@@ -1,7 +1,7 @@
 local PROTOCOL = "order_system_v1"
 local SERVER_NAME = "rift-market"
-local JOBS_PROTOCOL = "rift_jobs_v1"
-local JOBS_SERVER_NAME = "rift-server"
+local ACCOUNT_PROTOCOL = "rift_account_v1"
+local ACCOUNT_SERVER_NAME = "rift-server"
 local TIMEOUT = 5
 local ADDRESS_FILE = "provider-address.cfg"
 local JOBS_LOGIN_PATH = "rift-jobs/login.json"
@@ -143,14 +143,14 @@ local function readAccountField(label, hidden)
 end
 
 local function authenticateAccount(username, password, action)
-    local serverId = rednet.lookup(JOBS_PROTOCOL, JOBS_SERVER_NAME)
+    local serverId = rednet.lookup(ACCOUNT_PROTOCOL, ACCOUNT_SERVER_NAME)
     if not serverId then return false, "Rift account server not found. Check that it is running and connected." end
     rednet.send(serverId, {
         type = action,
         username = username,
         password = password,
-    }, JOBS_PROTOCOL)
-    local senderId, response = rednet.receive(JOBS_PROTOCOL, TIMEOUT, serverId)
+    }, ACCOUNT_PROTOCOL)
+    local senderId, response = rednet.receive(ACCOUNT_PROTOCOL, TIMEOUT, serverId)
     if senderId ~= serverId or type(response) ~= "table" then
         return false, "No response from the Rift account server."
     end

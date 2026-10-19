@@ -1,4 +1,5 @@
 local PROTOCOL = "rift_jobs_v1"
+local ACCOUNT_PROTOCOL = "rift_account_v1"
 local LOGIN_SERVER_NAME = "rift-server"
 local JOBS_SERVER_NAME = "rift-jobs"
 local TIMEOUT = 5
@@ -171,15 +172,18 @@ end
 
 local function request(message)
     local serverName = JOBS_SERVER_NAME
+    local protocol = PROTOCOL
     if message.type == "login" or message.type == "register" or message.type == "logout" then
         serverName = LOGIN_SERVER_NAME
+        protocol = ACCOUNT_PROTOCOL
     end
-    local serverId = rednet.lookup(PROTOCOL, serverName)
+    local serverId = rednet.lookup(protocol, serverName)
     if not serverId then
-        return nil, "Rift Jobs server not found. Check that it is running and connected."
+        return nil, (protocol == ACCOUNT_PROTOCOL and "Rift account server"
+            or "Rift Jobs server") .. " not found. Check that it is running and connected."
     end
-    rednet.send(serverId, message, PROTOCOL)
-    local _, response = rednet.receive(PROTOCOL, TIMEOUT, serverId)
+    rednet.send(serverId, message, protocol)
+    local _, response = rednet.receive(protocol, TIMEOUT, serverId)
     if type(response) ~= "table" then return nil, "No response from the Jobs server." end
     if response.type == "error" then
         return nil, response.message or "The Jobs server rejected the request."

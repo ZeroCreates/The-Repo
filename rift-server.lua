@@ -1,4 +1,5 @@
 local PROTOCOL = "rift_jobs_v1"
+local ACCOUNT_PROTOCOL = "rift_account_v1"
 local LOGIN_SERVER_NAME = "rift-server"
 local JOBS_SERVER_NAME = "rift-jobs"
 local MARKET_PROTOCOL = "order_system_v1"
@@ -9,6 +10,7 @@ local TEMP_FILE = "jobs.db.tmp"
 local state
 local sessions = {}
 local handleMarketRequest
+local responseProtocol = PROTOCOL
 
 local function openModems()
     local found = false
@@ -82,7 +84,7 @@ local function saveState()
 end
 
 local function sendError(senderId, message)
-    rednet.send(senderId, { type = "error", message = message }, PROTOCOL)
+    rednet.send(senderId, { type = "error", message = message }, responseProtocol)
 end
 
 local function findJob(jobId)
@@ -124,7 +126,7 @@ local function registerAccount(senderId, message)
         return sendError(senderId, saveError)
     end
     sessions[senderId] = username
-    rednet.send(senderId, { type = "authenticated", username = username }, PROTOCOL)
+    rednet.send(senderId, { type = "authenticated", username = username }, responseProtocol)
 end
 
 local function loginAccount(senderId, message)
@@ -135,7 +137,7 @@ local function loginAccount(senderId, message)
         return sendError(senderId, "Username or password is incorrect.")
     end
     sessions[senderId] = account.username
-    rednet.send(senderId, { type = "authenticated", username = account.username }, PROTOCOL)
+    rednet.send(senderId, { type = "authenticated", username = account.username }, responseProtocol)
 end
 
 local function belongsToUser(job, field, legacyId, senderId, username)
@@ -160,7 +162,7 @@ local function mutateJob(senderId, job, changes, responseType)
         for key, value in pairs(previous) do job[key] = value end
         return sendError(senderId, saveError)
     end
-    rednet.send(senderId, { type = responseType, job = copyJob(job) }, PROTOCOL)
+    rednet.send(senderId, { type = responseType, job = copyJob(job) }, responseProtocol)
 end
 
 local function createJob(senderId, username, message)
@@ -191,7 +193,7 @@ local function createJob(senderId, username, message)
         state.nextId = state.nextId - 1
         return sendError(senderId, saveError)
     end
-    rednet.send(senderId, { type = "job_created", job = copyJob(job) }, PROTOCOL)
+    rednet.send(senderId, { type = "job_created", job = copyJob(job) }, responseProtocol)
 end
 
 local function listJobs(senderId, username, mineOnly)
@@ -203,18 +205,23 @@ local function listJobs(senderId, username, mineOnly)
             table.insert(jobs, copyJob(job))
         end
     end
-    rednet.send(senderId, { type = mineOnly and "my_jobs" or "job_board", jobs = jobs }, PROTOCOL)
+    rednet.send(senderId, { type = mineOnly and "my_jobs" or "job_board", jobs = jobs }, responseProtocol)
 end
 
-local function handleRequest(senderId, message)
+local function handleRequest(senderId, message, protocol)
+    responseProtocol = protocol
     if type(message) ~= "table" or type(message.type) ~= "string" then
         return sendError(senderId, "Invalid Jobs request.")
+    end
+    if protocol == ACCOUNT_PROTOCOL and message.type ~= "register"
+        and message.type ~= "login" and message.type ~= "logout" then
+        return sendError(senderId, "The Rift account endpoint only accepts account requests.")
     end
     if message.type == "register" then return registerAccount(senderId, message) end
     if message.type == "login" then return loginAccount(senderId, message) end
     if message.type == "logout" then
         sessions[senderId] = nil
-        return rednet.send(senderId, { type = "logged_out" }, PROTOCOL)
+        return rednet.send(senderId, { type = "logged_out" }, responseProtocol)
     end
 
     local username = sessions[senderId]
@@ -409,24 +416,28 @@ if type(handleMarketRequest) ~= "function" then
 end
 
 state = loadState()
-rednet.host(PROTOCOL, LOGIN_SERVER_NAME)
 rednet.host(PROTOCOL, JOBS_SERVER_NAME)
+rednet.host(ACCOUNT_PROTOCOL, LOGIN_SERVER_NAME)
 rednet.host(MARKET_PROTOCOL, MARKET_SERVER_NAME)
 drawDashboard()
 
 while true do
     local senderId, message, receivedProtocol = rednet.receive(nil, 1)
-    if senderId and receivedProtocol == PROTOCOL then
-        if type(message) == "table" and (message.type == "login"
-            or message.type == "register" or message.type == "logout") then
+    if senderId and (receivedProtocol == PROTOCOL or receivedProtocol == ACCOUNT_PROTOCOL) then
+        responseProtocol = receivedProtocol
+        local isLoginRequest = receivedProtocol == ACCOUNT_PROTOCOL
+            or type(message) == "table" and (message.type == "login"
+                or message.type == "register" or message.type == "logout")
+        if isLoginRequest then
             requestsByService.login = requestsByService.login + 1
-            lastRequest = "Login from #" .. senderId .. "  /  " .. tostring(message.type)
+            lastRequest = "Login from #" .. senderId .. "  /  "
+                .. tostring(type(message) == "table" and message.type or "invalid request")
         else
             requestsByService.jobs = requestsByService.jobs + 1
             lastRequest = "Jobs from #" .. senderId .. "  /  "
                 .. tostring(type(message) == "table" and message.type or "invalid request")
         end
-        handleRequest(senderId, message)
+        handleRequest(senderId, message, receivedProtocol)
     elseif senderId and receivedProtocol == MARKET_PROTOCOL then
         requestsByService.market = requestsByService.market + 1
         lastRequest = "Market from #" .. senderId .. "  /  "
