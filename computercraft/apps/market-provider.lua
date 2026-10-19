@@ -17,49 +17,91 @@ if not storageLoaded or type(storage) ~= "table"
 end
 
 local function readRiftAccount(path)
-    if storage then return storage.read(path) end
-    local absolutePath = "/" .. path
-    if not fs.exists(absolutePath) then return nil, "Stored data was not found." end
-    if fs.isDir(absolutePath) then return nil, "Stored data name refers to a folder." end
-    local file = fs.open(absolutePath, "r")
-    if not file then return nil, "Could not open the saved Rift account." end
-    local contents = file.readAll()
-    file.close()
-    local ok, account = pcall(textutils.unserializeJSON, contents)
-    if not ok or type(account) ~= "table" then
-        return nil, "Saved Rift account data is invalid."
+    local storageError
+    if storage then
+        local ok, account, err = pcall(storage.read, path)
+        if ok and account ~= nil then return account end
+        if not ok then
+            storageError = tostring(account)
+        else
+            storageError = err
+        end
     end
-    return account
+    local absolutePath = "/" .. path
+    if fs.exists(absolutePath) then
+        if fs.isDir(absolutePath) then return nil, "Saved Rift account path is a folder." end
+        local file = fs.open(absolutePath, "r")
+        if not file then return nil, "Could not open the saved Rift account at " .. absolutePath .. "." end
+        local contents = file.readAll()
+        file.close()
+        local decoded, account = pcall(textutils.unserializeJSON, contents)
+        if not decoded or type(account) ~= "table" then
+            return nil, "Saved Rift account data at " .. absolutePath .. " is invalid."
+        end
+        return account
+    end
+    if storageError and storageError ~= "Stored data was not found." then
+        return nil, "Launcher storage: " .. tostring(storageError)
+            .. "; no root account file exists at " .. absolutePath .. "."
+    end
+    return nil, "Stored data was not found."
 end
 
 local function writeRiftAccount(path, account)
-    if storage then return storage.write(path, account) end
-    local ok, contents = pcall(textutils.serializeJSON, account)
-    if not ok or type(contents) ~= "string" then
+    local storageError
+    if storage then
+        local called, saved, err = pcall(storage.write, path, account)
+        if called and saved then return true end
+        storageError = called and tostring(err or "storage write failed") or tostring(saved)
+    end
+    local encoded, contents = pcall(textutils.serializeJSON, account)
+    if not encoded or type(contents) ~= "string" then
         return false, "Rift account data could not be serialized."
     end
     local directory = "/" .. path:match("^(.*)/[^/]+$")
     if not fs.exists(directory) then
         local made, makeError = pcall(fs.makeDir, directory)
-        if not made then return false, "Could not create Rift account folder: " .. tostring(makeError) end
+        if not made then
+            return false, "Could not create Rift account folder: " .. tostring(makeError)
+                .. (storageError and "; launcher storage also failed: " .. storageError or "")
+        end
     elseif not fs.isDir(directory) then
         return false, "Rift account folder path is not a directory."
     end
     local file = fs.open("/" .. path, "w")
-    if not file then return false, "Could not create the saved Rift account file." end
+    if not file then
+        return false, "Could not create the saved Rift account file."
+            .. (storageError and " Launcher storage also failed: " .. storageError or "")
+    end
     local written, writeError = pcall(file.write, contents)
-    file.close()
-    if not written then return false, "Could not write the saved Rift account: " .. tostring(writeError) end
+    local closed, closeError = pcall(file.close)
+    if not written or not closed then
+        return false, "Could not write the saved Rift account: "
+            .. tostring(not written and writeError or closeError)
+            .. (storageError and "; launcher storage also failed: " .. storageError or "")
+    end
     return true
 end
 
 local function deleteRiftAccount(path)
-    if storage then return storage.delete(path) end
+    local storageError
+    if storage then
+        local called, deleted, err = pcall(storage.delete, path)
+        if called and deleted then return true end
+        storageError = called and err or deleted
+        if called and err == "Stored data was not found." then storageError = nil end
+    end
     local absolutePath = "/" .. path
-    if not fs.exists(absolutePath) then return false, "Stored data was not found." end
-    if fs.isDir(absolutePath) then return false, "Stored data name refers to a folder." end
+    if not fs.exists(absolutePath) then
+        if storageError then return false, "Could not delete account from launcher storage: " .. tostring(storageError) end
+        return false, "Stored data was not found."
+    end
+    if fs.isDir(absolutePath) then return false, "Saved Rift account path is a folder." end
     local deleted, deleteError = pcall(fs.delete, absolutePath)
-    if not deleted then return false, "Could not delete saved Rift account: " .. tostring(deleteError) end
+    if not deleted then
+        return false, "Could not delete saved Rift account: " .. tostring(deleteError)
+            .. (storageError and "; launcher storage also failed: " .. tostring(storageError) or "")
+    end
     return true
 end
 

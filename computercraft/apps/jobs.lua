@@ -13,6 +13,94 @@ if not storageLoaded or type(storage) ~= "table"
     or type(storage.delete) ~= "function" then
     storage = nil
 end
+
+local function readRiftAccount(path)
+    local storageError
+    if storage then
+        local ok, account, err = pcall(storage.read, path)
+        if ok and account ~= nil then return account end
+        storageError = ok and err or account
+    end
+    local absolutePath = "/" .. path
+    if fs.exists(absolutePath) then
+        if fs.isDir(absolutePath) then return nil, "Saved Rift account path is a folder." end
+        local file = fs.open(absolutePath, "r")
+        if not file then return nil, "Could not open the saved Rift account at " .. absolutePath .. "." end
+        local contents = file.readAll()
+        file.close()
+        local decoded, account = pcall(textutils.unserializeJSON, contents)
+        if not decoded or type(account) ~= "table" then
+            return nil, "Saved Rift account data at " .. absolutePath .. " is invalid."
+        end
+        return account
+    end
+    if storageError and storageError ~= "Stored data was not found." then
+        return nil, "Launcher storage: " .. tostring(storageError)
+            .. "; no root account file exists at " .. absolutePath .. "."
+    end
+    return nil, "Stored data was not found."
+end
+
+local function writeRiftAccount(path, account)
+    local storageError
+    if storage then
+        local called, saved, err = pcall(storage.write, path, account)
+        if called and saved then return true end
+        storageError = called and tostring(err or "storage write failed") or tostring(saved)
+    end
+    local encoded, contents = pcall(textutils.serializeJSON, account)
+    if not encoded or type(contents) ~= "string" then
+        return false, "Rift account data could not be serialized."
+    end
+    local directory = "/" .. path:match("^(.*)/[^/]+$")
+    if not fs.exists(directory) then
+        local made, makeError = pcall(fs.makeDir, directory)
+        if not made then
+            return false, "Could not create Rift account folder: " .. tostring(makeError)
+                .. (storageError and "; launcher storage also failed: " .. storageError or "")
+        end
+    elseif not fs.isDir(directory) then
+        return false, "Rift account folder path is not a directory."
+    end
+    local file = fs.open("/" .. path, "w")
+    if not file then
+        return false, "Could not create the saved Rift account file."
+            .. (storageError and " Launcher storage also failed: " .. storageError or "")
+    end
+    local written, writeError = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not written or not closed then
+        return false, "Could not write the saved Rift account: "
+            .. tostring(not written and writeError or closeError)
+            .. (storageError and "; launcher storage also failed: " .. storageError or "")
+    end
+    return true
+end
+
+local function deleteRiftAccount(path)
+    local storageError
+    if storage then
+        local called, deleted, err = pcall(storage.delete, path)
+        if called and deleted then return true end
+        storageError = called and err or deleted
+        if called and err == "Stored data was not found." then storageError = nil end
+    end
+    local absolutePath = "/" .. path
+    if not fs.exists(absolutePath) then
+        if storageError then
+            return false, "Could not delete account from launcher storage: " .. tostring(storageError)
+        end
+        return false, "Stored data was not found."
+    end
+    if fs.isDir(absolutePath) then return false, "Saved Rift account path is a folder." end
+    local deleted, deleteError = pcall(fs.delete, absolutePath)
+    if not deleted then
+        return false, "Could not delete saved Rift account: " .. tostring(deleteError)
+            .. (storageError and "; launcher storage also failed: " .. tostring(storageError) or "")
+    end
+    return true
+end
+
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
     { accent = colors.lime, highlight = colors.green },
@@ -193,18 +281,21 @@ local function request(message)
 end
 
 local function saveLogin(username, password)
-    if not storage then
-        return false, "Rift account storage is unavailable. Start Rift Jobs from the launcher."
+    local account, accountError = readRiftAccount(RIFT_LOGIN_PATH)
+    if account == nil and accountError and accountError ~= "Stored data was not found." then
+        return false, "Could not read the saved Rift account: " .. tostring(accountError)
     end
-    local saved, saveError = storage.write(RIFT_LOGIN_PATH, {
-        username = username,
-        password = password,
-    })
+    if type(account) ~= "table" or type(account.username) ~= "string"
+        or account.username:lower() ~= username:lower() then
+        account = {}
+    end
+    account.username = username
+    account.password = password
+    local saved, saveError = writeRiftAccount(RIFT_LOGIN_PATH, account)
     if not saved then
-        return false, "Could not save the Rift account to private storage: "
-            .. tostring(saveError or "unknown storage error")
+        return false, "Could not save the Rift account: " .. tostring(saveError or "unknown storage error")
     end
-    local legacyDeleted, legacyDeleteError = storage.delete(LEGACY_LOGIN_PATH)
+    local legacyDeleted, legacyDeleteError = deleteRiftAccount(LEGACY_LOGIN_PATH)
     if not legacyDeleted and legacyDeleteError ~= "Stored data was not found." then
         return false, "Rift account was saved, but the legacy account entry could not be removed: "
             .. tostring(legacyDeleteError or "unknown storage error")
@@ -214,17 +305,16 @@ local function saveLogin(username, password)
 end
 
 local function loadSavedLogin()
-    if not storage then return nil, "Private storage is unavailable." end
-    local data, storageError = storage.read(RIFT_LOGIN_PATH)
+    local data, storageError = readRiftAccount(RIFT_LOGIN_PATH)
     if data == nil and storageError == "Stored data was not found." then
-        data, storageError = storage.read(LEGACY_LOGIN_PATH)
+        data, storageError = readRiftAccount(LEGACY_LOGIN_PATH)
         if data ~= nil then
-            local saved, saveError = storage.write(RIFT_LOGIN_PATH, data)
+            local saved, saveError = writeRiftAccount(RIFT_LOGIN_PATH, data)
             if not saved then
                 return nil, "Could not migrate the saved Rift account: "
                     .. tostring(saveError or "unknown storage error")
             end
-            local deleted, deleteError = storage.delete(LEGACY_LOGIN_PATH)
+            local deleted, deleteError = deleteRiftAccount(LEGACY_LOGIN_PATH)
             if not deleted and deleteError ~= "Stored data was not found." then
                 return nil, "Rift account was migrated, but the legacy account entry could not be removed: "
                     .. tostring(deleteError or "unknown storage error")
@@ -245,16 +335,12 @@ local function loadSavedLogin()
 end
 
 local function deleteSavedLogin()
-    if not storage then
-        if not savedLogin then return true end
-        return false, "Private storage is unavailable; the saved Rift account could not be removed."
-    end
-    local deleted, deleteError = storage.delete(RIFT_LOGIN_PATH)
+    local deleted, deleteError = deleteRiftAccount(RIFT_LOGIN_PATH)
     if not deleted and deleteError ~= "Stored data was not found." then
         return false, "Could not remove the saved Rift account: "
             .. tostring(deleteError or "unknown storage error")
     end
-    local legacyDeleted, legacyDeleteError = storage.delete(LEGACY_LOGIN_PATH)
+    local legacyDeleted, legacyDeleteError = deleteRiftAccount(LEGACY_LOGIN_PATH)
     if not legacyDeleted and legacyDeleteError ~= "Stored data was not found." then
         return false, "Rift account was signed out, but the legacy account entry could not be removed: "
             .. tostring(legacyDeleteError or "unknown storage error")
