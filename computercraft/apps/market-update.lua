@@ -95,6 +95,11 @@ local files = {
 }
 if config.role == "server" then
     table.insert(files, {
+        name = "rift-server-jobs.lua",
+        source = "rift-server-jobs.lua",
+        destination = fs.combine(installDirectory, "rift-server-jobs.lua"),
+    })
+    table.insert(files, {
         name = "rift-server-market.lua",
         source = "rift-server-market.lua",
         destination = fs.combine(installDirectory, "rift-server-market.lua"),

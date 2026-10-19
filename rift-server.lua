@@ -13,12 +13,12 @@ local BACKUP_FILE = "jobs.db.bak"
 local TEMP_FILE = "jobs.db.tmp"
 local state
 local sessions = {}
+local handleJobsRequest
 local handleMarketRequest
 local getMarketDashboardStats
 local handleMailRequest
 local handleCasinoRequest
 local getCasinoStats
-local responseProtocol = PROTOCOL
 
 local function openModems()
     local found = false
@@ -91,214 +91,63 @@ local function saveState()
     return true
 end
 
-local function sendError(senderId, message)
-    rednet.send(senderId, { type = "error", message = message }, responseProtocol)
-end
-
-local function findJob(jobId)
-    for _, job in ipairs(state.jobs) do
-        if job.id == jobId then return job end
-    end
-end
-
-local function cleanText(value, minimum, maximum)
-    if type(value) ~= "string" then return nil end
-    value = value:match("^%s*(.-)%s*$")
-    if #value < minimum or #value > maximum or value:find("%c") then return nil end
-    return value
+local function sendError(senderId, message, protocol)
+    rednet.send(senderId, { type = "error", message = message }, protocol or ACCOUNT_PROTOCOL)
 end
 
 local function accountKey(username)
-    local cleaned = cleanText(username, 3, 24)
+    if type(username) ~= "string" then return nil end
+    local cleaned = username:match("^%s*(.-)%s*$")
+    if #cleaned < 3 or #cleaned > 24 or cleaned:find("%c") then return nil end
     if not cleaned or not cleaned:match("^[%w_-]+$") then return nil end
     return cleaned:lower(), cleaned
 end
 
-local function registerAccount(senderId, message)
+local function registerAccount(senderId, message, protocol)
     local key, username = accountKey(message.username)
     local password = message.password
     if not key then
-        return sendError(senderId, "Username must be 3-24 letters, numbers, underscores, or dashes.")
+        return sendError(senderId, "Username must be 3-24 letters, numbers, underscores, or dashes.", protocol)
     end
     if type(password) ~= "string" or #password < 1 or #password > 128 then
-        return sendError(senderId, "Password must be 1 to 128 characters.")
+        return sendError(senderId, "Password must be 1 to 128 characters.", protocol)
     end
     if state.accounts[key] then
-        return sendError(senderId, "That Rift username is already registered.")
+        return sendError(senderId, "That Rift username is already registered.", protocol)
     end
 
     state.accounts[key] = { username = username, password = password }
     local saved, saveError = saveState()
     if not saved then
         state.accounts[key] = nil
-        return sendError(senderId, saveError)
+        return sendError(senderId, saveError, protocol)
     end
     sessions[senderId] = username
-    rednet.send(senderId, { type = "authenticated", username = username }, responseProtocol)
+    rednet.send(senderId, { type = "authenticated", username = username }, protocol or ACCOUNT_PROTOCOL)
 end
 
-local function loginAccount(senderId, message)
+local function loginAccount(senderId, message, protocol)
     local key = accountKey(message.username)
     local account = key and state.accounts[key]
     if not account or type(message.password) ~= "string"
         or account.password ~= message.password then
-        return sendError(senderId, "Username or password is incorrect.")
+        return sendError(senderId, "Username or password is incorrect.", protocol)
     end
     sessions[senderId] = account.username
-    rednet.send(senderId, { type = "authenticated", username = account.username }, responseProtocol)
+    rednet.send(senderId, { type = "authenticated", username = account.username }, protocol or ACCOUNT_PROTOCOL)
 end
 
-local function belongsToUser(job, field, legacyId, senderId, username)
-    local owner = job[field]
-    if owner then return owner == username end
-    return job[legacyId] == senderId
-end
-
-local function copyJob(job)
-    local copy = {}
-    for key, value in pairs(job) do copy[key] = value end
-    return copy
-end
-
-local function mutateJob(senderId, job, changes, responseType)
-    local previous = copyJob(job)
-    for key, value in pairs(changes) do job[key] = value end
-    job.updatedAt = os.epoch("utc")
-    local saved, saveError = saveState()
-    if not saved then
-        for key in pairs(job) do job[key] = nil end
-        for key, value in pairs(previous) do job[key] = value end
-        return sendError(senderId, saveError)
-    end
-    rednet.send(senderId, { type = responseType, job = copyJob(job) }, responseProtocol)
-end
-
-local function createJob(senderId, username, message)
-    local title = cleanText(message.title, 3, 40)
-    local description = cleanText(message.description, 5, 180)
-    local reward = cleanText(message.reward, 1, 60)
-    if not title or not description or not reward then
-        return sendError(senderId, "Enter a title (3-40 chars), details (5-180), and reward (1-60).")
-    end
-
-    local job = {
-        id = state.nextId,
-        posterId = senderId,
-        posterName = username,
-        posterUser = username,
-        title = title,
-        description = description,
-        reward = reward,
-        status = "open",
-        createdAt = os.epoch("utc"),
-        updatedAt = os.epoch("utc"),
-    }
-    state.nextId = state.nextId + 1
-    table.insert(state.jobs, job)
-    local saved, saveError = saveState()
-    if not saved then
-        table.remove(state.jobs)
-        state.nextId = state.nextId - 1
-        return sendError(senderId, saveError)
-    end
-    rednet.send(senderId, { type = "job_created", job = copyJob(job) }, responseProtocol)
-end
-
-local function listJobs(senderId, username, mineOnly)
-    local jobs = {}
-    for _, job in ipairs(state.jobs) do
-        local isMine = belongsToUser(job, "posterUser", "posterId", senderId, username)
-            or belongsToUser(job, "claimantUser", "claimantId", senderId, username)
-        if mineOnly and isMine or not mineOnly and job.status == "open" then
-            table.insert(jobs, copyJob(job))
-        end
-    end
-    rednet.send(senderId, { type = mineOnly and "my_jobs" or "job_board", jobs = jobs }, responseProtocol)
-end
-
-local function handleRequest(senderId, message, protocol)
-    responseProtocol = protocol
+local function handleAccountRequest(senderId, message, protocol)
     if type(message) ~= "table" or type(message.type) ~= "string" then
-        return sendError(senderId, "Invalid Jobs request.")
+        return sendError(senderId, "Invalid Rift account request.", protocol)
     end
-    if protocol == ACCOUNT_PROTOCOL and message.type ~= "register"
-        and message.type ~= "login" and message.type ~= "logout" then
-        return sendError(senderId, "The Rift account endpoint only accepts account requests.")
-    end
-    if message.type == "register" then return registerAccount(senderId, message) end
-    if message.type == "login" then return loginAccount(senderId, message) end
+    if message.type == "register" then return registerAccount(senderId, message, protocol) end
+    if message.type == "login" then return loginAccount(senderId, message, protocol) end
     if message.type == "logout" then
         sessions[senderId] = nil
-        return rednet.send(senderId, { type = "logged_out" }, responseProtocol)
+        return rednet.send(senderId, { type = "logged_out" }, protocol or ACCOUNT_PROTOCOL)
     end
-
-    local username = sessions[senderId]
-    if not username then return sendError(senderId, "Sign in to your Rift account first.") end
-    if message.type == "list_jobs" then return listJobs(senderId, username, false) end
-    if message.type == "my_jobs" then return listJobs(senderId, username, true) end
-    if message.type == "create_job" then return createJob(senderId, username, message) end
-
-    if type(message.jobId) ~= "number" or message.jobId % 1 ~= 0 then
-        return sendError(senderId, "Enter a valid job number.")
-    end
-    local job = findJob(message.jobId)
-    if not job then return sendError(senderId, "Job not found.") end
-
-    if message.type == "claim_job" then
-        if job.status ~= "open" then return sendError(senderId, "That job is no longer open.") end
-        if belongsToUser(job, "posterUser", "posterId", senderId, username) then
-            return sendError(senderId, "You cannot claim your own job.")
-        end
-        return mutateJob(senderId, job, {
-            claimantId = senderId,
-            claimantName = username,
-            claimantUser = username,
-            status = "claimed",
-            submission = nil,
-            reviewNote = nil,
-        }, "job_updated")
-    elseif message.type == "submit_job" then
-        local submission = cleanText(message.submission, 5, 180)
-        if not belongsToUser(job, "claimantUser", "claimantId", senderId, username)
-            or job.status ~= "claimed" then
-            return sendError(senderId, "Only the assigned worker can submit a claimed job.")
-        end
-        if not submission then return sendError(senderId, "Describe the completed work (5-180 characters).") end
-        return mutateJob(senderId, job, { submission = submission, reviewNote = nil, status = "review" }, "job_updated")
-    elseif message.type == "approve_job" then
-        if not belongsToUser(job, "posterUser", "posterId", senderId, username)
-            or job.status ~= "review" then
-            return sendError(senderId, "Only the job poster can approve submitted work.")
-        end
-        return mutateJob(senderId, job, { status = "completed" }, "job_updated")
-    elseif message.type == "revise_job" then
-        local note = cleanText(message.note, 1, 120)
-        if not belongsToUser(job, "posterUser", "posterId", senderId, username)
-            or job.status ~= "review" then
-            return sendError(senderId, "Only the job poster can request a revision.")
-        end
-        if not note then return sendError(senderId, "Enter a revision note (1-120 characters).") end
-        return mutateJob(senderId, job, { status = "claimed", reviewNote = note, submission = nil }, "job_updated")
-    elseif message.type == "withdraw_claim" then
-        if not belongsToUser(job, "claimantUser", "claimantId", senderId, username)
-            or job.status ~= "claimed" then
-            return sendError(senderId, "You can only withdraw a job before submitting it.")
-        end
-        return mutateJob(senderId, job, {
-            claimantId = nil,
-            claimantName = nil,
-            claimantUser = nil,
-            status = "open",
-            reviewNote = nil,
-        }, "job_updated")
-    elseif message.type == "cancel_job" then
-        if not belongsToUser(job, "posterUser", "posterId", senderId, username)
-            or (job.status ~= "open" and job.status ~= "claimed") then
-            return sendError(senderId, "Only the poster can cancel an open or claimed job.")
-        end
-        return mutateJob(senderId, job, { status = "cancelled" }, "job_updated")
-    end
-    sendError(senderId, "Unknown Jobs request.")
+    sendError(senderId, "The Rift account endpoint only accepts account requests.", protocol)
 end
 
 local startedAt = os.clock()
@@ -491,6 +340,20 @@ if type(getMarketDashboardStats) ~= "function" then
 end
 
 state = loadState()
+local jobsServerPath = fs.combine(fs.getDir(shell.getRunningProgram()), "rift-server-jobs.lua")
+local jobsServerChunk, jobsLoadError = loadfile(jobsServerPath)
+if not jobsServerChunk then
+    error("Could not load the Jobs module at " .. jobsServerPath .. ": "
+        .. tostring(jobsLoadError), 0)
+end
+local jobsModuleLoaded, createJobsServer = pcall(jobsServerChunk)
+if not jobsModuleLoaded or type(createJobsServer) ~= "function" then
+    error("The Jobs module is invalid: " .. tostring(createJobsServer), 0)
+end
+handleJobsRequest = createJobsServer(state, saveState)
+if type(handleJobsRequest) ~= "function" then
+    error("The Jobs module did not provide a request handler.", 0)
+end
 local mailServerPath = fs.combine(fs.getDir(shell.getRunningProgram()), "rift-server-email.lua")
 local mailServerChunk, mailLoadError = loadfile(mailServerPath)
 if not mailServerChunk then
@@ -531,21 +394,30 @@ drawDashboard()
 
 while true do
     local senderId, message, receivedProtocol = rednet.receive(nil, 1)
-    if senderId and (receivedProtocol == PROTOCOL or receivedProtocol == ACCOUNT_PROTOCOL) then
-        responseProtocol = receivedProtocol
-        local isLoginRequest = receivedProtocol == ACCOUNT_PROTOCOL
-            or type(message) == "table" and (message.type == "login"
-                or message.type == "register" or message.type == "logout")
-        if isLoginRequest then
+    if senderId and receivedProtocol == ACCOUNT_PROTOCOL then
+        requestsByService.login = requestsByService.login + 1
+        lastRequest = "Login from #" .. senderId .. "  /  "
+            .. tostring(type(message) == "table" and message.type or "invalid request")
+        handleAccountRequest(senderId, message, ACCOUNT_PROTOCOL)
+    elseif senderId and receivedProtocol == PROTOCOL then
+        local requestType = type(message) == "table" and message.type
+        if requestType == "login" or requestType == "register" or requestType == "logout" then
             requestsByService.login = requestsByService.login + 1
-            lastRequest = "Login from #" .. senderId .. "  /  "
-                .. tostring(type(message) == "table" and message.type or "invalid request")
+            lastRequest = "Legacy login from #" .. senderId .. "  /  " .. requestType
+            handleAccountRequest(senderId, message, PROTOCOL)
         else
             requestsByService.jobs = requestsByService.jobs + 1
             lastRequest = "Jobs from #" .. senderId .. "  /  "
-                .. tostring(type(message) == "table" and message.type or "invalid request")
+                .. tostring(requestType or "invalid request")
+            local username = sessions[senderId]
+            local response
+            if not username then
+                response = { type = "error", message = "Sign in to your Rift account first." }
+            else
+                response = handleJobsRequest(senderId, username, message)
+            end
+            rednet.send(senderId, response, PROTOCOL)
         end
-        handleRequest(senderId, message, receivedProtocol)
     elseif senderId and receivedProtocol == MARKET_PROTOCOL then
         requestsByService.market = requestsByService.market + 1
         lastRequest = "Market from #" .. senderId .. "  /  "
