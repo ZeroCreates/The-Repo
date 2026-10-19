@@ -22,7 +22,7 @@ The optional `.env` file controls `HOST` and `PORT`; the example binds to `0.0.0
 
 ## Manage apps
 
-Open `/manager` on the hosted site. Set `MANAGER_PASSWORD` in the host's `.env` to a strong, unique password, then restart the server. The manager can add apps, upload replacement Lua files, update descriptions and versions, and remove catalog apps and their files. It only manages catalog apps in `computercraft/apps`; server and system programs are not editable there. Keep manager access behind HTTPS because the password is sent to the host for authenticated requests.
+Open `/manager` on the hosted site. Set `MANAGER_PASSWORD` in the host's `.env` to a strong, unique password, then restart the server. The manager can add apps, upload replacement Lua files, update descriptions and versions, and remove catalog apps and their files. It also allows versioned updates to scripts under `computercraft/server` and `computercraft/system`; system versions are saved in the app catalog, while server versions are stored in `script-versions.json`. Server/system scripts cannot be removed from the manager. Keep manager access behind HTTPS because the password is sent to the host for authenticated requests.
 
 ## Connect ComputerCraft
 

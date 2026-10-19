@@ -18,8 +18,10 @@ const MANAGER_PASSWORD = process.env.MANAGER_PASSWORD || "";
 const MAX_SCRIPT_BYTES = 1024 * 1024;
 const MAX_REQUEST_BYTES = MAX_SCRIPT_BYTES * 6 + 16 * 1024;
 const SCRIPT_PATH = /^(?:launcher\.lua|computercraft\/.+\.lua)$/i;
+const MANAGED_SCRIPT_PATH = /^computercraft\/(?:server|system)\/[a-z0-9_-]+\.lua$/i;
 const APP_FILE_NAME = /^[a-z0-9][a-z0-9_-]*\.lua$/;
 const APP_VERSION = /^\d+\.\d+\.\d+$/;
+const SCRIPT_VERSIONS_PATH = path.join(ROOT, "script-versions.json");
 
 function respond(response, status, body, contentType) {
     response.writeHead(status, {
@@ -194,6 +196,20 @@ async function readCatalog() {
     return catalog;
 }
 
+async function readScriptVersions() {
+    try {
+        const contents = await fs.readFile(SCRIPT_VERSIONS_PATH, "utf8");
+        const versions = JSON.parse(contents);
+        if (!versions || typeof versions !== "object" || Array.isArray(versions)) {
+            throw new Error("Script versions must be a JSON object.");
+        }
+        return versions;
+    } catch (error) {
+        if (error.code === "ENOENT") return {};
+        throw error;
+    }
+}
+
 async function writeAtomically(filePath, contents) {
     const temporaryPath = `${filePath}.${crypto.randomUUID()}.tmp`;
     try {
@@ -220,6 +236,71 @@ function isManagedApp(app) {
 
 async function handleManagerApi(request, response, requestPath) {
     const collectionPath = "/api/manager/apps";
+    if (requestPath === "/api/manager/scripts" && request.method === "GET") {
+        const [catalog, versions, files] = await Promise.all([
+            readCatalog(),
+            readScriptVersions(),
+            listComputerCraftScripts(),
+        ]);
+        const scripts = files.filter((source) => MANAGED_SCRIPT_PATH.test(source)).map((source) => {
+            const app = catalog.find((entry) => entry.source === source);
+            const file = path.posix.basename(source);
+            return {
+                source,
+                file,
+                group: source.split("/")[1],
+                name: app ? app.name : file.replace(/\.lua$/i, ""),
+                description: app ? app.description : "",
+                version: app ? app.version : versions[source] || "",
+            };
+        });
+        sendJson(response, 200, scripts);
+        return;
+    }
+
+    const scriptSource = requestPath.startsWith("/api/manager/scripts/")
+        ? requestPath.slice("/api/manager/scripts/".length) : "";
+    if (scriptSource && MANAGED_SCRIPT_PATH.test(scriptSource) && request.method === "PUT") {
+        const body = await readJsonBody(request);
+        if (!body || typeof body !== "object" || Array.isArray(body)
+            || typeof body.version !== "string" || !APP_VERSION.test(body.version)) {
+            sendJson(response, 400, { error: "Version must use major.minor.patch format, such as 1.0.0." });
+            return;
+        }
+        if (body.contents !== undefined && (typeof body.contents !== "string" || !body.contents.trim())) {
+            sendJson(response, 400, { error: "Uploaded Lua script must not be empty." });
+            return;
+        }
+        if (body.contents !== undefined && Buffer.byteLength(body.contents, "utf8") > MAX_SCRIPT_BYTES) {
+            sendJson(response, 400, { error: "Lua scripts must be 1 MB or smaller." });
+            return;
+        }
+
+        const scriptPath = path.resolve(ROOT, ...scriptSource.split("/"));
+        if (!isInside(path.join(ROOT, "computercraft"), scriptPath)) {
+            sendJson(response, 400, { error: "Invalid ComputerCraft script path." });
+            return;
+        }
+        const catalog = await readCatalog();
+        const catalogIndex = catalog.findIndex((entry) => entry.source === scriptSource);
+        if (catalogIndex === -1 && body.contents === undefined) {
+            sendJson(response, 400, { error: "Upload a Lua script when setting the first version." });
+            return;
+        }
+        if (body.contents !== undefined) await writeAtomically(scriptPath, body.contents);
+
+        if (catalogIndex >= 0) {
+            catalog[catalogIndex].version = body.version;
+            await writeCatalog(catalog);
+        } else {
+            const versions = await readScriptVersions();
+            versions[scriptSource] = body.version;
+            await writeAtomically(SCRIPT_VERSIONS_PATH, `${JSON.stringify(versions, null, 2)}\n`);
+        }
+        sendJson(response, 200, { source: scriptSource, version: body.version });
+        return;
+    }
+
     if (requestPath === collectionPath && request.method === "GET") {
         const catalog = await readCatalog();
         sendJson(response, 200, catalog.filter(isManagedApp));

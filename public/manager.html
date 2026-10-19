@@ -51,6 +51,8 @@
     .list-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
     h2 { margin: 0; font: 400 22px var(--display); }
     .app-list { border-top: 1px solid var(--line); }
+    .script-group { margin-top: 24px; }
+    .script-heading { margin: 0 0 10px; color: var(--muted); font: 700 11px var(--mono); text-transform: uppercase; }
     .app-row { width: 100%; min-height: 58px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
     .app-row:hover, .app-row[aria-current="true"] { background: var(--mint); }
     .app-name { display: block; font-size: 13px; }
@@ -90,8 +92,8 @@
     <section class="heading">
       <div>
         <p class="eyebrow">Catalog administration</p>
-        <h1>App manager</h1>
-        <p class="subtitle">Upload releases, maintain versions, and manage the app catalog.</p>
+        <h1>Script manager</h1>
+        <p class="subtitle">Upload releases, maintain versions, and manage apps, server programs, and system programs.</p>
       </div>
       <div class="count" id="app-count">LOCKED</div>
     </section>
@@ -109,8 +111,16 @@
       <aside>
         <div class="list-heading"><h2>Apps</h2><button class="secondary" id="new-app" type="button">ADD APP</button></div>
         <div class="app-list" id="app-list"></div>
+        <section class="script-group" aria-label="Server programs">
+          <h3 class="script-heading">Server programs</h3>
+          <div class="app-list" id="server-list"></div>
+        </section>
+        <section class="script-group" aria-label="System programs">
+          <h3 class="script-heading">System programs</h3>
+          <div class="app-list" id="system-list"></div>
+        </section>
       </aside>
-      <section aria-label="Edit app">
+      <section aria-label="Edit program">
         <div class="editor-top">
           <h2 id="editor-title">New app</h2>
           <button class="secondary" id="logout" type="button">DISCONNECT</button>
@@ -152,6 +162,8 @@
     const authNotice = document.querySelector("#auth-notice");
     const workspace = document.querySelector("#workspace");
     const appList = document.querySelector("#app-list");
+    const serverList = document.querySelector("#server-list");
+    const systemList = document.querySelector("#system-list");
     const appForm = document.querySelector("#app-form");
     const managerNotice = document.querySelector("#manager-notice");
     const passwordInput = document.querySelector("#password");
@@ -159,7 +171,9 @@
     const scriptInput = document.querySelector("#script-file");
     let managerPassword = "";
     let apps = [];
+    let managedScripts = [];
     let selectedFile = null;
+    let selectedScript = null;
 
     function showNotice(element, message, kind = "") {
       element.textContent = message;
@@ -178,8 +192,11 @@
 
     function startNewApp() {
       selectedFile = null;
+      selectedScript = null;
       appForm.reset();
+      document.querySelector("#name").readOnly = false;
       filenameInput.readOnly = false;
+      document.querySelector("#description").readOnly = false;
       document.querySelector("#editor-title").textContent = "New app";
       document.querySelector("#save-app").textContent = "CREATE APP";
       document.querySelector("#remove-app").disabled = true;
@@ -220,12 +237,52 @@
       }
     }
 
+    function renderScriptGroup(container, group) {
+      container.replaceChildren();
+      const scripts = managedScripts.filter((script) => script.group === group);
+      if (!scripts.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No scripts found.";
+        container.append(empty);
+        return;
+      }
+      for (const script of scripts) {
+        const row = document.createElement("button");
+        row.className = "app-row";
+        row.type = "button";
+        row.setAttribute("aria-current", String(Boolean(selectedScript && selectedScript.source === script.source)));
+        const details = document.createElement("span");
+        const name = document.createElement("span");
+        name.className = "app-name";
+        name.textContent = script.name;
+        const file = document.createElement("span");
+        file.className = "app-file";
+        file.textContent = script.file;
+        details.append(name, file);
+        const version = document.createElement("span");
+        version.className = "app-version";
+        version.textContent = script.version ? `v${script.version}` : "NO VERSION";
+        row.append(details, version);
+        row.addEventListener("click", () => selectManagedScript(script));
+        container.append(row);
+      }
+    }
+
+    function renderManagedScripts() {
+      renderScriptGroup(serverList, "server");
+      renderScriptGroup(systemList, "system");
+    }
+
     function selectApp(app) {
       selectedFile = app.file;
+      selectedScript = null;
+      document.querySelector("#name").readOnly = false;
       document.querySelector("#name").value = app.name;
       document.querySelector("#version").value = app.version;
       filenameInput.value = app.file;
       filenameInput.readOnly = true;
+      document.querySelector("#description").readOnly = false;
       document.querySelector("#description").value = app.description;
       scriptInput.value = "";
       document.querySelector("#editor-title").textContent = app.name;
@@ -234,11 +291,36 @@
       document.querySelector("#upload-caption").textContent = "Upload a replacement Lua script, or leave empty to update metadata only.";
       showNotice(managerNotice, "");
       renderApps();
+      renderManagedScripts();
+    }
+
+    function selectManagedScript(script) {
+      selectedFile = null;
+      selectedScript = script;
+      appForm.reset();
+      document.querySelector("#name").value = script.name;
+      document.querySelector("#name").readOnly = true;
+      document.querySelector("#version").value = script.version;
+      filenameInput.value = script.file;
+      filenameInput.readOnly = true;
+      document.querySelector("#description").value = script.description || `${script.group} program`;
+      document.querySelector("#description").readOnly = true;
+      document.querySelector("#editor-title").textContent = script.name;
+      document.querySelector("#save-app").textContent = "SAVE SCRIPT UPDATE";
+      document.querySelector("#remove-app").disabled = true;
+      document.querySelector("#upload-caption").textContent = "Upload a replacement script and set its version. A version-only update is allowed once the script has a saved version.";
+      showNotice(managerNotice, "");
+      renderApps();
+      renderManagedScripts();
     }
 
     async function refreshApps() {
-      apps = await managerRequest("/api/manager/apps");
+      [apps, managedScripts] = await Promise.all([
+        managerRequest("/api/manager/apps"),
+        managerRequest("/api/manager/scripts"),
+      ]);
       renderApps();
+      renderManagedScripts();
       startNewApp();
     }
 
@@ -261,6 +343,7 @@
     document.querySelector("#logout").addEventListener("click", () => {
       managerPassword = "";
       apps = [];
+      managedScripts = [];
       workspace.hidden = true;
       authForm.hidden = false;
       passwordInput.value = "";
@@ -287,7 +370,14 @@
       };
       if (upload) payload.contents = await upload.text();
       try {
-        if (selectedFile) {
+        if (selectedScript) {
+          await managerRequest(`/api/manager/scripts/${encodeURIComponent(selectedScript.source)}`, {
+            method: "PUT",
+            body: JSON.stringify({ version: payload.version, contents: payload.contents }),
+          });
+          await refreshApps();
+          showNotice(managerNotice, "Script updated.", "success");
+        } else if (selectedFile) {
           await managerRequest(`/api/manager/apps/${encodeURIComponent(selectedFile)}`, {
             method: "PUT",
             body: JSON.stringify(payload),
