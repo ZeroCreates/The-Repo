@@ -19,6 +19,7 @@ local sessions = {}
 local handleJobsRequest
 local handleMarketRequest
 local getMarketDashboardStats
+local cleanupMarketOrders
 local handleMailRequest
 local getMailStats
 local handleCasinoRequest
@@ -699,7 +700,7 @@ local moduleLoaded, createMarketServer = pcall(marketServerChunk)
 if not moduleLoaded or type(createMarketServer) ~= "function" then
     error("The Market server module is invalid: " .. tostring(createMarketServer), 0)
 end
-handleMarketRequest, getMarketDashboardStats = createMarketServer(function(senderId)
+handleMarketRequest, getMarketDashboardStats, cleanupMarketOrders = createMarketServer(function(senderId)
     return sessions[senderId]
 end)
 if type(handleMarketRequest) ~= "function" then
@@ -707,6 +708,9 @@ if type(handleMarketRequest) ~= "function" then
 end
 if type(getMarketDashboardStats) ~= "function" then
     error("The Market server module did not provide dashboard statistics.", 0)
+end
+if type(cleanupMarketOrders) ~= "function" then
+    error("The Market server module did not provide an order cleanup handler.", 0)
 end
 
 local legacyAccountsEmbedded
@@ -821,6 +825,7 @@ while true do
         end
         rednet.send(senderId, response, CASINO_PROTOCOL)
     end
+    cleanupMarketOrders()
     drawServerStatus()
     drawMonitorDashboards()
 end

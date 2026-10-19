@@ -5,6 +5,7 @@ local TEMP_FILE = "orders.db.tmp"
 local PRODUCTS_FILE = "products.db"
 local PRODUCTS_BACKUP_FILE = "products.db.bak"
 local PRODUCTS_TEMP_FILE = "products.db.tmp"
+local TERMINAL_ORDER_RETENTION = 3 * 60 * 60 * 1000
 local function createMarketServer(getAuthenticatedUser)
 local state
 
@@ -595,8 +596,27 @@ local function getDashboardStats()
     }
 end
 
+local function cleanupExpiredOrders()
+    local cutoff = os.epoch("utc") - TERMINAL_ORDER_RETENTION
+    local removed = false
+    for index = #state.orders, 1, -1 do
+        local order = state.orders[index]
+        local terminalAt = order.updatedAt or order.createdAt
+        if (order.status == "completed" or order.status == "cancelled")
+            and type(terminalAt) == "number" and terminalAt <= cutoff then
+            table.remove(state.orders, index)
+            removed = true
+        end
+    end
+    if removed then
+        saveState()
+        drawDashboard()
+    end
+    return removed
+end
+
 state = loadState()
-saveState()
+if not cleanupExpiredOrders() then saveState() end
 drawDashboard()
 
 local function handleMarketRequest(senderId, message)
@@ -637,7 +657,7 @@ local function handleMarketRequest(senderId, message)
     drawDashboard()
 end
 
-return handleMarketRequest, getDashboardStats
+return handleMarketRequest, getDashboardStats, cleanupExpiredOrders
 end
 
 return createMarketServer
