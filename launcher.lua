@@ -1436,26 +1436,29 @@ end
 chooseUser()
 local systemAppsInstalled = false
 local systemAppInstallMessage
-if downloaded then
-    local ok, result = pcall(os.run, _ENV, DOWNLOADER_PATH, "install-system", homeDirectory)
+local downloaderReady, downloaderError = installDownloader()
+if downloaderReady then
+    local ok, result = pcall(nativeOs.run, _ENV, DOWNLOADER_PATH, "install-system", homeDirectory)
     if ok and result ~= false then
         systemAppsInstalled = true
     else
         systemAppInstallMessage = ok
-            and "Could not automatically install system apps."
+            and "Could not automatically install system apps: the downloader did not complete successfully."
             or "Could not run system app installation: " .. tostring(result)
     end
+else
+    systemAppInstallMessage = "Could not prepare the system app installer: " .. tostring(downloaderError)
 end
 
 refreshApps()
-if startupError then
+if startupError and systemAppInstallMessage then
+    message = startupError .. " " .. systemAppInstallMessage
+elseif startupError then
     message = startupError
 elseif systemAppInstallMessage then
     message = systemAppInstallMessage
-elseif downloaded and systemAppsInstalled then
+elseif systemAppsInstalled then
     message = "System apps are ready."
-elseif downloaded then
-    message = "App downloader is ready."
 else
     message = "Select a program to launch."
 end
