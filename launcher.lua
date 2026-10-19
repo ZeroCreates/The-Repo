@@ -18,6 +18,7 @@ local profilePasswords = {}
 local profileAdmins = {}
 local authorizedProfiles = {}
 local launchHomeProgramInTab = false
+local autoLaunchSession = false
 local USER_ROOT = "/users"
 local SYSTEM_DIRECTORY = "/.launcher"
 local SETTINGS_PATH = SYSTEM_DIRECTORY .. "/settings.json"
@@ -52,6 +53,8 @@ local settings = {
     customAccent = "#4C99B2",
     customHighlight = "#3366CC",
     alphabetical = true,
+    autoLoginUser = nil,
+    autoLaunchPath = nil,
 }
 local encryptionKey
 local settingsNeedEncryption = false
@@ -293,6 +296,15 @@ local function loadSettings()
         settings.customHighlight = "#" .. saved.customHighlight:gsub("^#", ""):upper()
     end
     if type(saved.alphabetical) == "boolean" then settings.alphabetical = saved.alphabetical end
+    settings.autoLoginUser = nil
+    settings.autoLaunchPath = nil
+    if type(saved.autoLoginUser) == "string" and saved.autoLoginUser:match("^[%w_-]+$") then
+        settings.autoLoginUser = saved.autoLoginUser
+    end
+    if type(saved.autoLaunchPath) == "string" and #saved.autoLaunchPath <= 256
+        and not saved.autoLaunchPath:find("..", 1, true) then
+        settings.autoLaunchPath = saved.autoLaunchPath
+    end
     applyTheme()
 end
 
@@ -577,7 +589,7 @@ local function displayName(path)
     end)
 end
 
-local function chooseUser()
+local function chooseUser(skipAutoLogin)
     fs.makeDir(USER_ROOT)
     local loadedPasswords, passwordError, passwordsEncrypted = loadProfilePasswords()
     if not loadedPasswords then error(passwordError, 0) end
@@ -591,6 +603,13 @@ local function chooseUser()
     local loadedAdmins, adminError = loadProfileAdmins()
     if not loadedAdmins then error(adminError, 0) end
     profileAdmins = loadedAdmins
+    if not skipAutoLogin and type(settings.autoLoginUser) == "string"
+        and fs.isDir(fs.combine(USER_ROOT, settings.autoLoginUser)) then
+        currentUser = settings.autoLoginUser
+        homeDirectory = fs.combine(USER_ROOT, currentUser)
+        authorizedProfiles = {}
+        return true
+    end
     local userSelected = 1
     local userFirstVisible = 1
     local profileMessage = ""
@@ -1686,6 +1705,24 @@ local function launchSelected(openInTab)
     elseif result == false then
         printError("The program reported that it did not complete successfully.")
     end
+    if autoLaunchSession then
+        autoLaunchSession = false
+        currentUser = nil
+        homeDirectory = nil
+        authorizedProfiles = {}
+        chooseUser(true)
+        selected = 1
+        firstVisible = 1
+        refreshApps()
+        if not ok then
+            message = "Signed out after " .. app.name .. " exited with an error: " .. tostring(result)
+        elseif result == false then
+            message = "Signed out after " .. app.name .. " did not complete successfully."
+        else
+            message = "Signed out after " .. app.name .. " was closed."
+        end
+        return
+    end
     waitForReturn()
     message = "Returned from " .. app.name .. "."
     if app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "") then
@@ -1767,6 +1804,24 @@ elseif systemAppsInstalled then
     message = "System apps are ready."
 else
     message = "Select a program to launch."
+end
+
+if settings.autoLaunchPath then
+    local autoLaunchIndex
+    for index, app in ipairs(apps) do
+        if app.path == settings.autoLaunchPath then
+            autoLaunchIndex = index
+            break
+        end
+    end
+    if autoLaunchIndex then
+        selected = autoLaunchIndex
+        firstVisible = math.max(1, selected - math.max(1, select(2, term.getSize()) - 12) + 1)
+        autoLaunchSession = true
+        launchSelected()
+    else
+        message = "The automatic launch program is unavailable. Choose another in System Settings."
+    end
 end
 
 while true do

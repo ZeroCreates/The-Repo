@@ -62,8 +62,8 @@
     "source": "computercraft/system/settings.lua",
     "file": "settings.lua",
     "scope": "system",
-    "version": "1.0.3",
-    "description": "Manage launcher preferences, user accounts, and system maintenance"
+    "version": "1.0.4",
+    "description": "Manage launcher preferences, auto-login and launch, user accounts, and maintenance"
   },
   {
     "name": "Lua Console",

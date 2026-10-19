@@ -206,6 +206,12 @@ local settings = {
     customHighlight = validHexColor(savedSettings.customHighlight)
         and ("#" .. savedSettings.customHighlight:gsub("^#", ""):upper()) or "#3366CC",
     alphabetical = true,
+    autoLoginUser = type(savedSettings.autoLoginUser) == "string"
+        and savedSettings.autoLoginUser:match("^[%w_-]+$") and savedSettings.autoLoginUser or nil,
+    autoLaunchPath = type(savedSettings.autoLaunchPath) == "string"
+        and #savedSettings.autoLaunchPath <= 256
+        and not savedSettings.autoLaunchPath:find("..", 1, true)
+        and savedSettings.autoLaunchPath or nil,
 }
 if type(savedSettings.alphabetical) == "boolean" then
     settings.alphabetical = savedSettings.alphabetical
@@ -242,6 +248,35 @@ local function listUsers()
     end
     table.sort(users, function(first, second) return first:lower() < second:lower() end)
     return users
+end
+
+local function displayProgramName(path)
+    return fs.getName(path):gsub("%.lua$", ""):gsub("[_%-]", " ")
+end
+
+local function listLaunchPrograms()
+    local programs = {}
+    local directories = {
+        SYSTEM_DIRECTORY .. "/apps",
+        fs.combine(homeDirectory, "apps"),
+        fs.combine(homeDirectory, "desktop"),
+    }
+    for _, directory in ipairs(directories) do
+        if fs.isDir(directory) then
+            for _, name in ipairs(fs.list(directory)) do
+                local path = fs.combine(directory, name)
+                if not fs.isDir(path) and name:lower():match("%.lua$")
+                    and name ~= "settings.lua" and name ~= "launcher.lua"
+                    and name ~= "app-downloader.lua" then
+                    table.insert(programs, { path = path, name = displayProgramName(path) })
+                end
+            end
+        end
+    end
+    table.sort(programs, function(first, second)
+        return first.name:lower() < second.name:lower()
+    end)
+    return programs
 end
 
 local function saveAccountData(passwords, admins)
@@ -409,6 +444,25 @@ local function deleteAccount(users)
     if #cleanupErrors > 0 then
         return "Account deleted, but staged data could not be removed: " .. table.concat(cleanupErrors, "; ")
     end
+    local preferencesChanged = false
+    if settings.autoLoginUser == username then
+        settings.autoLoginUser = nil
+        preferencesChanged = true
+    end
+    local profilePrefix = fs.combine(USER_ROOT, username) .. "/"
+    if type(settings.autoLaunchPath) == "string"
+        and settings.autoLaunchPath:sub(1, #profilePrefix) == profilePrefix then
+        settings.autoLaunchPath = nil
+        preferencesChanged = true
+    end
+    if preferencesChanged then
+        local savedPreferences, preferencesError = saveJSON(SETTINGS_PATH, settings)
+        if not savedPreferences then
+            return "Deleted user " .. username
+                .. ", but could not clear their automatic login/launch preferences: "
+                .. tostring(preferencesError)
+        end
+    end
     return "Deleted user " .. username .. "."
 end
 
@@ -416,15 +470,15 @@ local function savePreferences()
     local saved, saveError = saveJSON(SETTINGS_PATH, settings)
     if not saved then
         message = saveError
-        return
+        return false
     end
     if not term.isColor() then
         message = "Launcher preferences saved."
-        return
+        return true
     elseif settings.theme == #THEMES then
         if type(term.setPaletteColor) ~= "function" then
             message = "Custom themes require a color terminal with palette support."
-            return
+            return false
         end
         local accentRed, accentGreen, accentBlue = hexToRgb(settings.customAccent)
         local highlightRed, highlightGreen, highlightBlue = hexToRgb(settings.customHighlight)
@@ -435,6 +489,7 @@ local function savePreferences()
         term.setPaletteColor(colors.blue, table.unpack(DEFAULT_BLUE))
     end
     message = "Launcher preferences saved."
+    return true
 end
 
 local function editCustomColor(field, label)
@@ -636,11 +691,23 @@ local function draw()
     term.write(pageTitle:sub(1, math.max(0, width - 2)))
 
     if page == "settings" then
+        local autoLaunchLabel = "Off"
+        if settings.autoLaunchPath then
+            autoLaunchLabel = "Unavailable"
+            for _, program in ipairs(listLaunchPrograms()) do
+                if program.path == settings.autoLaunchPath then
+                    autoLaunchLabel = program.name
+                    break
+                end
+            end
+        end
         local options = {
             "Accent theme: " .. theme.name,
             "Custom accent: " .. settings.customAccent,
             "Custom highlight: " .. settings.customHighlight,
             "Sort programs alphabetically: " .. (settings.alphabetical and "On" or "Off"),
+            "Auto-login this profile: " .. (settings.autoLoginUser == currentUser and "On" or "Off"),
+            "Auto-launch program: " .. autoLaunchLabel,
         }
         for index, option in ipairs(options) do
             term.setCursorPos(2, index + 4)
@@ -758,6 +825,42 @@ while true do
             selectedUser = 4
             settings.alphabetical = not settings.alphabetical
             savePreferences()
+        elseif page == "settings" and y == 9 then
+            selectedUser = 5
+            if settings.autoLoginUser == currentUser then
+                settings.autoLoginUser = nil
+            else
+                settings.autoLoginUser = currentUser
+            end
+            local saved = savePreferences()
+            if saved and settings.autoLoginUser == currentUser then
+                message = "Auto-login enabled for " .. currentUser .. ". This bypasses that profile's startup password prompt."
+            elseif saved then
+                message = "Auto-login disabled."
+            end
+        elseif page == "settings" and y == 10 then
+            selectedUser = 6
+            local programs = listLaunchPrograms()
+            local currentIndex = 1
+            for index, program in ipairs(programs) do
+                if program.path == settings.autoLaunchPath then
+                    currentIndex = index + 1
+                    break
+                end
+            end
+            local direction = x <= math.floor(select(1, term.getSize()) / 2) and -1 or 1
+            currentIndex = (currentIndex - 1 + direction) % (#programs + 1) + 1
+            if currentIndex == 1 then
+                settings.autoLaunchPath = nil
+            else
+                settings.autoLaunchPath = programs[currentIndex - 1].path
+            end
+            local saved = savePreferences()
+            if saved then
+                message = settings.autoLaunchPath
+                    and "Selected " .. displayProgramName(settings.autoLaunchPath) .. " for automatic launch."
+                    or "Automatic program launch disabled."
+            end
         elseif page == "maintenance" and y == 5 then
             selectedUser = 1
             updateLauncher()
