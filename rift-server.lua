@@ -286,37 +286,107 @@ local function handleRequest(senderId, message)
     sendError(senderId, "Unknown Jobs request.")
 end
 
+local startedAt = os.clock()
+local requestsByService = { login = 0, jobs = 0, market = 0 }
+local lastRequest = "Waiting for network requests"
+
 local function drawDashboard()
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.white)
-    term.clear()
     local width, height = term.getSize()
-    local function line(row, text, foreground, background)
+    local color = term.isColor()
+    local background = colors.black
+    local foreground = colors.white
+    local accent = color and colors.cyan or colors.white
+    local panel = color and colors.blue or colors.gray
+    local muted = color and colors.lightGray or colors.white
+    local good = color and colors.lime or colors.white
+    local warning = color and colors.yellow or colors.white
+
+    local function line(row, text, textColor, fill)
         if row < 1 or row > height then return end
         term.setCursorPos(1, row)
-        term.setTextColor(foreground or colors.white)
-        term.setBackgroundColor(background or colors.black)
-        term.write(tostring(text):sub(1, width))
+        term.setBackgroundColor(fill or background)
+        term.setTextColor(textColor or foreground)
+        local content = tostring(text):sub(1, width)
+        term.write(content .. string.rep(" ", math.max(0, width - #content)))
+    end
+
+    local function section(row, title)
+        line(row, " " .. title, foreground, panel)
     end
 
     local openCount, activeCount, completedCount = 0, 0, 0
     for _, job in ipairs(state.jobs) do
-        if job.status == "open" then openCount = openCount + 1 end
-        if job.status == "claimed" or job.status == "review" then activeCount = activeCount + 1 end
-        if job.status == "completed" then completedCount = completedCount + 1 end
+        if job.status == "open" then
+            openCount = openCount + 1
+        elseif job.status == "claimed" or job.status == "review" then
+            activeCount = activeCount + 1
+        elseif job.status == "completed" then
+            completedCount = completedCount + 1
+        end
     end
-    line(1, " RIFT JOBS + MARKET SERVER  |  ONLINE", colors.white, colors.cyan)
-    line(2, "Computer #" .. os.getComputerID() .. "  |  Protocols: Jobs + Market", colors.lightGray)
-    line(4, "OPEN  " .. openCount .. "    IN PROGRESS  " .. activeCount .. "    COMPLETED  " .. completedCount, colors.lime)
-    line(6, "RECENT JOBS", colors.white, colors.blue)
-    local row = 7
-    for index = #state.jobs, 1, -1 do
-        local job = state.jobs[index]
-        if row > height then break end
-        line(row, "#" .. job.id .. "  " .. job.status:upper() .. "  " .. job.title, colors.yellow)
-        row = row + 1
+
+    local sessionCount = 0
+    for _ in pairs(sessions) do sessionCount = sessionCount + 1 end
+
+    term.setBackgroundColor(background)
+    term.setTextColor(foreground)
+    term.clear()
+    line(1, " RIFT SERVER  /  JOBS + MARKET", foreground, accent)
+    line(2, " ONLINE  |  COMPUTER #" .. os.getComputerID()
+        .. "  |  UP " .. string.format("%02d:%02d", math.floor((os.clock() - startedAt) / 60),
+            math.floor((os.clock() - startedAt) % 60)), muted)
+
+    if width >= 48 then
+        line(4, " JOBS", foreground, panel)
+        term.setCursorPos(math.floor(width / 2) + 1, 4)
+        term.write(" ACCOUNTS")
+        line(5, " Open " .. openCount .. "  |  Active " .. activeCount
+            .. "  |  Done " .. completedCount, good)
+        term.setCursorPos(math.floor(width / 2) + 1, 5)
+        term.write(" Signed in: " .. sessionCount)
+    else
+        section(4, "JOBS")
+        line(5, " Open " .. openCount .. "  Active " .. activeCount
+            .. "  Done " .. completedCount, good)
+        line(6, " Signed in: " .. sessionCount, muted)
     end
-    term.setBackgroundColor(colors.black)
+
+    local endpointRow = width >= 48 and 7 or 8
+    section(endpointRow, "NETWORK ENDPOINTS")
+    line(endpointRow + 1, " Login  /  rift-server", muted)
+    line(endpointRow + 2, " Jobs   /  rift-jobs", muted)
+    line(endpointRow + 3, " Market /  rift-market", muted)
+
+    local activityRow = endpointRow + 5
+    section(activityRow, "TRAFFIC")
+    line(activityRow + 1, " Login " .. requestsByService.login
+        .. "  |  Jobs " .. requestsByService.jobs
+        .. "  |  Market " .. requestsByService.market, good)
+    line(activityRow + 2, " Last: " .. lastRequest, muted)
+
+    local recentHeaderRow = activityRow + 4
+    section(recentHeaderRow, "RECENT JOBS")
+    local row = recentHeaderRow + 1
+    local firstJob = math.max(1, #state.jobs - (height - row))
+    if #state.jobs == 0 and row <= height then
+        line(row, " No jobs posted yet", muted)
+    else
+        for index = #state.jobs, firstJob, -1 do
+            if row > height then break end
+            local job = state.jobs[index]
+            local statusColor = job.status == "open" and good
+                or (job.status == "completed" and muted or warning)
+            line(row, string.format(" #%s  %-9s  %s", tostring(job.id),
+                tostring(job.status):upper(), tostring(job.title)), statusColor)
+            row = row + 1
+        end
+    end
+
+    term.setCursorPos(1, height)
+    term.setBackgroundColor(background)
+    term.setTextColor(muted)
+    term.write((" Ctrl+T / terminate  |  Computer #%s"):format(os.getComputerID()):sub(1, width))
+    term.setBackgroundColor(background)
 end
 
 openModems()
@@ -347,8 +417,20 @@ drawDashboard()
 while true do
     local senderId, message, receivedProtocol = rednet.receive(nil, 1)
     if senderId and receivedProtocol == PROTOCOL then
+        if type(message) == "table" and (message.type == "login"
+            or message.type == "register" or message.type == "logout") then
+            requestsByService.login = requestsByService.login + 1
+            lastRequest = "Login from #" .. senderId .. "  /  " .. tostring(message.type)
+        else
+            requestsByService.jobs = requestsByService.jobs + 1
+            lastRequest = "Jobs from #" .. senderId .. "  /  "
+                .. tostring(type(message) == "table" and message.type or "invalid request")
+        end
         handleRequest(senderId, message)
     elseif senderId and receivedProtocol == MARKET_PROTOCOL then
+        requestsByService.market = requestsByService.market + 1
+        lastRequest = "Market from #" .. senderId .. "  /  "
+            .. tostring(type(message) == "table" and message.type or "invalid request")
         handleMarketRequest(senderId, message)
     end
     drawDashboard()

@@ -231,36 +231,91 @@ local function request(message)
     return response
 end
 
-local function authenticateJobsAccount()
-    if not storage then
-        return false, "Start Rift Jobs from the launcher and sign in to save your account in private storage."
-    end
-    local login, storageError = storage.read(JOBS_LOGIN_PATH)
-    if type(login) ~= "table" or type(login.username) ~= "string"
-        or type(login.password) ~= "string" then
-        if storageError and storageError ~= "Stored data was not found." then
-            return false, "Could not read the saved Rift Jobs login: " .. tostring(storageError)
-        end
-        return false, "Sign in to Rift Jobs first; the Market uses the same account."
-    end
+local function readAccountField(label, hidden)
+    drawHeader("RIFT ACCOUNT", label)
+    local _, height = term.getSize()
+    writeAt(2, height - 1, "> ", themeAccent)
+    term.setCursorPos(4, height - 1)
+    return read(hidden and "*" or nil)
+end
+
+local function authenticateAccount(username, password, action)
     local serverId = rednet.lookup(JOBS_PROTOCOL, JOBS_SERVER_NAME)
-    if not serverId then return false, "Combined Jobs and Market server not found." end
+    if not serverId then return false, "Rift account server not found. Check that it is running and connected." end
     rednet.send(serverId, {
-        type = "login",
-        username = login.username,
-        password = login.password,
+        type = action,
+        username = username,
+        password = password,
     }, JOBS_PROTOCOL)
     local senderId, response = rednet.receive(JOBS_PROTOCOL, TIMEOUT, serverId)
     if senderId ~= serverId or type(response) ~= "table" then
-        return false, "No response from the Jobs login service."
+        return false, "No response from the Rift account server."
     end
     if response.type == "error" then
-        return false, response.message or "Rift Jobs sign-in failed."
+        return false, response.message or "Rift account authentication failed."
     end
     if response.type ~= "authenticated" then
-        return false, "Unexpected response from the Jobs login service."
+        return false, "Unexpected response from the Rift account server."
     end
-    return true
+
+    if storage then
+        local saved, saveError = storage.write(JOBS_LOGIN_PATH, {
+            username = response.username,
+            password = password,
+        })
+        if not saved then
+            return true, "Signed in as " .. response.username
+                .. ", but the login could not be saved: " .. tostring(saveError or "unknown storage error")
+        end
+    else
+        return true, "Signed in as " .. response.username
+            .. ". Private storage is unavailable, so the login was not saved on this device."
+    end
+    return true, "Signed in as " .. response.username .. "."
+end
+
+local function authenticateJobsAccount()
+    local savedLoginError
+    if storage then
+        local login, storageError = storage.read(JOBS_LOGIN_PATH)
+        if login ~= nil then
+            if type(login) ~= "table" or type(login.username) ~= "string"
+                or type(login.password) ~= "string" then
+                savedLoginError = "Saved Rift account data is invalid."
+            else
+                local authenticated = authenticateAccount(login.username, login.password, "login")
+                if authenticated then return true end
+                savedLoginError = "Saved Rift account sign-in failed: " .. authError
+            end
+        elseif storageError and storageError ~= "Stored data was not found." then
+            savedLoginError = "Could not read the saved Rift account: " .. tostring(storageError)
+        end
+    end
+
+    while true do
+        drawHeader("MARKET SIGN IN", "USE YOUR EXISTING RIFT JOBS ACCOUNT")
+        if savedLoginError then writeAt(2, 4, savedLoginError, colors.yellow) end
+        local choice = readChoice("s sign in|c create account|q quit")
+        if choice == "q" then return false, "Sign-in cancelled." end
+
+        local username = readAccountField("Username")
+        local password = readAccountField("Password", true)
+        local action = choice == "c" and "register" or "login"
+        if action == "register" then
+            local confirmation = readAccountField("Confirm password", true)
+            if password ~= confirmation then
+                showNotice("ACCOUNT NOT CREATED", "The passwords do not match.")
+            else
+                local authenticated, authMessage = authenticateAccount(username, password, action)
+                if authenticated then return true, authMessage end
+                showNotice("ACCOUNT NOT CREATED", authMessage)
+            end
+        else
+            local authenticated, authMessage = authenticateAccount(username, password, action)
+            if authenticated then return true, authMessage end
+            showNotice("SIGN IN FAILED", authMessage)
+        end
+    end
 end
 
 local function money(cents)
@@ -621,8 +676,12 @@ end
 openModems()
 local authenticated, authenticationError = authenticateJobsAccount()
 if not authenticated then
-    showNotice("MARKET SIGN IN", authenticationError)
+    if authenticationError ~= "Sign-in cancelled." then
+        showNotice("MARKET SIGN IN", authenticationError)
+    end
     return
+elseif authenticationError then
+    showNotice("MARKET SIGN IN", authenticationError)
 end
 local cart = {}
 local page = 1
