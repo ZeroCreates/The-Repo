@@ -1125,7 +1125,7 @@ local function waitForReturn()
     term.setTextColor(colors.lightGray)
     print("")
     print("Exiting the program and returning to the launcher.")
-    sleep(1)
+    sleep(.1)
 end
 
 local function updateSelected()
