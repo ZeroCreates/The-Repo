@@ -46,7 +46,7 @@ local function loadState()
     loaded.jobs = type(loaded.jobs) == "table" and loaded.jobs or {}
     if loaded.accounts == nil then loaded.accounts = {} end
     if type(loaded.accounts) ~= "table" then
-        error("Saved Jobs account data is invalid; refusing to overwrite it.")
+        error("Saved Rift account data is invalid; refusing to overwrite it.")
     end
     for username, account in pairs(loaded.accounts) do
         if type(username) ~= "string" or type(account) ~= "table"
@@ -54,7 +54,7 @@ local function loadState()
             or #account.username < 3 or #account.username > 24
             or not account.username:match("^[%w_-]+$") or type(account.password) ~= "string"
             or #account.password < 1 or #account.password > 128 then
-            error("Saved Jobs account data is invalid; refusing to overwrite it.")
+            error("Saved Rift account data is invalid; refusing to overwrite it.")
         end
     end
     for _, job in ipairs(loaded.jobs) do
@@ -117,7 +117,7 @@ local function registerAccount(senderId, message)
         return sendError(senderId, "Password must be 1 to 128 characters.")
     end
     if state.accounts[key] then
-        return sendError(senderId, "That Jobs username is already registered.")
+        return sendError(senderId, "That Rift username is already registered.")
     end
 
     state.accounts[key] = { username = username, password = password }
@@ -226,7 +226,7 @@ local function handleRequest(senderId, message, protocol)
     end
 
     local username = sessions[senderId]
-    if not username then return sendError(senderId, "Sign in to a Jobs account first.") end
+    if not username then return sendError(senderId, "Sign in to your Rift account first.") end
     if message.type == "list_jobs" then return listJobs(senderId, username, false) end
     if message.type == "my_jobs" then return listJobs(senderId, username, true) end
     if message.type == "create_job" then return createJob(senderId, username, message) end

@@ -5,7 +5,8 @@ local ACCOUNT_SERVER_NAME = "rift-server"
 local TIMEOUT = 5
 local USERDATA_FILE = "market-userdata.json"
 local USERDATA_FILE_STORED = "market/"..USERDATA_FILE
-local JOBS_LOGIN_PATH = "rift-jobs/login.json"
+local RIFT_LOGIN_PATH = "rift/account.json"
+local LEGACY_LOGIN_PATH = "rift-jobs/login.json"
 local storageLoaded, storage = pcall(require, "storage")
 if not storageLoaded or type(storage) ~= "table"
     or type(storage.read) ~= "function" or type(storage.write) ~= "function"
@@ -14,6 +15,7 @@ if not storageLoaded or type(storage) ~= "table"
 end
 local mouseEnabled = false
 local userData = {}
+local riftAccount = {}
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
     { accent = colors.lime, highlight = colors.green },
@@ -176,12 +178,22 @@ end
 local function loadUserData()
     if storage then
         local data, storageError = storage.read(USERDATA_FILE_STORED)
+        if data == nil and (not storageError or storageError == "Stored data was not found.")
+            and fs.exists(USERDATA_FILE) then
+            local file = fs.open(USERDATA_FILE, "r")
+            if not file then error("Could not open the legacy Market profile file.") end
+            data = file.readAll()
+            file.close()
+        end
         if data ~= nil then
             local ok, saved = pcall(textutils.unserializeJSON, data)
+            if not ok or type(saved) ~= "table" then
+                error("Saved Market profile data is invalid.")
+            end
             userData = saved
         end
         if storageError and storageError ~= "Stored data was not found." then
-            error("Could not load the saved email account from private storage: " .. storageError)
+            error("Could not load the saved Market profile from private storage: " .. storageError)
         end
     else
         if not fs.exists(USERDATA_FILE) then return end
@@ -189,7 +201,10 @@ local function loadUserData()
         if not file then return end
         local contents = file.readAll()
         file.close()
-        local ok, saved = pcall(textutils.unserializeJSON, contents)            
+        local ok, saved = pcall(textutils.unserializeJSON, contents)
+        if not ok or type(saved) ~= "table" then
+            error("Saved Market profile data is invalid.")
+        end
         userData = saved
     end
 end
@@ -259,13 +274,28 @@ local function authenticateAccount(username, password, action)
     end
 
     if storage then
-        local saved, saveError = storage.write(JOBS_LOGIN_PATH, {
-            username = response.username,
-            password = password,
-        })
+        local account, accountError = storage.read(RIFT_LOGIN_PATH)
+        if account == nil and accountError
+            and accountError ~= "Stored data was not found." then
+            return true, "Signed in, but the saved Rift account could not be read: " .. tostring(accountError)
+        end
+        if type(account) ~= "table"
+            or type(account.username) ~= "string"
+            or account.username:lower() ~= response.username:lower() then
+            account = {}
+        end
+        account.username = response.username
+        account.password = password
+        riftAccount = account
+        local saved, saveError = storage.write(RIFT_LOGIN_PATH, account)
         if not saved then
             return true, "Signed in as " .. response.username
                 .. ", but the login could not be saved: " .. tostring(saveError or "unknown storage error")
+        end
+        local deleted, deleteError = storage.delete(LEGACY_LOGIN_PATH)
+        if not deleted and deleteError ~= "Stored data was not found." then
+            return true, "Signed in as " .. response.username
+                .. ", but the legacy account entry could not be removed: " .. tostring(deleteError)
         end
     else
         return true, "Signed in as " .. response.username
@@ -274,15 +304,31 @@ local function authenticateAccount(username, password, action)
     return true, "Signed in as " .. response.username .. "."
 end
 
-local function authenticateJobsAccount()
+local function authenticateRiftAccount()
     local savedLoginError
     if storage then
-        local login, storageError = storage.read(JOBS_LOGIN_PATH)
+        local login, storageError = storage.read(RIFT_LOGIN_PATH)
+        if login == nil and storageError == "Stored data was not found." then
+            login, storageError = storage.read(LEGACY_LOGIN_PATH)
+            if login ~= nil then
+                local saved, saveError = storage.write(RIFT_LOGIN_PATH, login)
+                if not saved then
+                    savedLoginError = "Could not migrate the saved Rift account: " .. tostring(saveError)
+                else
+                    local deleted, deleteError = storage.delete(LEGACY_LOGIN_PATH)
+                    if not deleted and deleteError ~= "Stored data was not found." then
+                        savedLoginError = "Rift account was migrated, but the legacy account entry could not be removed: "
+                            .. tostring(deleteError)
+                    end
+                end
+            end
+        end
         if login ~= nil then
             if type(login) ~= "table" or type(login.username) ~= "string"
                 or type(login.password) ~= "string" then
                 savedLoginError = "Saved Rift account data is invalid."
             else
+                riftAccount = login
                 local authenticated, authError = authenticateAccount(login.username, login.password, "login")
                 if authenticated then return true end
                 savedLoginError = "Saved Rift account sign-in failed: " .. authError
@@ -293,7 +339,7 @@ local function authenticateJobsAccount()
     end
 
     while true do
-        drawHeader("MARKET SIGN IN", "USE YOUR EXISTING RIFT JOBS ACCOUNT")
+        drawHeader("RIFT", "MARKET  /  SIGN IN WITH YOUR RIFT ACCOUNT")
         if savedLoginError then writeAt(2, 4, savedLoginError, colors.yellow) end
         local choice = readChoice("s sign in|c create account|q quit")
         if choice == "q" then return false, "Sign-in cancelled." end
@@ -314,6 +360,104 @@ local function authenticateJobsAccount()
             local authenticated, authMessage = authenticateAccount(username, password, action)
             if authenticated then return true, authMessage end
             showNotice("SIGN IN FAILED", authMessage)
+        end
+    end
+end
+
+local function saveDeliveryAddresses(addresses)
+    if not storage then return false, "Rift account storage is unavailable." end
+    local account, readError = storage.read(RIFT_LOGIN_PATH)
+    if account == nil and readError and readError ~= "Stored data was not found." then
+        return false, "Could not read the saved Rift account: " .. tostring(readError)
+    end
+    if type(account) ~= "table"
+        or type(account.username) ~= "string"
+        or type(account.password) ~= "string" then
+        account = riftAccount
+    end
+    account.deliveryAddresses = addresses
+    local saved, saveError = storage.write(RIFT_LOGIN_PATH, account)
+    if not saved then
+        return false, tostring(saveError or "Could not save Rift account addresses.")
+    end
+    riftAccount = account
+    return true
+end
+
+local function chooseDeliveryAddress()
+    local addresses = {}
+    if type(riftAccount.deliveryAddresses) == "table" then
+        for _, address in ipairs(riftAccount.deliveryAddresses) do
+            if type(address) == "string" and #address <= 100
+                and not address:find("%c") and address ~= "" then
+                table.insert(addresses, address)
+            end
+        end
+    end
+
+    local legacyAddress = type(userData.deliveryAddress) == "string"
+        and userData.deliveryAddress:match("^%s*(.-)%s*$") or ""
+    if legacyAddress ~= "" then
+        local found = false
+        for _, address in ipairs(addresses) do
+            if address == legacyAddress then found = true break end
+        end
+        if not found then
+            table.insert(addresses, legacyAddress)
+            local saved, saveError = saveDeliveryAddresses(addresses)
+            if not saved then
+                return nil, "Could not migrate your saved delivery address: " .. saveError
+            end
+        end
+        userData.deliveryAddress = nil
+        if storage then
+            local cleared, clearError = saveUserData()
+            if not cleared then
+                showNotice("ADDRESS MIGRATED", "The delivery address is saved in your Rift account, but the old profile copy remains: "
+                    .. tostring(clearError))
+            end
+        end
+    end
+
+    while true do
+        drawHeader("RIFT ACCOUNT", "CHOOSE A DELIVERY ADDRESS")
+        local options = {}
+        if #addresses == 0 then
+            writeAt(2, 5, "No saved delivery addresses yet.", colors.lightGray)
+        else
+            for index, address in ipairs(addresses) do
+                writeAt(2, 3 + index, tostring(index) .. ". " .. address, colors.yellow)
+                table.insert(options, tostring(index) .. " address " .. tostring(index))
+            end
+        end
+        table.insert(options, "a add address")
+        table.insert(options, "q cancel")
+        local choice = readChoice(table.concat(options, "|"))
+        if choice == "q" then return nil, "Address selection cancelled." end
+        if choice == "a" then
+            drawHeader("RIFT ACCOUNT", "ADD A DELIVERY ADDRESS")
+            writeAt(2, 5, "Up to 100 characters.", colors.lightGray)
+            term.setCursorPos(2, 7)
+            write("Address: ")
+            local address = read():match("^%s*(.-)%s*$")
+            if #address < 1 or #address > 100 or address:find("%c") then
+                showNotice("INVALID ADDRESS", "Enter a non-empty address up to 100 characters.")
+            else
+                local duplicate = false
+                for _, savedAddress in ipairs(addresses) do
+                    if savedAddress == address then duplicate = true break end
+                end
+                if not duplicate then table.insert(addresses, address) end
+                local saved, saveError = saveDeliveryAddresses(addresses)
+                if not saved then
+                    showNotice("ADDRESS NOT SAVED", saveError)
+                else
+                    return address
+                end
+            end
+        else
+            local index = tonumber(choice)
+            if index and addresses[index] then return addresses[index] end
         end
     end
 end
@@ -417,7 +561,8 @@ local function renderCatalog(products, cart, errorMessage, page)
             writeAt(2, y, "#" .. product.id, themeAccent)
             writeAt(8, y, product.name:sub(1, math.max(1, width - 20)), colors.white)
             writeAt(width - 9, y, money(product.price), colors.lime)
-            writeAt(4, y + 1, "BY " .. product.providerName .. "  |  IN CART: "
+            local providerName = product.providerUser or product.providerName or "Provider"
+            writeAt(4, y + 1, "By " .. providerName .. "  |  IN CART: "
                 .. (cart[product.id] or 0), colors.lightGray)
         end
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
@@ -573,24 +718,12 @@ local function placeOrder(cart)
         showNotice("CART IS EMPTY", "Add a product before placing an order.")
         return
     end
-    local deliveryAddress
-    if userData.deliveryAddress == nil then
-        drawHeader("DELIVERY ADDRESS", "ENTER THE ADDRESS FOR THIS ORDER")
-        writeAt(2, 5, "Up to 100 characters.", colors.lightGray)
-        term.setCursorPos(2, 7)
-        write("Address: ")
-        deliveryAddress = read():match("^%s*(.-)%s*$")
-        if #deliveryAddress < 1 or #deliveryAddress > 100 or deliveryAddress:find("%c") then
-            showNotice("INVALID ADDRESS", "Enter a non-empty address up to 100 characters.")
-            return
+    local deliveryAddress, addressError = chooseDeliveryAddress()
+    if not deliveryAddress then
+        if addressError ~= "Address selection cancelled." then
+            showNotice("DELIVERY ADDRESS UNAVAILABLE", addressError)
         end
-        userData.deliveryAddress = deliveryAddress
-        if not saveUserData() then
-            showNotice("ADDRESS NOT SAVED", "Could not save your delivery address for future orders.")
-        end
-    else
-        deliveryAddress = userData.deliveryAddress
-        showNotice("Save Address Used", "Your Recent Address is being used to deliver to")
+        return
     end
     drawHeader("ORDER REVIEW", "CONFIRM THE DELIVERY ADDRESS BEFORE PLACING")
     sectionTitle(4, "DELIVER TO")
@@ -725,15 +858,16 @@ local function showMyOrders()
 end
 
 openModems()
-local authenticated, authenticationError = authenticateJobsAccount()
+local authenticated, authenticationError = authenticateRiftAccount()
 if not authenticated then
     if authenticationError ~= "Sign-in cancelled." then
-        showNotice("MARKET SIGN IN", authenticationError)
+        showNotice("RIFT ACCOUNT SIGN IN", authenticationError)
     end
     return
 elseif authenticationError then
-    showNotice("MARKET SIGN IN", authenticationError)
+    showNotice("RIFT ACCOUNT SIGN IN", authenticationError)
 end
+loadUserData()
 local cart = {}
 local page = 1
 while true do

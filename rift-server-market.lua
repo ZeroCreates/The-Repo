@@ -165,6 +165,34 @@ local function userOwns(record, userField, legacyIdField, senderId, username)
     return record[legacyIdField] == senderId
 end
 
+local function accountOwns(record, userField, username)
+    return record[userField] == username
+end
+
+local function migrateLegacyProviderOwnership(senderId, username)
+    local changed = false
+    for _, product in ipairs(state.products) do
+        if product.providerUser == nil and product.providerId == senderId then
+            product.providerUser = username
+            product.providerName = username:sub(1, 24)
+            changed = true
+        end
+    end
+    for _, order in ipairs(state.orders) do
+        if order.providerUser == nil and order.providerId == senderId then
+            order.providerUser = username
+            changed = true
+        end
+    end
+
+    local legacyAddress = state.providerAddresses[tostring(senderId)]
+    if state.providerAddresses[username] == nil and type(legacyAddress) == "string" then
+        state.providerAddresses[username] = legacyAddress
+        changed = true
+    end
+    if changed then saveState() end
+end
+
 local function createOrder(senderId, username, message)
     if type(message.deliveryAddress) ~= "string" then
         return sendError(senderId, "A delivery address is required.")
@@ -246,7 +274,7 @@ local function getOrder(senderId, username, message)
     local order = findOrder(message.orderId)
     if not order then return sendError(senderId, "Order not found.") end
     if not userOwns(order, "customerUser", "customerId", senderId, username)
-        and not userOwns(order, "providerUser", "providerId", senderId, username) then
+        and not accountOwns(order, "providerUser", username) then
         return sendError(senderId, "That order belongs to another customer.")
     end
     local orderCopy = {}
@@ -298,8 +326,7 @@ end
 local function listOrders(senderId, username)
     local active = {}
     for _, order in ipairs(state.orders) do
-        if (userOwns(order, "providerUser", "providerId", senderId, username)
-            or order.providerId == nil)
+        if accountOwns(order, "providerUser", username)
             and order.status ~= "completed" and order.status ~= "cancelled" then
             local orderCopy = {}
             for key, value in pairs(order) do orderCopy[key] = value end
@@ -323,7 +350,7 @@ local function setProviderAddress(senderId, username, message)
 
     state.providerAddresses[username] = address
     for _, product in ipairs(state.products) do
-        if userOwns(product, "providerUser", "providerId", senderId, username) then
+        if accountOwns(product, "providerUser", username) then
             product.providerAddress = address
         end
     end
@@ -342,7 +369,7 @@ end
 local function listProviderProducts(senderId, username)
     local products = {}
     for _, product in ipairs(state.products) do
-        if userOwns(product, "providerUser", "providerId", senderId, username) then
+        if accountOwns(product, "providerUser", username) then
             table.insert(products, product)
         end
     end
@@ -381,13 +408,12 @@ local function publishProduct(senderId, username, message)
         end
         product = findProduct(submitted.id)
         if not product
-            or not userOwns(product, "providerUser", "providerId", senderId, username) then
+            or not accountOwns(product, "providerUser", username) then
             return sendError(senderId, "You can only edit your own products.")
         end
     else
         product = {
             id = state.nextProductId,
-            providerId = senderId,
             providerUser = username,
             createdAt = os.epoch("utc"),
         }
@@ -399,10 +425,7 @@ local function publishProduct(senderId, username, message)
     product.name = name
     product.price = submitted.price
     product.available = submitted.available
-    local providerName = type(submitted.providerName) == "string" and submitted.providerName or ""
-    providerName = providerName:match("^%s*(.-)%s*$")
-    if providerName == "" then providerName = "Provider #" .. senderId end
-    product.providerName = providerName:sub(1, 24)
+    product.providerName = username:sub(1, 24)
     product.providerAddress = providerAddress
     product.updatedAt = os.epoch("utc")
     saveState()
@@ -418,8 +441,7 @@ local function updateOrder(senderId, username, message)
     if message.status == "completed" then
         return sendError(senderId, "The customer must confirm order completion.")
     end
-    if order.providerId
-        and not userOwns(order, "providerUser", "providerId", senderId, username) then
+    if not accountOwns(order, "providerUser", username) then
         return sendError(senderId, "You can only update orders for your products.")
     end
     if not ALLOWED_TRANSITIONS[order.status] or not ALLOWED_TRANSITIONS[order.status][message.status] then
@@ -534,10 +556,15 @@ drawDashboard()
 local function handleMarketRequest(senderId, message)
     local username = getAuthenticatedUser(senderId)
     if type(username) ~= "string" then
-        return sendError(senderId, "Sign in to your Rift Jobs account before using the Market.")
+        return sendError(senderId, "Sign in to your Rift account before using Rift Market.")
     end
 
     if type(message) ~= "table" then return sendError(senderId, "Invalid request.") end
+    if message.type == "provider_list" or message.type == "set_provider_address"
+        or message.type == "get_provider_products" or message.type == "publish_product"
+        or message.type == "set_status" then
+        migrateLegacyProviderOwnership(senderId, username)
+    end
     if message.type == "place_order" then
         createOrder(senderId, username, message)
     elseif message.type == "get_order" then

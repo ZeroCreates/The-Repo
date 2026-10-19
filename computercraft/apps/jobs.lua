@@ -1,9 +1,10 @@
 local PROTOCOL = "rift_jobs_v1"
 local ACCOUNT_PROTOCOL = "rift_account_v1"
-local LOGIN_SERVER_NAME = "rift-server"
+local ACCOUNT_SERVER_NAME = "rift-server"
 local JOBS_SERVER_NAME = "rift-jobs"
 local TIMEOUT = 5
-local STORED_LOGIN_PATH = "rift-jobs/login.json"
+local RIFT_LOGIN_PATH = "rift/account.json"
+local LEGACY_LOGIN_PATH = "rift-jobs/login.json"
 local playerName
 local savedLogin
 local storageLoaded, storage = pcall(require, "storage")
@@ -89,7 +90,7 @@ local function drawHeader(title, subtitle)
 end
 
 local function readText(label, hidden)
-    drawHeader("RIFT JOBS  /  INPUT", label)
+    drawHeader("RIFT  /  JOBS INPUT", label)
     local _, height = term.getSize()
     writeAt(2, height - 1, "> ", themeAccent)
     term.setCursorPos(4, height - 1)
@@ -143,14 +144,14 @@ local function waitForAction(buttons, rows)
 end
 
 local function showNotice(title, message)
-    drawHeader(title, "RIFT JOBS  /  PLAYER CONTRACTS")
+    drawHeader("RIFT", "JOBS  /  " .. title)
     writeAt(2, 5, message, colors.white)
     local buttons = drawButtons({ { id = "ok", label = "OK", key = keys.enter } })
     waitForAction(buttons)
 end
 
 local function confirm(title, message)
-    drawHeader(title, "RIFT JOBS  /  PLEASE CONFIRM")
+    drawHeader("RIFT", "JOBS  /  " .. title .. "  /  PLEASE CONFIRM")
     writeAt(2, 5, message, colors.white)
     local buttons = drawButtons({
         { id = "yes", label = "CONFIRM", key = keys.y },
@@ -174,7 +175,7 @@ local function request(message)
     local serverName = JOBS_SERVER_NAME
     local protocol = PROTOCOL
     if message.type == "login" or message.type == "register" or message.type == "logout" then
-        serverName = LOGIN_SERVER_NAME
+        serverName = ACCOUNT_SERVER_NAME
         protocol = ACCOUNT_PROTOCOL
     end
     local serverId = rednet.lookup(protocol, serverName)
@@ -193,15 +194,20 @@ end
 
 local function saveLogin(username, password)
     if not storage then
-        return false, "Private storage is unavailable. Start Rift Jobs from the launcher."
+        return false, "Rift account storage is unavailable. Start Rift Jobs from the launcher."
     end
-    local saved, saveError = storage.write(STORED_LOGIN_PATH, {
+    local saved, saveError = storage.write(RIFT_LOGIN_PATH, {
         username = username,
         password = password,
     })
     if not saved then
-        return false, "Could not save the Jobs login to private storage: "
+        return false, "Could not save the Rift account to private storage: "
             .. tostring(saveError or "unknown storage error")
+    end
+    local legacyDeleted, legacyDeleteError = storage.delete(LEGACY_LOGIN_PATH)
+    if not legacyDeleted and legacyDeleteError ~= "Stored data was not found." then
+        return false, "Rift account was saved, but the legacy account entry could not be removed: "
+            .. tostring(legacyDeleteError or "unknown storage error")
     end
     savedLogin = { username = username, password = password }
     return true
@@ -209,15 +215,30 @@ end
 
 local function loadSavedLogin()
     if not storage then return nil, "Private storage is unavailable." end
-    local data, storageError = storage.read(STORED_LOGIN_PATH)
+    local data, storageError = storage.read(RIFT_LOGIN_PATH)
+    if data == nil and storageError == "Stored data was not found." then
+        data, storageError = storage.read(LEGACY_LOGIN_PATH)
+        if data ~= nil then
+            local saved, saveError = storage.write(RIFT_LOGIN_PATH, data)
+            if not saved then
+                return nil, "Could not migrate the saved Rift account: "
+                    .. tostring(saveError or "unknown storage error")
+            end
+            local deleted, deleteError = storage.delete(LEGACY_LOGIN_PATH)
+            if not deleted and deleteError ~= "Stored data was not found." then
+                return nil, "Rift account was migrated, but the legacy account entry could not be removed: "
+                    .. tostring(deleteError or "unknown storage error")
+            end
+        end
+    end
     if data == nil then
         if storageError == "Stored data was not found." then return nil end
-        return nil, "Could not load the saved Jobs login: "
+        return nil, "Could not load the saved Rift account: "
             .. tostring(storageError or "unknown storage error")
     end
     if type(data) ~= "table" or type(data.username) ~= "string"
         or type(data.password) ~= "string" then
-        return nil, "Saved Jobs login data is invalid."
+        return nil, "Saved Rift account data is invalid."
     end
     savedLogin = { username = data.username, password = data.password }
     return savedLogin
@@ -226,12 +247,17 @@ end
 local function deleteSavedLogin()
     if not storage then
         if not savedLogin then return true end
-        return false, "Private storage is unavailable; the saved Jobs login could not be removed."
+        return false, "Private storage is unavailable; the saved Rift account could not be removed."
     end
-    local deleted, deleteError = storage.delete(STORED_LOGIN_PATH)
+    local deleted, deleteError = storage.delete(RIFT_LOGIN_PATH)
     if not deleted and deleteError ~= "Stored data was not found." then
-        return false, "Could not remove the saved Jobs login: "
+        return false, "Could not remove the saved Rift account: "
             .. tostring(deleteError or "unknown storage error")
+    end
+    local legacyDeleted, legacyDeleteError = storage.delete(LEGACY_LOGIN_PATH)
+    if not legacyDeleted and legacyDeleteError ~= "Stored data was not found." then
+        return false, "Rift account was signed out, but the legacy account entry could not be removed: "
+            .. tostring(legacyDeleteError or "unknown storage error")
     end
     savedLogin = nil
     return true
@@ -291,7 +317,7 @@ local function signOut()
 end
 
 local function drawJobs(title, subtitle, jobs, page, showStatus)
-    drawHeader(title, subtitle)
+    drawHeader("RIFT", "JOBS  /  " .. title .. "  /  " .. subtitle)
     local _, height = term.getSize()
     local perPage = math.max(1, math.floor((height - 10) / 4))
     local pageCount = math.max(1, math.ceil(#jobs / perPage))
@@ -318,7 +344,7 @@ local function drawJobs(title, subtitle, jobs, page, showStatus)
 end
 
 local function postJob()
-    drawHeader("POST A JOB", "DESCRIBE THE WORK AND AGREED REWARD")
+    drawHeader("RIFT", "JOBS  /  POST A JOB  /  DESCRIBE THE WORK AND AGREED REWARD")
     local title = readText("Job title (3-40 characters)")
     local description = readText("Work details (5-180 characters)")
     local reward = readText("Reward, e.g. 2 diamonds or $5.00")
@@ -370,7 +396,7 @@ local function browseJobs()
 end
 
 showJobDetails = function(job, fromBoard)
-    drawHeader("JOB #" .. job.id .. "  /  " .. job.status:upper(), job.title)
+    drawHeader("RIFT", "JOBS  /  #" .. job.id .. "  /  " .. job.status:upper() .. "  /  " .. job.title)
     writeAt(2, 5, "POSTED BY  " .. (job.posterName or "Unknown"), colors.lightGray)
     writeAt(2, 6, "REWARD  " .. job.reward, colors.lime)
     writeAt(2, 8, job.description, colors.white)
@@ -465,7 +491,7 @@ end
 
 while true do
     if playerName then
-        drawHeader("RIFT JOBS", "PLAYER CONTRACTS  /  SIGNED IN AS " .. playerName:upper())
+        drawHeader("RIFT", "JOBS  /  SIGNED IN AS " .. playerName:upper())
         writeAt(2, 5, "Post work, pick up a contract, and track your jobs.", colors.white)
         local buttons = drawButtons({
             { id = "post", label = "POST A JOB", key = keys.p },
@@ -497,7 +523,7 @@ while true do
             break
         end
     else
-        drawHeader("RIFT JOBS", "CREATE AN ACCOUNT OR SIGN IN")
+        drawHeader("RIFT", "JOBS  /  CREATE AN ACCOUNT OR SIGN IN")
         local buttons = drawButtons({
             { id = "register", label = "CREATE ACCOUNT", key = keys.c },
             { id = "login", label = "SIGN IN", key = keys.l },
