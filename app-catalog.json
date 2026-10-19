@@ -54,7 +54,7 @@
     "source": "computercraft/system/file-browser.lua",
     "file": "file-browser.lua",
     "scope": "system",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "Browse and edit files; hold Alt to show hidden files and private data"
   },
   {

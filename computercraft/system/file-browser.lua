@@ -98,7 +98,7 @@ end
 
 local function decryptPrivateData(contents, keyBytes)
     local prefix = "CCLOCAL1:"
-    if contents:sub(1, #prefix) ~= prefix then return contents end
+    if contents:sub(1, #prefix) ~= prefix then return contents, false end
     local encoded = contents:sub(#prefix + 1)
     if #encoded % 2 ~= 0 or encoded:find("[^%x]") then
         return nil, "Encrypted private data is malformed."
@@ -107,7 +107,7 @@ local function decryptPrivateData(contents, keyBytes)
     for index = 1, #encoded, 2 do
         encrypted[#encrypted + 1] = string.char(tonumber(encoded:sub(index, index + 1), 16))
     end
-    return cryptData(table.concat(encrypted), keyBytes)
+    return cryptData(table.concat(encrypted), keyBytes), true
 end
 
 local function encryptPrivateData(contents, keyBytes)
@@ -449,10 +449,18 @@ local function editSelected()
             message = readError
             return
         end
-        local plaintext, decryptError = decryptPrivateData(encryptedContents, keyBytes)
+        local plaintext, wasEncrypted, decryptError = decryptPrivateData(encryptedContents, keyBytes)
         if not plaintext then
             message = "Could not decrypt private data: " .. tostring(decryptError)
             return
+        end
+        if wasEncrypted then
+            local decoded, value = pcall(textutils.unserializeJSON, plaintext)
+            if not decoded or (value == nil and plaintext ~= "null") then
+                message = "Could not decode this private data with the local key. "
+                    .. "The original remains encrypted; verify /.launcher/.data-key."
+                return
+            end
         end
 
         privateEditSequence = privateEditSequence + 1
