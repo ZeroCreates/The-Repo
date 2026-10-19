@@ -10,6 +10,7 @@ local TEMP_FILE = "jobs.db.tmp"
 local state
 local sessions = {}
 local handleMarketRequest
+local getMarketDashboardStats
 local responseProtocol = PROTOCOL
 
 local function openModems()
@@ -308,19 +309,26 @@ local function drawDashboard()
     local good = color and colors.lime or colors.white
     local warning = color and colors.yellow or colors.white
 
-    local function line(row, text, textColor, fill)
+    local function lineAt(column, row, text, textColor, fill, cellWidth)
         if row < 1 or row > height then return end
-        term.setCursorPos(1, row)
+        local available = math.min(cellWidth or (width - column + 1), width - column + 1)
+        if available < 1 then return end
+        term.setCursorPos(column, row)
         term.setBackgroundColor(fill or background)
         term.setTextColor(textColor or foreground)
-        local content = tostring(text):sub(1, width)
-        term.write(content .. string.rep(" ", math.max(0, width - #content)))
+        local content = tostring(text):sub(1, available)
+        term.write(content .. string.rep(" ", math.max(0, available - #content)))
     end
 
-    local function section(row, title)
-        line(row, " " .. title, foreground, panel)
+    local function line(row, text, textColor, fill)
+        lineAt(1, row, text, textColor, fill)
     end
 
+    local function section(column, row, title, cellWidth)
+        lineAt(column, row, " " .. title, foreground, panel, cellWidth)
+    end
+
+    local market = getMarketDashboardStats()
     local openCount, activeCount, completedCount = 0, 0, 0
     for _, job in ipairs(state.jobs) do
         if job.status == "open" then
@@ -343,56 +351,106 @@ local function drawDashboard()
         .. "  |  UP " .. string.format("%02d:%02d", math.floor((os.clock() - startedAt) / 60),
             math.floor((os.clock() - startedAt) % 60)), muted)
 
-    if width >= 48 then
-        line(4, " JOBS", foreground, panel)
-        term.setCursorPos(math.floor(width / 2) + 1, 4)
-        term.write(" ACCOUNTS")
-        line(5, " Open " .. openCount .. "  |  Active " .. activeCount
-            .. "  |  Done " .. completedCount, good)
-        term.setCursorPos(math.floor(width / 2) + 1, 5)
-        term.write(" Signed in: " .. sessionCount)
+    local jobsColumnWidth = math.max(1, math.floor(width / 2))
+    local marketColumn = jobsColumnWidth + 1
+    local marketColumnWidth = width - jobsColumnWidth
+    if width >= 40 then
+        section(1, 4, "JOBS", jobsColumnWidth)
+        section(marketColumn, 4, "MARKET", marketColumnWidth)
+        lineAt(1, 5, " Open " .. openCount .. "  |  Active " .. activeCount
+            .. "  |  Done " .. completedCount, good, nil, jobsColumnWidth)
+        lineAt(marketColumn, 5, " Orders " .. market.activeOrders
+            .. " active  |  Products " .. market.liveProducts .. "/" .. market.totalProducts,
+            good, nil, marketColumnWidth)
+        lineAt(1, 6, " Signed in: " .. sessionCount, muted, nil, jobsColumnWidth)
+        lineAt(marketColumn, 6, " Done " .. market.completedOrders
+            .. "  |  Cancelled " .. market.cancelledOrders, muted, nil, marketColumnWidth)
     else
-        section(4, "JOBS")
+        section(1, 4, "JOBS", width)
         line(5, " Open " .. openCount .. "  Active " .. activeCount
             .. "  Done " .. completedCount, good)
         line(6, " Signed in: " .. sessionCount, muted)
+        section(1, 7, "MARKET", width)
+        line(8, " Active orders: " .. market.activeOrders
+            .. "  Products: " .. market.liveProducts .. "/" .. market.totalProducts, good)
+        line(9, " Completed: " .. market.completedOrders
+            .. "  Cancelled: " .. market.cancelledOrders, muted)
     end
 
-    local endpointRow = width >= 48 and 7 or 8
-    section(endpointRow, "NETWORK ENDPOINTS")
-    line(endpointRow + 1, " Login  /  rift-server", muted)
-    line(endpointRow + 2, " Jobs   /  rift-jobs", muted)
-    line(endpointRow + 3, " Market /  rift-market", muted)
+    local endpointRow = width >= 40 and 8 or 11
+    section(1, endpointRow, "NETWORK ENDPOINTS", width)
+    line(endpointRow + 1, " Login / rift-server  |  Jobs / rift-jobs", muted)
+    line(endpointRow + 2, " Market / rift-market", muted)
 
-    local activityRow = endpointRow + 5
-    section(activityRow, "TRAFFIC")
+    local activityRow = endpointRow + 4
+    section(1, activityRow, "TRAFFIC", width)
     line(activityRow + 1, " Login " .. requestsByService.login
         .. "  |  Jobs " .. requestsByService.jobs
         .. "  |  Market " .. requestsByService.market, good)
     line(activityRow + 2, " Last: " .. lastRequest, muted)
 
     local recentHeaderRow = activityRow + 4
-    section(recentHeaderRow, "RECENT JOBS")
-    local row = recentHeaderRow + 1
-    local firstJob = math.max(1, #state.jobs - (height - row))
-    if #state.jobs == 0 and row <= height then
-        line(row, " No jobs posted yet", muted)
-    else
-        for index = #state.jobs, firstJob, -1 do
-            if row > height then break end
-            local job = state.jobs[index]
+    if width >= 40 then
+        section(1, recentHeaderRow, "RECENT JOBS", jobsColumnWidth)
+        section(marketColumn, recentHeaderRow, "RECENT ORDERS", marketColumnWidth)
+        local row = recentHeaderRow + 1
+        local availableRows = math.max(0, height - row)
+        local recentJobCount = math.min(#state.jobs, availableRows)
+        for index = 1, recentJobCount do
+            local job = state.jobs[#state.jobs - index + 1]
             local statusColor = job.status == "open" and good
                 or (job.status == "completed" and muted or warning)
-            line(row, string.format(" #%s  %-9s  %s", tostring(job.id),
-                tostring(job.status):upper(), tostring(job.title)), statusColor)
+            lineAt(1, row, "#" .. job.id .. " " .. job.status:upper() .. " " .. job.title,
+                statusColor, nil, jobsColumnWidth)
             row = row + 1
+        end
+        if #state.jobs == 0 and row <= height then
+            lineAt(1, row, " No jobs posted", muted, nil, jobsColumnWidth)
+        end
+
+        row = recentHeaderRow + 1
+        local recentOrderCount = math.min(#market.recentOrders, math.max(0, height - row))
+        for index = 1, recentOrderCount do
+            local order = market.recentOrders[index]
+            local statusColor = order.status == "shipping" and good
+                or (order.status == "preparing" and warning or muted)
+            lineAt(marketColumn, row, "#" .. order.id .. " " .. order.status:upper()
+                .. " $" .. string.format("%.2f", order.total / 100),
+                statusColor, nil, marketColumnWidth)
+            row = row + 1
+        end
+        if #market.recentOrders == 0 and row <= height then
+            lineAt(marketColumn, row, " No active orders", muted, nil, marketColumnWidth)
+        end
+    else
+        section(1, recentHeaderRow, "LATEST JOBS / ORDERS", width)
+        local row = recentHeaderRow + 1
+        local jobIndex, orderIndex = #state.jobs, 1
+        while row < height and (jobIndex > 0 or orderIndex <= #market.recentOrders) do
+            if jobIndex > 0 then
+                local job = state.jobs[jobIndex]
+                line(row, "J #" .. job.id .. " " .. job.status:upper() .. " " .. job.title, warning)
+                jobIndex = jobIndex - 1
+                row = row + 1
+            end
+            if orderIndex <= #market.recentOrders and row < height then
+                local order = market.recentOrders[orderIndex]
+                line(row, "M #" .. order.id .. " " .. order.status:upper(), good)
+                orderIndex = orderIndex + 1
+                row = row + 1
+            end
+        end
+        if #state.jobs == 0 and #market.recentOrders == 0 and row < height then
+            line(row, " No recent activity", muted)
         end
     end
 
-    term.setCursorPos(1, height)
-    term.setBackgroundColor(background)
-    term.setTextColor(muted)
-    term.write((" Ctrl+T / terminate  |  Computer #%s"):format(os.getComputerID()):sub(1, width))
+    if height >= 2 then
+        term.setCursorPos(1, height)
+        term.setBackgroundColor(background)
+        term.setTextColor(muted)
+        term.write((" Ctrl+T / terminate  |  Computer #%s"):format(os.getComputerID()):sub(1, width))
+    end
     term.setBackgroundColor(background)
 end
 
@@ -408,11 +466,14 @@ local moduleLoaded, createMarketServer = pcall(marketServerChunk)
 if not moduleLoaded or type(createMarketServer) ~= "function" then
     error("The Market server module is invalid: " .. tostring(createMarketServer), 0)
 end
-handleMarketRequest = createMarketServer(function(senderId)
+handleMarketRequest, getMarketDashboardStats = createMarketServer(function(senderId)
     return sessions[senderId]
 end)
 if type(handleMarketRequest) ~= "function" then
     error("The Market server module did not provide a request handler.", 0)
+end
+if type(getMarketDashboardStats) ~= "function" then
+    error("The Market server module did not provide dashboard statistics.", 0)
 end
 
 state = loadState()

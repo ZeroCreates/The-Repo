@@ -435,7 +435,8 @@ local display = peripheral.find("monitor")
 if display then display.setTextScale(0.5) end
 
 local function drawDashboard()
-    local screen = display or term.current()
+    if not display then return end
+    local screen = display
     local width, height = screen.getSize()
     screen.setBackgroundColor(colors.black)
     screen.setTextColor(colors.white)
@@ -496,11 +497,41 @@ local function drawDashboard()
     if shown == 0 then line(9, "Waiting for orders...", colors.lightGray) end
 end
 
+local function getDashboardStats()
+    local activeOrders, completedOrders, cancelledOrders, liveProducts = 0, 0, 0, 0
+    local recentOrders = {}
+    for _, order in ipairs(state.orders) do
+        if order.status == "completed" then
+            completedOrders = completedOrders + 1
+        elseif order.status == "cancelled" then
+            cancelledOrders = cancelledOrders + 1
+        else
+            activeOrders = activeOrders + 1
+            table.insert(recentOrders, order)
+        end
+    end
+    for _, product in ipairs(state.products) do
+        if product.available then liveProducts = liveProducts + 1 end
+    end
+    table.sort(recentOrders, function(first, second)
+        return (first.createdAt or 0) > (second.createdAt or 0)
+    end)
+
+    return {
+        activeOrders = activeOrders,
+        completedOrders = completedOrders,
+        cancelledOrders = cancelledOrders,
+        liveProducts = liveProducts,
+        totalProducts = #state.products,
+        recentOrders = recentOrders,
+    }
+end
+
 state = loadState()
 saveState()
 drawDashboard()
 
-return function(senderId, message)
+local function handleMarketRequest(senderId, message)
     local username = getAuthenticatedUser(senderId)
     if type(username) ~= "string" then
         return sendError(senderId, "Sign in to your Rift Jobs account before using the Market.")
@@ -532,6 +563,8 @@ return function(senderId, message)
     end
     drawDashboard()
 end
+
+return handleMarketRequest, getDashboardStats
 end
 
 return createMarketServer
