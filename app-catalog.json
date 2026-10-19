@@ -4,7 +4,7 @@
     "source": "computercraft/system/app-downloader.lua",
     "file": "app-downloader.lua",
     "scope": "system",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Download and update ComputerCraft apps"
   },
   {
