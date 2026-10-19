@@ -18,7 +18,7 @@
     "name": "Casino",
     "source": "computercraft/apps/casino.lua",
     "file": "casino.lua",
-    "version": "1.1.1",
+    "version": "1.2.0",
     "description": "Install and launch Casino games with a shared server bankroll"
   },
   {
@@ -46,7 +46,7 @@
     "name": "Rift-Mail",
     "source": "computercraft/apps/email-client.lua",
     "file": "email-client.lua",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "description": "Create saved email accounts and send messages over rednet"
   },
   {
@@ -69,7 +69,7 @@
     "name": "Lua Console",
     "source": "computercraft/apps/lua-console.lua",
     "file": "lua-console.lua",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Run Lua expressions and statements interactively"
   },
   {
@@ -90,14 +90,14 @@
     "name": "The Market",
     "source": "computercraft/apps/market-client.lua",
     "file": "market-client.lua",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "description": "Allows users to shop for items that are available for sale in the market"
   },
   {
     "name": "Rift Jobs",
     "source": "computercraft/apps/jobs.lua",
     "file": "jobs.lua",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Post player jobs, claim work, and review submissions"
   }
 ]
