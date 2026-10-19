@@ -1,16 +1,16 @@
-local PROTOCOL = "launcher_email_v1"
-local SERVER_NAME = "email_server"
+local PROTOCOL = "rift_mail_v1"
+local SERVER_NAME = "rift-mail"
+local ACCOUNT_PROTOCOL = "rift_account_v1"
+local ACCOUNT_SERVER_NAME = "rift-server"
 local TIMEOUT = 5
-local ACCOUNT_PATH = ".email-account.json"
-local STORED_ACCOUNT_PATH = "email/account.json"
+local RIFT_ACCOUNT_PATH = "rift/account.json"
+local LEGACY_ACCOUNT_PATH = "rift-jobs/login.json"
 local storageLoaded, storage = pcall(require, "storage")
 if not storageLoaded or type(storage) ~= "table"
     or type(storage.read) ~= "function" or type(storage.write) ~= "function"
     or type(storage.delete) ~= "function" then
     storage = nil
 end
-local requestedHome = ...
-local profileHome = type(requestedHome) == "string" and requestedHome:gsub("/+$", "")
 local mouseEnabled = false
 local account
 local currentFolder = "Inbox"
@@ -129,13 +129,13 @@ end
 local function request(payload)
     local serverId = rednet.lookup(PROTOCOL, SERVER_NAME)
     if not serverId then
-        return nil, "Email server not found. Check that it is running and connected."
+        return nil, "Rift server not found. Check that it is running and connected."
     end
     rednet.send(serverId, payload, PROTOCOL)
     local _, response = rednet.receive(PROTOCOL, TIMEOUT, serverId)
-    if type(response) ~= "table" then return nil, "No response from the email server." end
+    if type(response) ~= "table" then return nil, "No response from Rift Mail." end
     if response.type == "error" then
-        return nil, response.message or "The email server rejected the request."
+        return nil, response.message or "Rift Mail rejected the request."
     end
     return response
 end
@@ -177,7 +177,7 @@ local function choose(title, subtitle, choices)
 end
 
 local function notice(title, message)
-    drawHeader(title, "RIFTMAIL  /  EMAIL CLIENT")
+    drawHeader(title, "RIFT MAIL")
     sectionTitle(4, "NOTICE")
     local width = term.getSize()
     local row = 5
@@ -199,7 +199,7 @@ local function notice(title, message)
 end
 
 local function readField(label, secret)
-    drawHeader("RIFTMAIL", "EMAIL CLIENT  /  ACCOUNT")
+    drawHeader("RIFT MAIL", "RIFT ACCOUNT")
     sectionTitle(4, "INPUT")
     writeAt(2, 6, label, colors.white)
     writeAt(2, 8, "> ", themeAccent)
@@ -207,112 +207,146 @@ local function readField(label, secret)
     return read(secret and "*" or nil)
 end
 
-local function completeEmailAddress(value)
-    local email = value:lower():match("^%s*(.-)%s*$")
-    if not email:find("@", 1, true) then
-        email = email .. "@riftmail.com"
-    end
-    return email
-end
-
-local function saveAccount(data)
+local function readSavedAccount(path)
+    local storageError
     if storage then
-        local saved, saveError = storage.write(STORED_ACCOUNT_PATH, data)
-        if not saved then
-            return false, "Could not save account details to private storage: "
-                .. tostring(saveError or "unknown storage error")
-        end
-        if fs.exists(ACCOUNT_PATH) then
-            local ok, deleteError = pcall(fs.delete, ACCOUNT_PATH)
-            if not ok then
-                return false, "Account was saved to private storage, but the old profile copy could not be removed: "
-                    .. tostring(deleteError)
+        local ok, data, err = pcall(storage.read, path)
+        if ok and data ~= nil then
+            if type(data) ~= "table" or type(data.username) ~= "string"
+                or (data.password ~= nil and type(data.password) ~= "string") then
+                return nil, "Saved Rift account data is invalid."
             end
+            return data
         end
-        return true
+        if not ok then
+            storageError = data
+        elseif err ~= "Stored data was not found." then
+            storageError = err
+        end
     end
 
-    local file = fs.open(ACCOUNT_PATH, "w")
-    if not file then return false, "Could not save account details in this profile." end
-    file.write(textutils.serializeJSON(data))
-    file.close()
-    return true
-end
-
-local function isValidAccount(data)
-    return type(data) == "table" and type(data.email) == "string"
-        and type(data.password) == "string"
-end
-
-local function loadLegacyAccount()
-    if not fs.exists(ACCOUNT_PATH) then return nil end
-    local file = fs.open(ACCOUNT_PATH, "r")
-    if not file then error("Could not open the saved email account.") end
+    local absolutePath = "/" .. path
+    if not fs.exists(absolutePath) then
+        if storageError and storageError ~= "Stored data was not found." then
+            return nil, "Launcher storage: " .. tostring(storageError)
+                .. "; no root account file exists at " .. absolutePath .. "."
+        end
+        return nil
+    end
+    if fs.isDir(absolutePath) then return nil, "Saved Rift account path is a folder." end
+    local file = fs.open(absolutePath, "r")
+    if not file then return nil, "Could not open the saved Rift account." end
     local contents = file.readAll()
     file.close()
     local ok, data = pcall(textutils.unserializeJSON, contents)
-    if not ok or not isValidAccount(data) then
-        error("Saved email account data is invalid. Remove .email-account.json from your profile to sign in again.")
+    if not ok or type(data) ~= "table" or type(data.username) ~= "string"
+        or (data.password ~= nil and type(data.password) ~= "string") then
+        return nil, "Saved Rift account data is invalid."
     end
     return data
 end
 
-local function loadAccount()
+local function saveAccount(data)
+    local storageError
     if storage then
-        local data, storageError = storage.read(STORED_ACCOUNT_PATH)
-        if data ~= nil then
-            if not isValidAccount(data) then
-                error("Saved email account data in private storage is invalid.")
-            end
-            return data
-        end
-        if storageError and storageError ~= "Stored data was not found." then
-            error("Could not load the saved email account from private storage: " .. storageError)
-        end
+        local ok, saved, err = pcall(storage.write, RIFT_ACCOUNT_PATH, data)
+        if ok and saved then return true end
+        storageError = ok and err or saved
     end
 
-    local legacyAccount = loadLegacyAccount()
-    if legacyAccount and storage then
-        local saved, saveError = storage.write(STORED_ACCOUNT_PATH, legacyAccount)
-        if not saved then
-            notice("ACCOUNT STORAGE", "Using the existing profile copy. Could not migrate it to private storage: "
-                .. tostring(saveError or "unknown storage error"))
-        else
-            local deleted, deleteError = pcall(fs.delete, ACCOUNT_PATH)
-            if not deleted then
-                notice("ACCOUNT STORAGE", "Account moved to private storage, but the old profile copy remains: "
-                    .. tostring(deleteError))
-            end
-        end
+    local encoded, contents = pcall(textutils.serializeJSON, data)
+    if not encoded or type(contents) ~= "string" then
+        return false, "Rift account data could not be serialized."
     end
-    return legacyAccount
+    local directory = "/rift"
+    if not fs.exists(directory) then fs.makeDir(directory) end
+    if not fs.isDir(directory) then return false, "The /rift account path is not a directory." end
+    local file = fs.open("/" .. RIFT_ACCOUNT_PATH, "w")
+    if not file then
+        return false, "Could not save the Rift account to /rift/account.json."
+            .. (storageError and " Launcher storage also failed: " .. tostring(storageError) or "")
+    end
+    local wrote, writeError = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        return false, "Could not write the saved Rift account: "
+            .. tostring(not wrote and writeError or closeError)
+    end
+    return true
 end
 
-local function deleteSavedAccount()
-    if storage then
-        local deleted, deleteError = storage.delete(STORED_ACCOUNT_PATH)
-        if not deleted and deleteError ~= "Stored data was not found." then
-            return false, "Could not remove account details from private storage: "
-                .. tostring(deleteError or "unknown storage error")
-        end
+local function loadAccount()
+    local data, err = readSavedAccount(RIFT_ACCOUNT_PATH)
+    if data then return type(data.password) == "string" and data or nil end
+    if err then return nil, err end
+    data, err = readSavedAccount(LEGACY_ACCOUNT_PATH)
+    if data and type(data.password) == "string" then
+        local saved, saveError = saveAccount(data)
+        if not saved then notice("ACCOUNT STORAGE", saveError) end
     end
-    if fs.exists(ACCOUNT_PATH) then
-        local deleted, deleteError = pcall(fs.delete, ACCOUNT_PATH)
-        if not deleted then
-            return false, "Could not remove account details from this profile: " .. tostring(deleteError)
-        end
+    return data and type(data.password) == "string" and data or nil, err
+end
+
+local function authenticateAccount(username, password)
+    local serverId = rednet.lookup(ACCOUNT_PROTOCOL, ACCOUNT_SERVER_NAME)
+    if not serverId then
+        return false, "Rift account server not found. Check that Rift Server is running."
+    end
+    rednet.send(serverId, {
+        type = "login",
+        username = username,
+        password = password,
+    }, ACCOUNT_PROTOCOL)
+    local senderId, response = rednet.receive(ACCOUNT_PROTOCOL, TIMEOUT, serverId)
+    if senderId ~= serverId or type(response) ~= "table" then
+        return false, "No response from the Rift account server."
+    end
+    if response.type == "error" then
+        return false, response.message or "Rift account sign-in failed."
+    end
+    if response.type ~= "authenticated" or type(response.username) ~= "string" then
+        return false, "Unexpected response from the Rift account server."
+    end
+    local savedAccount = account
+    if type(savedAccount) ~= "table"
+        or type(savedAccount.username) ~= "string"
+        or savedAccount.username:lower() ~= response.username:lower() then
+        local storedAccount = readSavedAccount(RIFT_ACCOUNT_PATH)
+        savedAccount = type(storedAccount) == "table"
+            and type(storedAccount.username) == "string"
+            and storedAccount.username:lower() == response.username:lower()
+            and storedAccount or {}
+    end
+    savedAccount.username = response.username
+    savedAccount.password = password
+    account = savedAccount
+    local saved, saveError = saveAccount(account)
+    if not saved then
+        return true, "Signed in, but account details could not be saved: " .. tostring(saveError)
     end
     return true
 end
 
 local function signOut()
-    local deleted, deleteError = deleteSavedAccount()
-    if not deleted then
-        notice("SIGN OUT", deleteError)
+    local serverId = rednet.lookup(ACCOUNT_PROTOCOL, ACCOUNT_SERVER_NAME)
+    if not serverId then
+        notice("SIGN OUT", "Rift account server not found; could not sign out.")
         return false
     end
+    rednet.send(serverId, { type = "logout" }, ACCOUNT_PROTOCOL)
+    local senderId, response = rednet.receive(ACCOUNT_PROTOCOL, TIMEOUT, serverId)
+    if senderId ~= serverId or type(response) ~= "table" or response.type ~= "logged_out" then
+        notice("SIGN OUT", "No confirmation from the Rift account server.")
+        return false
+    end
+    account.password = nil
+    local saved, saveError = saveAccount(account)
     account = nil
     currentFolder = "Inbox"
+    if not saved then
+        notice("SIGN OUT", "Signed out, but saved credentials could not be cleared: "
+            .. tostring(saveError))
+    end
     return true
 end
 
@@ -356,7 +390,7 @@ local function displayMessage(item)
     local page = 1
 
     while true do
-        drawHeader("RIFTMAIL", account.email)
+        drawHeader("RIFT MAIL", account.username)
         sectionTitle(4, "MESSAGE  |  " .. item.subject)
         local firstLine = (page - 1) * pageSize + 1
         for index = firstLine, math.min(#lines, firstLine + pageSize - 1) do
@@ -375,12 +409,10 @@ end
 local function fetchCategories()
     local response, err = request({
         type = "list_categories",
-        email = account.email,
-        password = account.password,
     })
     if not response then return nil, err end
     if type(response.categories) ~= "table" then
-        return nil, "The email server returned invalid categories."
+        return nil, "Rift Mail returned invalid categories."
     end
     return response.categories
 end
@@ -431,15 +463,13 @@ local function folders()
         if page < pageCount then table.insert(choices, { key = "next", label = "Next page" }) end
         table.insert(choices, { key = "create", label = "Create category" })
         table.insert(choices, { key = "back", label = "Back" })
-        local selected = choose("EMAIL FOLDERS", account.email, choices)
+        local selected = choose("RIFT MAIL FOLDERS", account.username, choices)
         if selected == "back" or not selected then return nil end
         if selected == "create" then
             local name = readField("New category name (up to 24 characters):")
             name = name:match("^%s*(.-)%s*$")
             local created, createError = request({
                 type = "create_category",
-                email = account.email,
-                password = account.password,
                 category = name,
             })
             if not created then
@@ -460,13 +490,11 @@ end
 local function inbox(category)
     local response, err = request({
         type = "list",
-        email = account.email,
-        password = account.password,
         category = category,
     })
     if not response then notice("INBOX", err); return "home" end
     if type(response.messages) ~= "table" then
-        notice("INBOX", "The email server returned an invalid inbox.")
+        notice("INBOX", "Rift Mail returned an invalid inbox.")
         return "home"
     end
 
@@ -476,7 +504,7 @@ local function inbox(category)
         local startIndex = (page - 1) * pageSize + 1
         local endIndex = math.min(#response.messages, startIndex + pageSize - 1)
 
-        drawHeader("RIFTMAIL", account.email .. "  /  EMAIL CLIENT")
+        drawHeader("RIFT MAIL", account.username)
         sectionTitle(4, category:upper() .. "  |  " .. #response.messages .. " MESSAGES")
         if #response.messages == 0 then
             writeAt(2, 6, "No messages in this folder.", colors.lightGray)
@@ -552,14 +580,12 @@ local function inbox(category)
             if id then
                 local full, readError = request({
                     type = "read",
-                    email = account.email,
-                    password = account.password,
                     id = id,
                 })
                 if not full then
                     notice("MESSAGE", readError)
                 elseif type(full.message) ~= "table" then
-                    notice("MESSAGE", "The email server returned an invalid message.")
+                    notice("MESSAGE", "Rift Mail returned an invalid message.")
                 else
                     local item = full.message
                     local messageAction = displayMessage(item)
@@ -576,8 +602,6 @@ local function inbox(category)
                         if confirmation == "yes" then
                             local deleted, deleteError = request({
                                 type = "delete",
-                                email = account.email,
-                                password = account.password,
                                 id = id,
                             })
                             if not deleted then
@@ -602,8 +626,6 @@ local function inbox(category)
                             if destination then
                                 local moved, moveError = request({
                                     type = "move",
-                                    email = account.email,
-                                    password = account.password,
                                     id = id,
                                     category = destination,
                                 })
@@ -629,7 +651,7 @@ local function inbox(category)
 end
 
 local function compose()
-    local recipient = completeEmailAddress(readField("Recipient email (or username for @riftmail.com):"))
+    local recipient = readField("Recipient Rift username:"):lower():match("^%s*(.-)%s*$")
     local subject = readField("Subject:")
     if #subject < 1 or #subject > 80 then
         notice("COMPOSE", "Subject must be 1 to 80 characters.")
@@ -650,8 +672,6 @@ local function compose()
     end
     local response, err = request({
         type = "send",
-        email = account.email,
-        password = account.password,
         to = recipient,
         subject = subject,
         body = body,
@@ -663,63 +683,33 @@ local function compose()
     end
 end
 
-local function createAccount()
-    local email = completeEmailAddress(readField("Choose email (or username for @riftmail.com):"))
-    local password = readField("Choose a password:", true)
-    local confirmation = readField("Confirm password:", true)
-    if password ~= confirmation then
-        notice("CREATE ACCOUNT", "The passwords do not match.")
-        return
-    end
-    local response, err = request({
-        type = "register",
-        email = email,
-        password = password,
-    })
-    if not response then
-        notice("CREATE ACCOUNT", err)
-        return
-    end
-    account = { email = response.email, password = password }
-    local saved, saveError = saveAccount(account)
-    if not saved then
-        notice("CREATE ACCOUNT", saveError)
-        return
-    end
-    notice("CREATE ACCOUNT", "Account created: " .. account.email)
-end
-
 local function signIn()
-    local email = completeEmailAddress(readField("Email (or username for @riftmail.com):"))
+    local username = readField("Rift username:")
     local password = readField("Password:", true)
-    local response, err = request({
-        type = "login",
-        email = email,
-        password = password,
-    })
-    if not response then
-        notice("SIGN IN", err)
-        return
-    end
-    account = { email = response.email, password = password }
-    local saved, saveError = saveAccount(account)
-    if not saved then
-        notice("SIGN IN", saveError)
-        return
-    end
+    local signedIn, message = authenticateAccount(username, password)
+    if not signedIn then notice("SIGN IN", message) end
+    if signedIn and message then notice("ACCOUNT STORAGE", message) end
 end
 
-if not profileHome then error("Could not determine the launcher profile home.") end
 openModems()
-account = loadAccount()
+local loadError
+account, loadError = loadAccount()
+if loadError then notice("ACCOUNT STORAGE", loadError) end
 
 while true do
+    if account then
+        local signedIn, signInError = authenticateAccount(account.username, account.password)
+        if not signedIn then
+            account = nil
+            notice("RIFT SIGN IN", signInError)
+        end
+    end
     if account then
         local action, selectedFolder = inbox(currentFolder)
         if action == "folder" then
             if selectedFolder then currentFolder = selectedFolder end
         elseif action == "home" then
-            local homeAction = choose("EMAIL", account.email, {
+            local homeAction = choose("RIFT MAIL", account.username, {
                 { key = "inbox", label = "Inbox" },
                 { key = "folders", label = "Folders" },
                 { key = "compose", label = "Compose" },
@@ -745,14 +735,11 @@ while true do
             return
         end
     else
-        local action = choose("EMAIL", "Create or sign in to an email account", {
-            { key = "create", label = "Create account" },
+        local action = choose("RIFT MAIL", "Sign in with your Rift account", {
             { key = "login", label = "Sign in" },
             { key = "quit", label = "Quit" },
         })
-        if action == "create" then
-            createAccount()
-        elseif action == "login" then
+        if action == "login" then
             signIn()
         elseif action == "quit" then
             return

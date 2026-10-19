@@ -2,16 +2,25 @@ local OWNER_REPO = "ZeroCreates/The-Repo"
 local BRANCH = "main"
 local BASE_URL = "https://raw.githubusercontent.com/" .. OWNER_REPO .. "/" .. BRANCH .. "/"
 local CASINO_PROTOCOL = "rift_casino_wallet_v1"
-local CASINO_SERVER = "casino_server"
+local CASINO_SERVER = "rift-casino"
+local ACCOUNT_PROTOCOL = "rift_account_v1"
+local ACCOUNT_SERVER = "rift-server"
 local TIMEOUT = 5
-local STARTING_CHIPS = 1000
 local transactionSequence = 0
+local RIFT_ACCOUNT_PATH = "rift/account.json"
+local LEGACY_ACCOUNT_PATH = "rift-jobs/login.json"
+local storageLoaded, storage = pcall(require, "storage")
+if not storageLoaded or type(storage) ~= "table"
+    or type(storage.read) ~= "function" or type(storage.write) ~= "function" then
+    storage = nil
+end
 local games = {
     { name = "Blackjack", file = "blackjack.lua", source = "computercraft/apps/blackjack.lua", argument = "blackjack" },
     { name = "Texas Hold'em", file = "texas-holdem.lua", source = "computercraft/apps/texas-holdem.lua", argument = "holdem" },
 }
 local GAMES_DIRECTORY = "/games"
 local balance
+local account
 local statusMessage = ""
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
@@ -81,7 +90,7 @@ local function drawHeader(subtitle)
     term.setTextColor(colors.white)
     term.clear()
     writeAt(1, 1, string.rep(" ", width), colors.white, themeAccent)
-    writeAt(2, 1, "RIFT CASINO  /  PRIVATE TABLES", colors.white, themeAccent)
+    writeAt(2, 1, "RIFT CASINO  /  RIFT ACCOUNT WALLET", colors.white, themeAccent)
     writeAt(2, 2, subtitle, colors.lightGray)
     writeAt(1, 3, string.rep("=", width), themeHighlight)
 end
@@ -119,6 +128,144 @@ local function waitForAction(buttons)
     end
 end
 
+local function readSavedAccount(path)
+    local storageError
+    if storage then
+        local ok, data, err = pcall(storage.read, path)
+        if ok and data ~= nil then
+            if type(data) ~= "table" or type(data.username) ~= "string"
+                or (data.password ~= nil and type(data.password) ~= "string") then
+                return nil, "Saved Rift account data is invalid."
+            end
+            return data
+        end
+        if not ok then
+            storageError = data
+        elseif err ~= "Stored data was not found." then
+            storageError = err
+        end
+    end
+
+    local absolutePath = "/" .. path
+    if not fs.exists(absolutePath) then
+        if storageError then
+            return nil, "Launcher storage: " .. tostring(storageError)
+                .. "; no root account file exists at " .. absolutePath .. "."
+        end
+        return nil
+    end
+    if fs.isDir(absolutePath) then return nil, "Saved Rift account path is a folder." end
+    local file = fs.open(absolutePath, "r")
+    if not file then return nil, "Could not open the saved Rift account." end
+    local contents = file.readAll()
+    file.close()
+    local ok, data = pcall(textutils.unserializeJSON, contents)
+    if not ok or type(data) ~= "table" or type(data.username) ~= "string"
+        or (data.password ~= nil and type(data.password) ~= "string") then
+        return nil, "Saved Rift account data is invalid."
+    end
+    return data
+end
+
+local function saveAccount(data)
+    local storageError
+    if storage then
+        local ok, saved, err = pcall(storage.write, RIFT_ACCOUNT_PATH, data)
+        if ok and saved then return true end
+        storageError = ok and err or saved
+    end
+    local ok, contents = pcall(textutils.serializeJSON, data)
+    if not ok or type(contents) ~= "string" then
+        return false, "Rift account data could not be serialized."
+    end
+    if not fs.exists("/rift") then fs.makeDir("/rift") end
+    if not fs.isDir("/rift") then return false, "The /rift account path is not a directory." end
+    local file = fs.open("/" .. RIFT_ACCOUNT_PATH, "w")
+    if not file then
+        return false, "Could not save the Rift account to /rift/account.json."
+            .. (storageError and " Launcher storage also failed: " .. tostring(storageError) or "")
+    end
+    local wrote, writeError = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed then
+        return false, "Could not write the saved Rift account: "
+            .. tostring(not wrote and writeError or closeError)
+    end
+    return true
+end
+
+local function loadAccount()
+    local saved, err = readSavedAccount(RIFT_ACCOUNT_PATH)
+    if saved then return type(saved.password) == "string" and saved or nil end
+    if err then return nil, err end
+    saved, err = readSavedAccount(LEGACY_ACCOUNT_PATH)
+    if saved and type(saved.password) == "string" then
+        local written, writeError = saveAccount(saved)
+        if not written then statusMessage = writeError end
+        return saved
+    end
+    return nil, err
+end
+
+local function authenticateAccount(username, password, action)
+    local serverId = rednet.lookup(ACCOUNT_PROTOCOL, ACCOUNT_SERVER)
+    if not serverId then
+        return false, "Rift account server not found. Check that Rift Server is running."
+    end
+    rednet.send(serverId, {
+        type = action,
+        username = username,
+        password = password,
+    }, ACCOUNT_PROTOCOL)
+    local senderId, response = rednet.receive(ACCOUNT_PROTOCOL, TIMEOUT, serverId)
+    if senderId ~= serverId or type(response) ~= "table" then
+        return false, "No response from the Rift account server."
+    end
+    if response.type == "error" then
+        return false, response.message or "Rift account sign-in failed."
+    end
+    if response.type ~= "authenticated" or type(response.username) ~= "string" then
+        return false, "Unexpected response from the Rift account server."
+    end
+    local savedAccount = account
+    if type(savedAccount) ~= "table" or type(savedAccount.username) ~= "string"
+        or savedAccount.username:lower() ~= response.username:lower() then
+        local stored = readSavedAccount(RIFT_ACCOUNT_PATH)
+        savedAccount = type(stored) == "table"
+            and stored.username:lower() == response.username:lower() and stored or {}
+    end
+    savedAccount.username = response.username
+    savedAccount.password = password
+    account = savedAccount
+    local saved, saveError = saveAccount(account)
+    if not saved then
+        return true, "Signed in, but account details could not be saved: " .. tostring(saveError)
+    end
+    return true
+end
+
+local function signOut()
+    local serverId = rednet.lookup(ACCOUNT_PROTOCOL, ACCOUNT_SERVER)
+    if not serverId then
+        statusMessage = "Rift account server not found; could not sign out."
+        return false
+    end
+    rednet.send(serverId, { type = "logout" }, ACCOUNT_PROTOCOL)
+    local senderId, response = rednet.receive(ACCOUNT_PROTOCOL, TIMEOUT, serverId)
+    if senderId ~= serverId or type(response) ~= "table" or response.type ~= "logged_out" then
+        statusMessage = "No confirmation from the Rift account server."
+        return false
+    end
+    account.password = nil
+    local saved, saveError = saveAccount(account)
+    account = nil
+    balance = nil
+    if not saved then
+        statusMessage = "Signed out, but saved credentials could not be cleared: " .. tostring(saveError)
+    end
+    return true
+end
+
 local function nextRequestId()
     transactionSequence = transactionSequence + 1
     return os.getComputerID() .. "-" .. os.epoch("utc") .. "-casino-" .. transactionSequence
@@ -126,7 +273,7 @@ end
 
 local function serverRequest(message)
     local serverId = rednet.lookup(CASINO_PROTOCOL, CASINO_SERVER)
-    if not serverId then return nil, "Casino server offline. Start casino-server.lua." end
+    if not serverId then return nil, "Rift Casino is offline. Start the combined Rift Server." end
     message.requestId = message.requestId or nextRequestId()
     for _ = 1, 2 do
         rednet.send(serverId, message, CASINO_PROTOCOL)
@@ -159,6 +306,58 @@ local function openModems()
         end
     end
     return found
+end
+
+local function readAccountField(label, hidden)
+    drawHeader("RIFT ACCOUNT  /  " .. label)
+    local _, height = term.getSize()
+    writeAt(2, height - 2, "> ", themeAccent)
+    term.setCursorPos(4, height - 2)
+    return read(hidden and "*" or nil)
+end
+
+local function signIn(action)
+    local username = readAccountField("USERNAME")
+    local password = readAccountField("PASSWORD", true)
+    if action == "register" then
+        local confirmation = readAccountField("CONFIRM PASSWORD", true)
+        if password ~= confirmation then
+            statusMessage = "The passwords do not match."
+            return false
+        end
+    end
+    local authenticated, message = authenticateAccount(username, password, action)
+    if not authenticated then
+        statusMessage = tostring(message)
+        return false
+    end
+    statusMessage = message or ("Signed in as " .. account.username .. ".")
+    return true
+end
+
+local function requireSignIn()
+    if account then
+        local authenticated, message = authenticateAccount(
+            account.username, account.password, "login"
+        )
+        if authenticated then return true end
+        statusMessage = "Saved Rift sign-in failed: " .. tostring(message)
+        account = nil
+    end
+    while not account do
+        drawHeader("SIGN IN TO PLAY")
+        writeAt(2, 5, "Casino wallets are saved to your Rift username.", colors.lightGray)
+        writeAt(2, 6, statusMessage, colors.yellow)
+        local buttons = drawButtons({
+            { id = "login", label = "SIGN IN", key = keys.l },
+            { id = "register", label = "CREATE RIFT ACCOUNT", key = keys.c },
+            { id = "quit", label = "QUIT", key = keys.q },
+        })
+        local choice = waitForAction(buttons)
+        if choice == "quit" then return false end
+        if signIn(choice) then return true end
+    end
+    return true
 end
 
 local function gamePath(game)
@@ -240,7 +439,7 @@ end
 local function drawCasinoMenu(options)
     local width, height = term.getSize()
     local bankroll = balance and ("" .. balance .. " CHIPS") or "SERVER OFFLINE"
-    drawHeader("CARD ROOM  /  SERVER-MANAGED CHIP BANK")
+    drawHeader("PLAYER  /  " .. (account and account.username or "SIGNED OUT"))
     writeAt(2, 5, "YOUR BANKROLL", themeAccent)
     writeAt(2, 6, bankroll, colors.yellow)
     local connected = balance ~= nil
@@ -304,21 +503,38 @@ local function startModemsAndInstall()
 end
 
 local requestedGame = select(1, ...)
-startModemsAndInstall()
-if requestedGame == "blackjack" then
-    launchGame(games[1])
-    return
-elseif requestedGame == "holdem" then
-    launchGame(games[2])
-    return
-end
+if not openModems() then error("Attach a modem before starting Rift Casino.") end
+local accountLoadError
+account, accountLoadError = loadAccount()
+if accountLoadError then statusMessage = accountLoadError end
 
+local requestedGameLaunched = false
+local gamesInitialized = false
 while true do
+    if not requireSignIn() then break end
+    if not gamesInitialized then
+        startModemsAndInstall()
+        gamesInitialized = true
+    else
+        updateBalance()
+    end
+    if not requestedGameLaunched and requestedGame == "blackjack" then
+        launchGame(games[1])
+        requestedGameLaunched = true
+    elseif not requestedGameLaunched and requestedGame == "holdem" then
+        launchGame(games[2])
+        requestedGameLaunched = true
+    end
+    if requestedGame and requestedGameLaunched then
+        break
+    end
+
     local options = {
         { id = "blackjack", label = "BLACKJACK", key = keys.b },
         { id = "holdem", label = "HOLD'EM", key = keys.h },
         { id = "install", label = "INSTALL / UPDATE", key = keys.i },
         { id = "refresh", label = "BALANCE", key = keys.r },
+        { id = "signout", label = "SIGN OUT", key = keys.s },
     }
     if balance and balance < 10 then
         table.insert(options, { id = "rebuy", label = "REBUY", key = keys.e })
@@ -345,6 +561,8 @@ while true do
         end
     elseif choice == "quit" then
         break
+    elseif choice == "signout" then
+        signOut()
     end
 end
 

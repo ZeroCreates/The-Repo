@@ -4,6 +4,10 @@ local LOGIN_SERVER_NAME = "rift-server"
 local JOBS_SERVER_NAME = "rift-jobs"
 local MARKET_PROTOCOL = "order_system_v1"
 local MARKET_SERVER_NAME = "rift-market"
+local MAIL_PROTOCOL = "rift_mail_v1"
+local MAIL_SERVER_NAME = "rift-mail"
+local CASINO_PROTOCOL = "rift_casino_wallet_v1"
+local CASINO_SERVER_NAME = "rift-casino"
 local DATA_FILE = "jobs.db"
 local BACKUP_FILE = "jobs.db.bak"
 local TEMP_FILE = "jobs.db.tmp"
@@ -11,6 +15,9 @@ local state
 local sessions = {}
 local handleMarketRequest
 local getMarketDashboardStats
+local handleMailRequest
+local handleCasinoRequest
+local getCasinoStats
 local responseProtocol = PROTOCOL
 
 local function openModems()
@@ -21,7 +28,7 @@ local function openModems()
             found = true
         end
     end
-    if not found then error("Attach a modem before starting the combined Jobs and Market server.") end
+    if not found then error("Attach a modem before starting the combined Rift server.") end
 end
 
 local function readState(path)
@@ -295,7 +302,7 @@ local function handleRequest(senderId, message, protocol)
 end
 
 local startedAt = os.clock()
-local requestsByService = { login = 0, jobs = 0, market = 0 }
+local requestsByService = { login = 0, jobs = 0, market = 0, mail = 0, casino = 0 }
 local lastRequest = "Waiting for network requests"
 
 local function drawDashboard()
@@ -329,6 +336,7 @@ local function drawDashboard()
     end
 
     local market = getMarketDashboardStats()
+    local casino = getCasinoStats()
     local openCount, activeCount, completedCount = 0, 0, 0
     for _, job in ipairs(state.jobs) do
         if job.status == "open" then
@@ -346,7 +354,7 @@ local function drawDashboard()
     term.setBackgroundColor(background)
     term.setTextColor(foreground)
     term.clear()
-    line(1, " RIFT SERVER  /  JOBS + MARKET", foreground, accent)
+    line(1, " RIFT SERVER  /  JOBS + MARKET + MAIL + CASINO", foreground, accent)
     line(2, " ONLINE  |  COMPUTER #" .. os.getComputerID()
         .. "  |  UP " .. string.format("%02d:%02d", math.floor((os.clock() - startedAt) / 60),
             math.floor((os.clock() - startedAt) % 60)), muted)
@@ -365,6 +373,8 @@ local function drawDashboard()
         lineAt(1, 6, " Signed in: " .. sessionCount, muted, nil, jobsColumnWidth)
         lineAt(marketColumn, 6, " Done " .. market.completedOrders
             .. "  |  Cancelled " .. market.cancelledOrders, muted, nil, marketColumnWidth)
+        lineAt(1, 7, " Casino wallets " .. casino.wallets
+            .. "  |  Chips " .. casino.totalChips, good, nil, jobsColumnWidth)
     else
         section(1, 4, "JOBS", width)
         line(5, " Open " .. openCount .. "  Active " .. activeCount
@@ -375,18 +385,22 @@ local function drawDashboard()
             .. "  Products: " .. market.liveProducts .. "/" .. market.totalProducts, good)
         line(9, " Completed: " .. market.completedOrders
             .. "  Cancelled: " .. market.cancelledOrders, muted)
+        line(10, "Casino: " .. casino.wallets .. " wallets / " .. casino.totalChips .. " chips", good)
     end
 
-    local endpointRow = width >= 40 and 8 or 11
+    local endpointRow = width >= 40 and 9 or 12
     section(1, endpointRow, "NETWORK ENDPOINTS", width)
     line(endpointRow + 1, " Login / rift-server  |  Jobs / rift-jobs", muted)
-    line(endpointRow + 2, " Market / rift-market", muted)
+    line(endpointRow + 2, " Market / rift-market  |  Mail / rift-mail", muted)
+    line(endpointRow + 3, " Casino / rift-casino", muted)
 
-    local activityRow = endpointRow + 4
+    local activityRow = endpointRow + 5
     section(1, activityRow, "TRAFFIC", width)
     line(activityRow + 1, " Login " .. requestsByService.login
         .. "  |  Jobs " .. requestsByService.jobs
-        .. "  |  Market " .. requestsByService.market, good)
+        .. "  |  Market " .. requestsByService.market
+        .. "  |  Mail " .. requestsByService.mail
+        .. "  |  Casino " .. requestsByService.casino, good)
     line(activityRow + 2, " Last: " .. lastRequest, muted)
 
     local recentHeaderRow = activityRow + 4
@@ -477,9 +491,42 @@ if type(getMarketDashboardStats) ~= "function" then
 end
 
 state = loadState()
+local mailServerPath = fs.combine(fs.getDir(shell.getRunningProgram()), "rift-server-email.lua")
+local mailServerChunk, mailLoadError = loadfile(mailServerPath)
+if not mailServerChunk then
+    error("Could not load the Rift Mail server module at " .. mailServerPath .. ": "
+        .. tostring(mailLoadError), 0)
+end
+local mailModuleLoaded, createMailServer = pcall(mailServerChunk)
+if not mailModuleLoaded or type(createMailServer) ~= "function" then
+    error("The Rift Mail server module is invalid: " .. tostring(createMailServer), 0)
+end
+handleMailRequest = createMailServer(function(username)
+    local key = accountKey(username)
+    return key ~= nil and state.accounts[key] ~= nil
+end)
+if type(handleMailRequest) ~= "function" then
+    error("The Rift Mail server module did not provide a request handler.", 0)
+end
+local casinoServerPath = fs.combine(fs.getDir(shell.getRunningProgram()), "rift-server-casino.lua")
+local casinoServerChunk, casinoLoadError = loadfile(casinoServerPath)
+if not casinoServerChunk then
+    error("Could not load the Rift Casino server module at " .. casinoServerPath .. ": "
+        .. tostring(casinoLoadError), 0)
+end
+local casinoModuleLoaded, createCasinoServer = pcall(casinoServerChunk)
+if not casinoModuleLoaded or type(createCasinoServer) ~= "function" then
+    error("The Rift Casino server module is invalid: " .. tostring(createCasinoServer), 0)
+end
+handleCasinoRequest, getCasinoStats = createCasinoServer()
+if type(handleCasinoRequest) ~= "function" or type(getCasinoStats) ~= "function" then
+    error("The Rift Casino server module did not provide its required handlers.", 0)
+end
 rednet.host(PROTOCOL, JOBS_SERVER_NAME)
 rednet.host(ACCOUNT_PROTOCOL, LOGIN_SERVER_NAME)
 rednet.host(MARKET_PROTOCOL, MARKET_SERVER_NAME)
+rednet.host(MAIL_PROTOCOL, MAIL_SERVER_NAME)
+rednet.host(CASINO_PROTOCOL, CASINO_SERVER_NAME)
 drawDashboard()
 
 while true do
@@ -504,6 +551,30 @@ while true do
         lastRequest = "Market from #" .. senderId .. "  /  "
             .. tostring(type(message) == "table" and message.type or "invalid request")
         handleMarketRequest(senderId, message)
+    elseif senderId and receivedProtocol == MAIL_PROTOCOL then
+        requestsByService.mail = requestsByService.mail + 1
+        lastRequest = "Rift Mail from #" .. senderId .. "  /  "
+            .. tostring(type(message) == "table" and message.type or "invalid request")
+        local username = sessions[senderId]
+        local response
+        if not username then
+            response = { type = "error", message = "Sign in to your Rift account first." }
+        else
+            response = handleMailRequest(username, message)
+        end
+        rednet.send(senderId, response, MAIL_PROTOCOL)
+    elseif senderId and receivedProtocol == CASINO_PROTOCOL then
+        requestsByService.casino = requestsByService.casino + 1
+        lastRequest = "Rift Casino from #" .. senderId .. "  /  "
+            .. tostring(type(message) == "table" and message.type or "invalid request")
+        local username = sessions[senderId]
+        local response
+        if not username then
+            response = { type = "error", message = "Sign in to your Rift account first." }
+        else
+            response = handleCasinoRequest(username, message)
+        end
+        rednet.send(senderId, response, CASINO_PROTOCOL)
     end
     drawDashboard()
 end

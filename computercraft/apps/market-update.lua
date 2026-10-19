@@ -99,6 +99,16 @@ if config.role == "server" then
         source = "rift-server-market.lua",
         destination = fs.combine(installDirectory, "rift-server-market.lua"),
     })
+    table.insert(files, {
+        name = "rift-server-email.lua",
+        source = "rift-server-email.lua",
+        destination = fs.combine(installDirectory, "rift-server-email.lua"),
+    })
+    table.insert(files, {
+        name = "rift-server-casino.lua",
+        source = "rift-server-casino.lua",
+        destination = fs.combine(installDirectory, "rift-server-casino.lua"),
+    })
 end
 
 local staged = {}
@@ -169,8 +179,8 @@ for _, entry in ipairs(installed) do
 end
 
 if config.role == "server" then
-    print("The combined Jobs and Market server is updated.")
-    print("Stop old jobs-server.lua and market-server.lua processes, then run rift-server.lua.")
+    print("The combined Rift server is updated.")
+    print("Stop old Jobs, Market, email, and Casino servers, then run rift-server.lua.")
     print("Back up and keep jobs.db, orders.db, and products.db in the server's working folder.")
     print("Copy the existing Jobs and Market database files there before first startup.")
 else
