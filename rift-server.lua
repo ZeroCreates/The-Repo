@@ -11,6 +11,9 @@ local CASINO_SERVER_NAME = "rift-casino"
 local DATA_FILE = "jobs.db"
 local BACKUP_FILE = "jobs.db.bak"
 local TEMP_FILE = "jobs.db.tmp"
+local ACCOUNTS_FILE = "accounts.db"
+local ACCOUNTS_BACKUP_FILE = "accounts.db.bak"
+local ACCOUNTS_TEMP_FILE = "accounts.db.tmp"
 local state
 local sessions = {}
 local handleJobsRequest
@@ -44,19 +47,23 @@ local function readState(path)
     end
 end
 
-local function loadState()
-    if not fs.exists(DATA_FILE) and not fs.exists(BACKUP_FILE) then
-        return { nextId = 1, jobs = {}, accounts = {} }
+local function readAccounts(path)
+    if not fs.exists(path) then return nil end
+    local file = fs.open(path, "r")
+    if not file then return nil end
+    local contents = file.readAll()
+    file.close()
+    local ok, saved = pcall(textutils.unserialize, contents)
+    if ok and type(saved) == "table" and type(saved.accounts) == "table" then
+        return saved.accounts
     end
-    local loaded = readState(DATA_FILE) or readState(BACKUP_FILE)
-    if not loaded then error("Could not read saved Jobs data; refusing to overwrite it.") end
-    loaded.nextId = type(loaded.nextId) == "number" and loaded.nextId or 1
-    loaded.jobs = type(loaded.jobs) == "table" and loaded.jobs or {}
-    if loaded.accounts == nil then loaded.accounts = {} end
-    if type(loaded.accounts) ~= "table" then
+end
+
+local function validateAccounts(accounts)
+    if type(accounts) ~= "table" then
         error("Saved Rift account data is invalid; refusing to overwrite it.")
     end
-    for username, account in pairs(loaded.accounts) do
+    for username, account in pairs(accounts) do
         if type(username) ~= "string" or type(account) ~= "table"
             or type(account.username) ~= "string" or account.username:lower() ~= username
             or #account.username < 3 or #account.username > 24
@@ -65,10 +72,37 @@ local function loadState()
             error("Saved Rift account data is invalid; refusing to overwrite it.")
         end
     end
+    return accounts
+end
+
+local function loadState()
+    local loaded
+    if fs.exists(DATA_FILE) or fs.exists(BACKUP_FILE) then
+        loaded = readState(DATA_FILE) or readState(BACKUP_FILE)
+        if not loaded then error("Could not read saved Jobs data; refusing to overwrite it.") end
+    else
+        loaded = { nextId = 1, jobs = {} }
+    end
+    loaded.nextId = type(loaded.nextId) == "number" and loaded.nextId or 1
+    loaded.jobs = type(loaded.jobs) == "table" and loaded.jobs or {}
+
+    local hasEmbeddedAccounts = loaded.accounts ~= nil
+    local accountFileExists = fs.exists(ACCOUNTS_FILE) or fs.exists(ACCOUNTS_BACKUP_FILE)
+    if accountFileExists then
+        local accounts = readAccounts(ACCOUNTS_FILE) or readAccounts(ACCOUNTS_BACKUP_FILE)
+        if not accounts then
+            error("Could not read saved Rift account data; refusing to overwrite it.")
+        end
+        loaded.accounts = validateAccounts(accounts)
+    else
+        local legacyAccounts = loaded.accounts
+        if legacyAccounts == nil then legacyAccounts = {} end
+        loaded.accounts = validateAccounts(legacyAccounts)
+    end
     for _, job in ipairs(loaded.jobs) do
         if type(job.id) == "number" then loaded.nextId = math.max(loaded.nextId, job.id + 1) end
     end
-    return loaded
+    return loaded, hasEmbeddedAccounts
 end
 
 local function saveState()
@@ -77,7 +111,6 @@ local function saveState()
     file.write(textutils.serialize({
         nextId = state.nextId,
         jobs = state.jobs,
-        accounts = state.accounts,
     }))
     file.close()
 
@@ -89,6 +122,25 @@ local function saveState()
         return false, "Could not save Jobs data: " .. tostring(saveError)
     end
     if fs.exists(BACKUP_FILE) then fs.delete(BACKUP_FILE) end
+    return true
+end
+
+local function saveAccounts()
+    local file = fs.open(ACCOUNTS_TEMP_FILE, "w")
+    if not file then return false, "Could not create the temporary Rift account data file." end
+    file.write(textutils.serialize({ accounts = state.accounts }))
+    file.close()
+
+    if fs.exists(ACCOUNTS_BACKUP_FILE) then fs.delete(ACCOUNTS_BACKUP_FILE) end
+    if fs.exists(ACCOUNTS_FILE) then fs.move(ACCOUNTS_FILE, ACCOUNTS_BACKUP_FILE) end
+    local ok, saveError = pcall(fs.move, ACCOUNTS_TEMP_FILE, ACCOUNTS_FILE)
+    if not ok then
+        if fs.exists(ACCOUNTS_BACKUP_FILE) and not fs.exists(ACCOUNTS_FILE) then
+            fs.move(ACCOUNTS_BACKUP_FILE, ACCOUNTS_FILE)
+        end
+        return false, "Could not save Rift account data: " .. tostring(saveError)
+    end
+    if fs.exists(ACCOUNTS_BACKUP_FILE) then fs.delete(ACCOUNTS_BACKUP_FILE) end
     return true
 end
 
@@ -118,13 +170,25 @@ local function registerAccount(senderId, message, protocol)
     end
 
     state.accounts[key] = { username = username, password = password }
-    local saved, saveError = saveState()
+    local saved, saveError = saveAccounts()
     if not saved then
         state.accounts[key] = nil
         return sendError(senderId, saveError, protocol)
     end
     sessions[senderId] = username
     rednet.send(senderId, { type = "authenticated", username = username }, protocol or ACCOUNT_PROTOCOL)
+end
+
+local function persistAccountMigration(legacyAccountsEmbedded)
+    local accountsFileExists = fs.exists(ACCOUNTS_FILE) or fs.exists(ACCOUNTS_BACKUP_FILE)
+    if not accountsFileExists then
+        local saved, saveError = saveAccounts()
+        if not saved then error(saveError, 0) end
+    end
+    if not accountsFileExists or legacyAccountsEmbedded then
+        local saved, saveError = saveState()
+        if not saved then error(saveError, 0) end
+    end
 end
 
 local function loginAccount(senderId, message, protocol)
@@ -534,7 +598,7 @@ local function drawMonitorDashboard(page, pageNumber, pageCount, rowsPerPage, bo
             .. requestsByService.casino, muted)
         add("MAIL  |  " .. getMailStats().mailboxes .. " mailboxes  /  "
             .. getMailStats().messages .. " messages", muted)
-        add("DATA  |  jobs.db  /  market data  /  Rift Mail data  /  casino wallets", muted)
+        add("DATA  |  jobs.db  /  accounts.db  /  market data  /  Rift Mail data  /  casino wallets", muted)
     elseif page.type == "sessions" then
         if page.count == 0 then
             add("No users are currently signed in.", muted)
@@ -645,7 +709,9 @@ if type(getMarketDashboardStats) ~= "function" then
     error("The Market server module did not provide dashboard statistics.", 0)
 end
 
-state = loadState()
+local legacyAccountsEmbedded
+state, legacyAccountsEmbedded = loadState()
+persistAccountMigration(legacyAccountsEmbedded)
 local jobsServerPath = fs.combine(fs.getDir(shell.getRunningProgram()), "rift-server-jobs.lua")
 local jobsServerChunk, jobsLoadError = loadfile(jobsServerPath)
 if not jobsServerChunk then

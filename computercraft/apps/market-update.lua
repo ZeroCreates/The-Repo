@@ -186,7 +186,8 @@ end
 if config.role == "server" then
     print("The combined Rift server is updated.")
     print("Stop old Jobs, Market, email, and Casino servers, then run rift-server.lua.")
-    print("Back up and keep jobs.db, orders.db, and products.db in the server's working folder.")
+    print("Back up and keep jobs.db, accounts.db, orders.db, and products.db in the server's working folder.")
+    print("Existing accounts are moved from jobs.db into accounts.db on first startup.")
     print("Copy the existing Jobs and Market database files there before first startup.")
 else
     print("The " .. config.role .. " system and market-update.lua are updated.")
