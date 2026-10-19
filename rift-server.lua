@@ -156,6 +156,18 @@ local requestsByService = { login = 0, jobs = 0, market = 0, mail = 0, casino = 
 local lastRequest = "Waiting for network requests"
 local monitorErrors = {}
 
+local function drawServerStatus()
+    local width, height = term.getSize()
+    local text = "SERVER ONLINE"
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(term.isColor() and colors.lime or colors.white)
+    term.clear()
+    term.setCursorPos(math.max(1, math.floor((width - #text) / 2) + 1),
+        math.max(1, math.floor((height + 1) / 2)))
+    term.write(text)
+    term.setBackgroundColor(colors.black)
+end
+
 local function drawDashboard()
     local width, height = term.getSize()
     local color = term.isColor()
@@ -685,7 +697,7 @@ rednet.host(ACCOUNT_PROTOCOL, LOGIN_SERVER_NAME)
 rednet.host(MARKET_PROTOCOL, MARKET_SERVER_NAME)
 rednet.host(MAIL_PROTOCOL, MAIL_SERVER_NAME)
 rednet.host(CASINO_PROTOCOL, CASINO_SERVER_NAME)
-drawDashboard()
+drawServerStatus()
 drawMonitorDashboards()
 
 while true do
@@ -744,6 +756,6 @@ while true do
         end
         rednet.send(senderId, response, CASINO_PROTOCOL)
     end
-    drawDashboard()
+    drawServerStatus()
     drawMonitorDashboards()
 end
