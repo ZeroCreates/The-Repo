@@ -1407,6 +1407,11 @@ local function runHomeProgram(programPath, profileContext, ...)
         return api
     end
 
+    local packageState = {
+        loaded = {},
+        preload = {},
+    }
+
     local function createEnvironment(parent, runningProgram)
         term.clear()
         term.setCursorPos(1, 1)
@@ -1569,16 +1574,44 @@ local function runHomeProgram(programPath, profileContext, ...)
         environment.storage = storageModule
         environment._G = environment
         environment.debug = nil
-        environment.package = nil
+        environment.package = packageState
         environment.commands = nil
         environment.require = function(moduleName)
+            if type(moduleName) ~= "string" then
+                error("Module name must be a string.", 2)
+            end
+            local loaded = packageState.loaded[moduleName]
+            if loaded ~= nil then return loaded end
+
+            local loader = packageState.preload[moduleName]
+            if loader ~= nil then
+                if type(loader) ~= "function" then
+                    error("Preloaded module '" .. moduleName .. "' must be a function.", 2)
+                end
+                packageState.loaded[moduleName] = true
+                local ok, result = pcall(loader, moduleName)
+                if not ok then
+                    packageState.loaded[moduleName] = nil
+                    error(result, 2)
+                end
+                if result ~= nil and packageState.loaded[moduleName] == true then
+                    packageState.loaded[moduleName] = result
+                end
+                return packageState.loaded[moduleName]
+            end
+
+            if moduleName == "package" then return packageState end
             if moduleName == "storage" then
+                packageState.loaded.storage = storageModule
                 return storageModule
             end
-            if moduleName ~= "cc.pretty" or type(nativeRequire) ~= "function" then
-                error("Only the storage and built-in cc.pretty modules are available to profile apps.", 2)
+            if moduleName == "cc.pretty" and type(nativeRequire) == "function" then
+                local ok, result = pcall(nativeRequire, moduleName)
+                if not ok then error(result, 2) end
+                packageState.loaded[moduleName] = result
+                return result
             end
-            return nativeRequire(moduleName)
+            error("Only preloaded modules, storage, and the built-in cc.pretty module are available to profile apps.", 2)
         end
         environment.loadfile = nil
         environment.dofile = nil
@@ -1654,6 +1687,7 @@ local function launchSelected(openInTab)
     local previousDirectory = shell.dir()
     shell.setDir(homeDirectory)
     local ok, result
+    local profileProgramError
     if isInHomeDirectory(app.path) then
         launchHomeProgramInTab = openInTab == true
         ok, result = pcall(runHomeProgram, app.path, profileContext, profileContext.homeDirectory)
@@ -1666,7 +1700,23 @@ local function launchSelected(openInTab)
                 and normalizedPath:sub(1, #normalizedHome + 1) ~= normalizedHome .. "/") then
                 error("Only programs in the active profile home can be run here.", 0)
             end
-            return runHomeProgram(path, profileContext, ...)
+            local originalPrintError = printError
+            local runtimeError
+            printError = function(text)
+                runtimeError = tostring(text)
+                originalPrintError(text)
+            end
+            local ran, result = pcall(runHomeProgram, path, profileContext, ...)
+            printError = originalPrintError
+            if not ran then
+                profileProgramError = tostring(result)
+                error(result, 0)
+            end
+            if result == false and runtimeError then
+                profileProgramError = runtimeError
+                return false, runtimeError
+            end
+            return result
         end
         local function listLaunchProfiles()
             return listOtherProfiles(profileContext.user)
@@ -1708,6 +1758,8 @@ local function launchSelected(openInTab)
         printError("Program error: " .. tostring(result))
     elseif result == false then
         printError("The program reported that it did not complete successfully.")
+    elseif profileProgramError then
+        printError("Profile program error: " .. profileProgramError)
     end
     if autoLaunchSession then
         autoLaunchSession = false

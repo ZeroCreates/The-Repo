@@ -1097,20 +1097,15 @@ local function commandPrompt()
                         for index = 2, #arguments do
                             table.insert(programArguments, arguments[index])
                         end
-                        local status, statusColor
                         local ok, result = pcall(runProfileProgram,
                             "/" .. programPath, table.unpack(programArguments))
-                        if not ok then
-                            status = "Program error: " .. tostring(result)
-                            statusColor = colors.red
-                        elseif result == false then
-                            status = "The program did not complete successfully."
-                            statusColor = colors.red
-                        end
                         loadTheme()
                         width = term.getSize()
-                        drawPromptHeader()
-                        if status then writePromptLine(status, statusColor) end
+                        if not ok then
+                            writePromptLine(tostring(result), colors.red)
+                        elseif result ~= false then
+                            drawPromptHeader()
+                        end
                     end
                 end
             end
