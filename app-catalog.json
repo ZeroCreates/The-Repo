@@ -58,6 +58,14 @@
     "description": "Browse and edit files; hold Alt to show hidden files and private data"
   },
   {
+    "name": "System Settings",
+    "source": "computercraft/system/settings.lua",
+    "file": "settings.lua",
+    "scope": "system",
+    "version": "1.0.0",
+    "description": "Manage launcher preferences and user accounts"
+  },
+  {
     "name": "Lua Console",
     "source": "computercraft/apps/lua-console.lua",
     "file": "lua-console.lua",

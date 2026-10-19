@@ -3,6 +3,57 @@ local SERVER_NAME = "jobs_server"
 local TIMEOUT = 5
 local PROFILE_FILE = "jobs-profile.txt"
 local playerName
+local themes = {
+    { accent = colors.cyan, highlight = colors.blue },
+    { accent = colors.lime, highlight = colors.green },
+    { accent = colors.orange, highlight = colors.red },
+    { accent = colors.purple, highlight = colors.magenta },
+    { accent = colors.cyan, highlight = colors.blue },
+}
+
+local function loadTheme()
+    if type(launcherTheme) == "table"
+        and type(launcherTheme.accent) == "number"
+        and type(launcherTheme.highlight) == "number" then
+        return term.isColor() and launcherTheme.accent or colors.gray,
+            term.isColor() and launcherTheme.highlight or colors.gray
+    end
+    local themeIndex = type(launcherTheme) == "number" and launcherTheme or nil
+    local saved
+    if type(themeIndex) ~= "number" or not themes[themeIndex] or themeIndex == #themes then
+        local path = "/.launcher/settings.json"
+        if fs.exists(path) then
+            local file = fs.open(path, "r")
+            if file then
+                local contents = file.readAll()
+                file.close()
+                local ok, parsed = pcall(textutils.unserializeJSON, contents)
+                if ok and type(parsed) == "table"
+                    and type(parsed.theme) == "number" and themes[parsed.theme] then
+                    themeIndex = parsed.theme
+                    saved = parsed
+                end
+            end
+        end
+    end
+    if themeIndex == #themes and type(saved) == "table"
+        and term.isColor() and type(term.setPaletteColor) == "function"
+        and type(saved.customAccent) == "string" and saved.customAccent:match("^#?%x%x%x%x%x%x$")
+        and type(saved.customHighlight) == "string" and saved.customHighlight:match("^#?%x%x%x%x%x%x$") then
+        local function applyHex(slot, hex)
+            hex = hex:gsub("^#", "")
+            term.setPaletteColor(slot, tonumber(hex:sub(1, 2), 16) / 255,
+                tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255)
+        end
+        applyHex(colors.cyan, saved.customAccent)
+        applyHex(colors.blue, saved.customHighlight)
+    end
+    local theme = themes[themeIndex] or themes[1]
+    return term.isColor() and theme.accent or colors.gray,
+        term.isColor() and theme.highlight or colors.gray
+end
+
+local themeAccent, themeHighlight = loadTheme()
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -23,15 +74,15 @@ end
 local function drawHeader(title, subtitle)
     local width = term.getSize()
     clearScreen()
-    writeAt(1, 1, string.rep(" ", width), colors.white, colors.cyan)
-    writeAt(2, 1, title, colors.white, colors.cyan)
+    writeAt(1, 1, string.rep(" ", width), colors.white, themeAccent)
+    writeAt(2, 1, title, colors.white, themeAccent)
     writeAt(2, 2, subtitle, colors.lightGray)
 end
 
 local function readText(label)
     drawHeader("RIFT JOBS  /  INPUT", label)
     local _, height = term.getSize()
-    writeAt(2, height - 1, "> ", colors.lime)
+    writeAt(2, height - 1, "> ", themeAccent)
     term.setCursorPos(4, height - 1)
     return read()
 end
@@ -47,8 +98,8 @@ local function drawButtons(options)
         local left = math.floor(column * width / columns) + 1
         local right = math.floor((column + 1) * width / columns)
         local label = ("[ " .. option.label .. " ]"):sub(1, right - left + 1)
-        writeAt(left, row, string.rep(" ", right - left + 1), colors.black, colors.lightBlue)
-        writeAt(left, row, label, colors.black, colors.lightBlue)
+        writeAt(left, row, string.rep(" ", right - left + 1), colors.black, themeHighlight)
+        writeAt(left, row, label, colors.black, themeHighlight)
         table.insert(buttons, {
             id = option.id,
             key = option.key,
@@ -149,7 +200,7 @@ local function drawJobs(title, subtitle, jobs, page, showStatus)
     local perPage = math.max(1, math.floor((height - 10) / 4))
     local pageCount = math.max(1, math.ceil(#jobs / perPage))
     page = math.max(1, math.min(page, pageCount))
-    writeAt(2, 4, #jobs == 0 and "No jobs to show." or ("JOBS  " .. #jobs), colors.lightBlue)
+    writeAt(2, 4, #jobs == 0 and "No jobs to show." or ("JOBS  " .. #jobs), themeAccent)
     local first = (page - 1) * perPage + 1
     local last = math.min(#jobs, first + perPage - 1)
     local clickableRows = {}

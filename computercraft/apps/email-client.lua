@@ -1,11 +1,8 @@
 local PROTOCOL = "launcher_email_v1"
-local NOTIFICATION_CONTROL_PROTOCOL = "launcher_email_notifications_v1"
-local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
 local SERVER_NAME = "email_server"
 local TIMEOUT = 5
 local ACCOUNT_PATH = ".email-account.json"
 local STORED_ACCOUNT_PATH = "email/account.json"
-local notifications = require("notifications")
 local storageLoaded, storage = pcall(require, "storage")
 if not storageLoaded or type(storage) ~= "table"
     or type(storage.read) ~= "function" or type(storage.write) ~= "function"
@@ -130,32 +127,6 @@ local function request(payload)
         return nil, response.message or "The email server rejected the request."
     end
     return response
-end
-
-local function subscribeForNotifications()
-    if not account then return false, "Sign in to enable email notifications." end
-    local response, err = notifications.request(NOTIFICATION_CONTROL_PROTOCOL, {
-        type = "subscribe",
-        email = account.email,
-        password = account.password,
-    }, SERVER_NAME, TIMEOUT)
-    if not response then return false, err end
-    if response.type ~= "subscribed" then return false, "Email server did not confirm the notification subscription." end
-    return true
-end
-
-local function unsubscribeFromNotifications()
-    if not account then return false, "Sign in to disable email notifications." end
-    local response, err = notifications.request(NOTIFICATION_CONTROL_PROTOCOL, {
-        type = "unsubscribe",
-        email = account.email,
-        password = account.password,
-    }, SERVER_NAME, TIMEOUT)
-    if not response then return false, err end
-    if response.type ~= "unsubscribed" then
-        return false, "Email server did not confirm notification unsubscription."
-    end
-    return true
 end
 
 local function choose(title, subtitle, choices)
@@ -329,19 +300,8 @@ local function signOut()
         notice("SIGN OUT", deleteError)
         return false
     end
-    local unlistened, unlistenError = notifications.unlisten(
-        NOTIFICATION_PROTOCOL, "source", "Email"
-    )
-    local unsubscribed, unsubscribeError = unsubscribeFromNotifications()
     account = nil
     currentFolder = "Inbox"
-    if not unsubscribed then
-        notice("EMAIL NOTIFICATIONS", "Signed out, but the server unsubscribe failed: "
-            .. tostring(unsubscribeError))
-    elseif not unlistened and unlistenError ~= "No matching listener is registered for that protocol." then
-        notice("EMAIL NOTIFICATIONS", "Signed out, but the local listener could not be removed: "
-            .. tostring(unlistenError))
-    end
     return true
 end
 
@@ -715,10 +675,7 @@ local function createAccount()
         notice("CREATE ACCOUNT", saveError)
         return
     end
-    local subscribed, subscriptionError = subscribeForNotifications()
-    notice("CREATE ACCOUNT", subscribed
-        and ("Account created: " .. account.email .. "\nEmail notifications enabled.")
-        or ("Account created: " .. account.email .. "\n" .. subscriptionError))
+    notice("CREATE ACCOUNT", "Account created: " .. account.email)
 end
 
 local function signIn()
@@ -739,23 +696,11 @@ local function signIn()
         notice("SIGN IN", saveError)
         return
     end
-    local subscribed, subscriptionError = subscribeForNotifications()
-    if not subscribed then notice("EMAIL NOTIFICATIONS", subscriptionError) end
 end
 
 if not profileHome then error("Could not determine the launcher profile home.") end
 openModems()
-local listenerRegistered, listenerError = notifications.listen(
-    NOTIFICATION_PROTOCOL, "title", "message", "Email", "source", "Email"
-)
-if not listenerRegistered then
-    notice("EMAIL NOTIFICATIONS", listenerError)
-end
 account = loadAccount()
-if account then
-    local subscribed, subscriptionError = subscribeForNotifications()
-    if not subscribed then notice("EMAIL NOTIFICATIONS", subscriptionError) end
-end
 
 while true do
     if account then

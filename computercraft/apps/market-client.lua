@@ -1,19 +1,8 @@
 local PROTOCOL = "order_system_v1"
-local CONTROL_PROTOCOL = "launcher_market_notifications_v1"
-local NOTIFICATION_PROTOCOL = "launcher_notifications_v1"
 local SERVER_NAME = "order_server"
 local TIMEOUT = 5
-local FOLLOWED_ORDERS_FILE = "market-followed-orders.json"
-local FOLLOWED_ORDERS_FILE_STORED = "market/"..FOLLOWED_ORDERS_FILE
 local USERDATA_FILE = "market-userdata.json"
 local USERDATA_FILE_STORED = "market/"..USERDATA_FILE
-local MARKET_USER = "Market customer"
-local notificationsLoaded, notifications = pcall(require, "notifications")
-if not notificationsLoaded or type(notifications) ~= "table"
-    or type(notifications.send) ~= "function" or type(notifications.request) ~= "function"
-    or type(notifications.listen) ~= "function" or type(notifications.unlisten) ~= "function"then
-    notifications = nil
-end
 local storageLoaded, storage = pcall(require, "storage")
 if not storageLoaded or type(storage) ~= "table"
     or type(storage.read) ~= "function" or type(storage.write) ~= "function"
@@ -21,8 +10,58 @@ if not storageLoaded or type(storage) ~= "table"
     storage = nil
 end
 local mouseEnabled = false
-local followedOrders = {}
 local userData = {}
+local themes = {
+    { accent = colors.cyan, highlight = colors.blue },
+    { accent = colors.lime, highlight = colors.green },
+    { accent = colors.orange, highlight = colors.red },
+    { accent = colors.purple, highlight = colors.magenta },
+    { accent = colors.cyan, highlight = colors.blue },
+}
+
+local function loadTheme()
+    if type(launcherTheme) == "table"
+        and type(launcherTheme.accent) == "number"
+        and type(launcherTheme.highlight) == "number" then
+        return term.isColor() and launcherTheme.accent or colors.gray,
+            term.isColor() and launcherTheme.highlight or colors.gray
+    end
+    local themeIndex = type(launcherTheme) == "number" and launcherTheme or nil
+    local saved
+    if type(themeIndex) ~= "number" or not themes[themeIndex] or themeIndex == #themes then
+        local path = "/.launcher/settings.json"
+        if fs.exists(path) then
+            local file = fs.open(path, "r")
+            if file then
+                local contents = file.readAll()
+                file.close()
+                local ok, parsed = pcall(textutils.unserializeJSON, contents)
+                if ok and type(parsed) == "table"
+                    and type(parsed.theme) == "number" and themes[parsed.theme] then
+                    themeIndex = parsed.theme
+                    saved = parsed
+                end
+            end
+        end
+    end
+    if themeIndex == #themes and type(saved) == "table"
+        and term.isColor() and type(term.setPaletteColor) == "function"
+        and type(saved.customAccent) == "string" and saved.customAccent:match("^#?%x%x%x%x%x%x$")
+        and type(saved.customHighlight) == "string" and saved.customHighlight:match("^#?%x%x%x%x%x%x$") then
+        local function applyHex(slot, hex)
+            hex = hex:gsub("^#", "")
+            term.setPaletteColor(slot, tonumber(hex:sub(1, 2), 16) / 255,
+                tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255)
+        end
+        applyHex(colors.cyan, saved.customAccent)
+        applyHex(colors.blue, saved.customHighlight)
+    end
+    local theme = themes[themeIndex] or themes[1]
+    return term.isColor() and theme.accent or colors.gray,
+        term.isColor() and theme.highlight or colors.gray
+end
+
+local themeAccent, themeHighlight = loadTheme()
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -43,15 +82,15 @@ end
 local function drawHeader(title, subtitle)
     local width = term.getSize()
     clearScreen()
-    writeAt(1, 1, string.rep(" ", width), colors.white, colors.cyan)
-    writeAt(2, 1, title, colors.white, colors.cyan)
+    writeAt(1, 1, string.rep(" ", width), colors.white, themeAccent)
+    writeAt(2, 1, title, colors.white, themeAccent)
     writeAt(2, 2, subtitle, colors.lightGray)
 end
 
 local function sectionTitle(y, title)
     local width = term.getSize()
-    writeAt(1, y, string.rep(" ", width), colors.white, colors.blue)
-    writeAt(2, y, title, colors.white, colors.blue)
+    writeAt(1, y, string.rep(" ", width), colors.white, themeHighlight)
+    writeAt(2, y, title, colors.white, themeHighlight)
 end
 
 local function drawChoices(help)
@@ -80,7 +119,7 @@ local function drawChoices(help)
         local left = math.floor(column * width / columns) + 1
         local right = math.floor((column + 1) * width / columns)
         local label = ("[" .. option.label .. "]"):sub(1, right - left + 1)
-        writeAt(left, row, label, colors.black, colors.lightBlue)
+        writeAt(left, row, label, colors.black, themeHighlight)
         table.insert(buttons, { key = option.key, row = row, left = left, right = right })
     end
     return buttons
@@ -90,7 +129,7 @@ local function readChoice(help)
     if not mouseEnabled then
         local _, height = term.getSize()
         writeAt(2, height - 2, help, colors.lightGray)
-        writeAt(2, height - 1, "> ", colors.lime)
+        writeAt(2, height - 1, "> ", themeAccent)
         term.setCursorPos(4, height - 1)
         return read():lower()
     end
@@ -131,71 +170,7 @@ local function openModems()
     mouseEnabled = term.isColor()
 end
 
-local function loadFollowedOrders()
-    followedOrders = {}
-    if storage then
-        local data, storageError = storage.read(FOLLOWED_ORDERS_FILE_STORED)
-        if data ~= nil then
-            local ok, saved = pcall(textutils.unserializeJSON, data)
-            if not ok or type(saved) ~= "table" then return end
-            for _, entry in ipairs(saved) do
-                if type(entry) == "table" and type(entry.orderId) == "number"
-                    and entry.orderId % 1 == 0 and type(entry.status) == "string" then
-                    followedOrders[entry.orderId] = { orderId = entry.orderId, status = entry.status }
-                end
-            end
-        end
-        if storageError and storageError ~= "Stored data was not found." then
-            error("Could not load the saved email account from private storage: " .. storageError)
-        end
-    else
-        if not fs.exists(FOLLOWED_ORDERS_FILE) then return end
-        local file = fs.open(FOLLOWED_ORDERS_FILE, "r")
-        if not file then return end
-        local contents = file.readAll()
-        file.close()
-        local ok, saved = pcall(textutils.unserializeJSON, contents)
-        if not ok or type(saved) ~= "table" then return end
-        for _, entry in ipairs(saved) do
-            if type(entry) == "table" and type(entry.orderId) == "number"
-                and entry.orderId % 1 == 0 and type(entry.status) == "string" then
-                followedOrders[entry.orderId] = { orderId = entry.orderId, status = entry.status }
-            end
-        end
-    end
-end
-
-local function saveFollowedOrders()
-    local saved = {}
-    for _, entry in pairs(followedOrders) do
-        table.insert(saved, { orderId = entry.orderId, status = entry.status })
-    end
-    table.sort(saved, function(left, right) return left.orderId < right.orderId end)
-    
-    if storage then
-        local saved, saveError = storage.write(FOLLOWED_ORDERS_FILE_STORED, #saved == 0 and "[]" or textutils.serializeJSON(saved))
-        if not saved then
-            return false, "Could not save account details to private storage: "
-                .. tostring(saveError or "unknown storage error")
-        end
-        if fs.exists(FOLLOWED_ORDERS_FILE) then
-            local ok, deleteError = pcall(fs.delete, FOLLOWED_ORDERS_FILE)
-            if not ok then
-                return false, "Account was saved to private storage, but the old profile copy could not be removed: "
-                    .. tostring(deleteError)
-            end
-        end
-        return true
-    end
-    
-    local file = fs.open(FOLLOWED_ORDERS_FILE, "w")
-    if not file then return false end
-    file.write(#saved == 0 and "[]" or textutils.serializeJSON(saved))
-    file.close()
-    return true
-end
 local function loadUserData()
-    followedOrders = {}
     if storage then
         local data, storageError = storage.read(USERDATA_FILE_STORED)
         if data ~= nil then
@@ -239,98 +214,6 @@ local function saveUserData()
     file.close()
     return true
 end
-local function sendFollowControl(message)
-    message.user = MARKET_USER
-    local response, err = notifications.request(CONTROL_PROTOCOL, message, SERVER_NAME, TIMEOUT)
-    if not response then return false, err end
-    if response.type ~= "watch_order_ack" or response.success ~= true then
-        return false, type(response.message) == "string"
-            and response.message or "The order server did not confirm this notification subscription."
-    end
-    return true
-end
-
-local function registerFollowedOrders()
-    local orderIds = {}
-    for orderId in pairs(followedOrders) do
-        table.insert(orderIds, orderId)
-    end
-    table.sort(orderIds)
-
-    local failures = {}
-    for _, orderId in ipairs(orderIds) do
-        local registered, err = sendFollowControl({
-            type = "watch_order",
-            orderId = orderId,
-        })
-        if not registered then
-            table.insert(failures, "#" .. tostring(orderId) .. ": " .. tostring(err))
-        end
-    end
-    if #failures > 0 then
-        showNotice("ORDER NOTIFICATIONS", "Could not activate follows: " .. table.concat(failures, "; "))
-    end
-end
-
-local function saveKnownOrderStatus(order)
-    local followed = followedOrders[order.id]
-    if followed and followed.status ~= order.status then
-        local previousStatus = followed.status
-        followed.status = order.status
-        if not saveFollowedOrders() then followed.status = previousStatus end
-    end
-end
-
-local function promptFollowOrder(order)
-    if notifications == nil then
-        return
-    end
-    if type(order.customerId) ~= "number" or order.customerId ~= os.getComputerID() then
-        return
-    end
-    local following = followedOrders[order.id] ~= nil
-    drawHeader("ORDER NOTIFICATIONS", "FOLLOW STATUS CHANGES FOR THIS ORDER")
-    writeAt(2, 5, "Order #" .. order.id .. " is " .. order.status:upper() .. ".", colors.white)
-    writeAt(2, 6, following and "You are following this order." or "You are not following this order.", colors.lightGray)
-    local choice = readChoice(following and "u unfollow|b back" or "f follow|b back")
-    if choice == "f" and not following then
-        followedOrders[order.id] = { orderId = order.id, status = order.status }
-        if saveFollowedOrders() then
-            local registered, registerError = sendFollowControl({
-                type = "watch_order",
-                orderId = order.id,
-            })
-            if registered then
-                showNotice("FOLLOWING ORDER", "You will be notified when this order's status changes.")
-            else
-                showNotice("FOLLOW NOT ACTIVE", "The order was saved, but the server did not activate notifications: "
-                    .. tostring(registerError))
-            end
-        else
-            followedOrders[order.id] = nil
-            showNotice("FOLLOW NOT SAVED", "Could not save your followed order.")
-        end
-    elseif choice == "u" and following then
-        local savedEntry = followedOrders[order.id]
-        followedOrders[order.id] = nil
-        if saveFollowedOrders() then
-            local unregistered, unregisterError = sendFollowControl({
-                type = "unwatch_order",
-                orderId = order.id,
-            })
-            if unregistered then
-                showNotice("UNFOLLOWED ORDER", "Status notifications are disabled for this order.")
-            else
-                showNotice("UNFOLLOW SAVED", "Could not confirm notification removal: "
-                    .. tostring(unregisterError))
-            end
-        else
-            followedOrders[order.id] = savedEntry
-            showNotice("UNFOLLOW NOT SAVED", "Could not save your followed orders.")
-        end
-    end
-end
-
 local function request(message)
     local serverId = rednet.lookup(PROTOCOL, SERVER_NAME)
     if not serverId then
@@ -441,7 +324,7 @@ local function renderCatalog(products, cart, errorMessage, page)
             local product = products[index]
             local y = 5 + (index - first) * 2
             table.insert(visibleProducts, { product = product, firstRow = y })
-            writeAt(2, y, "#" .. product.id, colors.cyan)
+            writeAt(2, y, "#" .. product.id, themeAccent)
             writeAt(8, y, product.name:sub(1, math.max(1, width - 20)), colors.white)
             writeAt(width - 9, y, money(product.price), colors.lime)
             writeAt(4, y + 1, "BY " .. product.providerName .. "  |  IN CART: "
@@ -534,7 +417,7 @@ local function cartPage(products, cart)
     if #entries == 0 then
         writeAt(2, 6, "Your cart is empty.", colors.lightGray)
     else
-        writeAt(2, height - 4, "ESTIMATE  " .. money(total), colors.white, colors.blue)
+        writeAt(2, height - 4, "ESTIMATE  " .. money(total), colors.white, themeHighlight)
         if visible < #entries then
             writeAt(2, height - 3, "Some items are below the visible area.", colors.yellow)
         end
@@ -559,7 +442,7 @@ local function showOrder(order)
     sectionTitle(4, "ORDER SUMMARY")
     local width, height = term.getSize()
     writeAt(2, 5, "MAIL PAYMENT WITH REFERENCE: "
-        .. (order.reference or string.format("ORD-%06d", order.id)), colors.cyan)
+        .. (order.reference or string.format("ORD-%06d", order.id)), themeAccent)
     local providerAddress = order.providerAddress or "Not registered"
     local providerLabel = "PAY PROVIDER: "
     local addressWidth = math.max(1, width - #providerLabel - 2)
@@ -582,7 +465,7 @@ local function showOrder(order)
     if visible < #order.items then
         writeAt(2, height - 3, "See the printed receipt for remaining items.", colors.yellow)
     end
-    writeAt(2, height - 4, "TOTAL  " .. money(order.total), colors.white, colors.blue)
+    writeAt(2, height - 4, "TOTAL  " .. money(order.total), colors.white, themeHighlight)
     if mouseEnabled then
         readChoice("b back")
     else
@@ -661,7 +544,6 @@ local function placeOrder(cart)
         showNotice("ORDER SAVED, PRINT FAILED", tostring(printError))
     end
     showOrder(response.order)
-    promptFollowOrder(response.order)
 end
 
 local function checkStatus()
@@ -678,11 +560,7 @@ local function checkStatus()
         showNotice("ORDER NOT FOUND", err)
         return
     end
-    if response.order.customerId == os.getComputerID() then
-        saveKnownOrderStatus(response.order)
-    end
     showOrder(response.order)
-    promptFollowOrder(response.order)
     if response.order.status ~= "shipping" then return end
 
     drawHeader("DELIVERY CONFIRMATION", "ONLY CONFIRM AFTER THE ORDER ARRIVES")
@@ -703,21 +581,9 @@ local function checkStatus()
         return
     end
     showOrder(completed.order)
-    saveKnownOrderStatus(completed.order)
-    promptFollowOrder(completed.order)
 end
 
 openModems()
-if notifications ~= nil then
-    local listenerRegistered, listenerError = notifications.listen(
-        NOTIFICATION_PROTOCOL, "title", "message", "Market", "source", "Market"
-    )
-    if not listenerRegistered then
-        showNotice("ORDER NOTIFICATIONS", listenerError)
-    end
-    loadFollowedOrders()
-    registerFollowedOrders()
-end
 local cart = {}
 local page = 1
 while true do

@@ -2,14 +2,12 @@ local LAUNCHER_NAME = "launcher.lua"
 local SYSTEM_APP_DIRECTORY = "/.launcher/apps"
 local DOWNLOADER_PATH = SYSTEM_APP_DIRECTORY .. "/app-downloader.lua"
 local SYSTEM_FILE_BROWSER_PATH = SYSTEM_APP_DIRECTORY .. "/file-browser.lua"
+local SETTINGS_PROGRAM_PATH = SYSTEM_APP_DIRECTORY .. "/settings.lua"
 local REPOSITORY_BASE_URL = "https://raw.githubusercontent.com/ZeroCreates/The-Repo/main/"
 local nativeFs = fs
 local nativeOs = os
 local nativeRequire = require
-local nativeTerm = term.current()
-local nativeParallel = parallel
 local nativeMultishell = multishell
-local nativeWindow = window
 local apps = {}
 local selected = 1
 local firstVisible = 1
@@ -17,15 +15,8 @@ local message = "Select a program to launch."
 local shiftDown = false
 local screen = "apps"
 local selectedSetting = 1
-local notificationListenerPage = 1
-local notificationHistory = {}
-local activeNotificationPopup
-local activeNotificationPopupTimer
 local currentUser
 local homeDirectory
-local notificationConfigRevision = 0
-local apiNotificationQueue = {}
-local MAX_API_NOTIFICATION_QUEUE = 50
 local profilePasswords = {}
 local profileAdmins = {}
 local authorizedProfiles = {}
@@ -41,23 +32,54 @@ local THEMES = {
     { name = "Forest", accent = colors.lime, highlight = colors.green },
     { name = "Sunset", accent = colors.orange, highlight = colors.red },
     { name = "Violet", accent = colors.purple, highlight = colors.magenta },
+    { name = "Custom", accent = colors.cyan, highlight = colors.blue },
 }
+local DEFAULT_CYAN = { 0.298, 0.600, 0.698 }
+local DEFAULT_BLUE = { 0.200, 0.400, 0.800 }
+local function validHexColor(value)
+    return type(value) == "string" and value:match("^#?%x%x%x%x%x%x$") ~= nil
+end
+
+local function hexToRgb(value)
+    value = value:gsub("^#", "")
+    return tonumber(value:sub(1, 2), 16) / 255,
+        tonumber(value:sub(3, 4), 16) / 255,
+        tonumber(value:sub(5, 6), 16) / 255
+end
+
 local settings = {
     theme = 1,
+    customAccent = "#4C99B2",
+    customHighlight = "#3366CC",
     alphabetical = true,
 }
 
-local function readJSONFile(path)
-    if not nativeFs.exists(path) or nativeFs.isDir(path) then return nil end
-    local file = nativeFs.open(path, "r")
-    if not file then return nil, "Could not read " .. path .. "." end
-    local contents = file.readAll()
-    file.close()
-    local ok, value = pcall(textutils.unserializeJSON, contents)
-    if not ok or type(value) ~= "table" then
-        return nil, "Invalid JSON data in " .. path .. "."
+local function applyTheme()
+    if not term.isColor() then return true end
+    if settings.theme == #THEMES then
+        if type(term.setPaletteColor) ~= "function" then
+            message = "Custom themes require a color terminal with palette support."
+            return false
+        end
+        local accentRed, accentGreen, accentBlue = hexToRgb(settings.customAccent)
+        local highlightRed, highlightGreen, highlightBlue = hexToRgb(settings.customHighlight)
+        term.setPaletteColor(colors.cyan, accentRed, accentGreen, accentBlue)
+        term.setPaletteColor(colors.blue, highlightRed, highlightGreen, highlightBlue)
+    elseif type(term.setPaletteColor) == "function" then
+        term.setPaletteColor(colors.cyan, table.unpack(DEFAULT_CYAN))
+        term.setPaletteColor(colors.blue, table.unpack(DEFAULT_BLUE))
     end
-    return value
+    return true
+end
+
+local function getThemeInfo()
+    local theme = THEMES[settings.theme] or THEMES[1]
+    return {
+        accent = theme.accent,
+        highlight = theme.highlight,
+        accentHex = settings.customAccent,
+        highlightHex = settings.customHighlight,
+    }
 end
 
 local function readPassword()
@@ -76,98 +98,6 @@ local function readPassword()
     nativeOs.pullEventRaw = originalPullEventRaw
     if not ok then error(password, 0) end
     return password
-end
-
-local function notificationConfigPath(profilePath)
-    if type(profilePath) ~= "string" then
-        return nil, "No active profile is available for notification settings."
-    end
-    local normalizedProfile = profilePath:gsub("^/+", ""):gsub("/+$", "")
-    local username = normalizedProfile:match("^users/([%w_-]+)$")
-    if not username then return nil, "The active profile path is invalid." end
-
-    local target = nativeFs.combine("/", ".launcher", "user-data", username,
-        "notifications", "listeners.json")
-    local legacy = nativeFs.combine("/", normalizedProfile, "notification-listeners.json")
-    if not nativeFs.exists(target) and nativeFs.exists(legacy) then
-        local directory = nativeFs.getDir(target)
-        local created, createError = pcall(nativeFs.makeDir, directory)
-        if not created then
-            return nil, "Could not create private notification settings folder: " .. tostring(createError)
-        end
-        local moved, moveError = pcall(nativeFs.move, legacy, target)
-        if not moved then
-            return nil, "Could not move notification settings into private storage: " .. tostring(moveError)
-        end
-    end
-    return target
-end
-
-local function writeNotificationConfig(path, config)
-    local serialized, contents = pcall(textutils.serializeJSON, config)
-    if not serialized or type(contents) ~= "string" then
-        return false, "Could not serialize notification listener settings."
-    end
-
-    local directory = nativeFs.getDir(path)
-    local made, makeError = pcall(nativeFs.makeDir, directory)
-    if not made then
-        return false, "Could not create notification settings folder: " .. tostring(makeError)
-    end
-
-    local temporary = path .. ".tmp"
-    local backup = path .. ".bak"
-    local file, openError = nativeFs.open(temporary, "w")
-    if not file then
-        return false, "Could not create notification listener settings: "
-            .. tostring(openError or "file could not be opened")
-    end
-    local wrote, writeError = pcall(file.write, contents)
-    local closed, closeError = pcall(file.close)
-    if not wrote or not closed then
-        if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
-        return false, "Could not write notification listener settings: "
-            .. tostring(not wrote and writeError or closeError)
-    end
-
-    if nativeFs.exists(backup) then nativeFs.delete(backup) end
-    if nativeFs.exists(path) then
-        local backedUp, backupError = pcall(nativeFs.move, path, backup)
-        if not backedUp then
-            nativeFs.delete(temporary)
-            return false, "Could not back up notification settings: " .. tostring(backupError)
-        end
-    end
-
-    local moved, moveError = pcall(nativeFs.move, temporary, path)
-    if not moved then
-        if nativeFs.exists(temporary) then nativeFs.delete(temporary) end
-        if nativeFs.exists(backup) then
-            local restored, restoreError = pcall(nativeFs.move, backup, path)
-            if not restored then
-                return false, "Could not save notification settings: " .. tostring(moveError)
-                    .. "; restoring the previous file also failed: " .. tostring(restoreError)
-            end
-        end
-        return false, "Could not save notification settings: " .. tostring(moveError)
-    end
-
-    local saved, saveError = readJSONFile(path)
-    if not saved or type(saved.listeners) ~= "table" then
-        if nativeFs.exists(path) then nativeFs.delete(path) end
-        if nativeFs.exists(backup) then
-            local restored, restoreError = pcall(nativeFs.move, backup, path)
-            if not restored then
-                return false, "Saved notification settings could not be verified: "
-                    .. tostring(saveError) .. "; restoring the previous file also failed: "
-                    .. tostring(restoreError)
-            end
-        end
-        return false, "Saved notification settings could not be verified: " .. tostring(saveError)
-    end
-
-    if nativeFs.exists(backup) then nativeFs.delete(backup) end
-    return true
 end
 
 local function isLuaFile(path)
@@ -192,7 +122,14 @@ local function loadSettings()
     if type(saved.theme) == "number" and THEMES[saved.theme] then
         settings.theme = saved.theme
     end
+    if validHexColor(saved.customAccent) then
+        settings.customAccent = "#" .. saved.customAccent:gsub("^#", ""):upper()
+    end
+    if validHexColor(saved.customHighlight) then
+        settings.customHighlight = "#" .. saved.customHighlight:gsub("^#", ""):upper()
+    end
     if type(saved.alphabetical) == "boolean" then settings.alphabetical = saved.alphabetical end
+    applyTheme()
 end
 
 local function saveSettings()
@@ -570,16 +507,13 @@ local function chooseUser()
         print("Admin profiles can use sudo to access other profiles.")
         local adminExists = next(profileAdmins) ~= nil
         if adminExists then
-            print("An admin profile already exists; only standard profiles can be created.")
+            print("An admin profile already exists; only standard profiles can be created here.")
         else
-            print("Choose whether " .. username .. " should be an admin.")
+            print("The first profile must be an admin.")
         end
-        local adminButtons = {
-            { label = "STANDARD PROFILE", admin = false },
-        }
-        if not adminExists then
-            table.insert(adminButtons, { label = "MAKE ADMIN", admin = true })
-        end
+        local adminButtons = adminExists
+            and { { label = "STANDARD PROFILE", admin = false } }
+            or { { label = "MAKE ADMIN", admin = true } }
         table.insert(adminButtons, { label = "CANCEL", cancel = true })
         local width, height = term.getSize()
         local slotWidth = math.max(1, math.floor(width / #adminButtons))
@@ -1031,8 +965,7 @@ local function draw()
     term.setBackgroundColor(backgroundColor)
     term.setCursorPos(2, 2)
     term.setTextColor(mutedColor)
-    local subtitle = screen == "apps" and "YOUR PROGRAMS"
-        or (screen == "notifications" and "LISTENING NOTIFICATIONS" or "LAUNCHER CUSTOMISATION")
+    local subtitle = screen == "apps" and "YOUR PROGRAMS" or "LAUNCHER CUSTOMISATION"
     term.write(subtitle:sub(1, math.max(0, width - 2)))
 
     if screen == "apps" then
@@ -1072,7 +1005,7 @@ local function draw()
             "Sort programs alphabetically: " .. (settings.alphabetical and "On" or "Off"),
             "UPDATE LAUNCHER",
             "WIPE ENTIRE COMPUTER",
-            "NOTIFICATIONS",
+            "OPEN SYSTEM SETTINGS",
         }
         for index, option in ipairs(options) do
             local row = index + 4
@@ -1090,76 +1023,6 @@ local function draw()
         firstButtons = {}
         secondButtons = { { label = "BACK TO PROGRAMS", action = "back" } }
         drawButtons(secondButtons, height - 1, width, isColor)
-    else
-        local configPath, configPathError = notificationConfigPath(homeDirectory)
-        local config = configPath and readJSONFile(configPath)
-        local listeners = type(config) == "table" and type(config.listeners) == "table"
-            and config.listeners or {}
-        local pageSize = math.max(1, math.floor((height - 9) / 2))
-        local pageCount = math.max(1, math.ceil(#listeners / pageSize))
-        notificationListenerPage = math.min(notificationListenerPage, pageCount)
-        local firstListener = (notificationListenerPage - 1) * pageSize + 1
-        local lastListener = math.min(#listeners, firstListener + pageSize - 1)
-        term.setCursorPos(2, 4)
-        term.setTextColor(titleColor)
-        term.write("ACTIVE LISTENERS")
-        local row = 5
-        term.setCursorPos(2, row)
-        term.setTextColor(textColor)
-        term.write(("Incoming notifications  /  matching listeners only")
-            :sub(1, math.max(0, width - 2)))
-        row = row + 1
-        local listenerRows = {}
-        for index = firstListener, lastListener do
-            local listener = listeners[index]
-            local label = string.format("[%d] %s  /  %s", index - firstListener + 1,
-                tostring(listener.name or "Listener"), tostring(listener.protocol or ""))
-            term.setCursorPos(2, row)
-            term.setTextColor(textColor)
-            term.write(label:sub(1, math.max(0, width - 2)))
-            listenerRows[row] = index
-            row = row + 1
-        end
-        if #listeners == 0 then
-            term.setCursorPos(2, row)
-            term.setTextColor(mutedColor)
-            term.write((configPathError or "No additional protocol listeners are configured.")
-                :sub(1, math.max(0, width - 2)))
-            row = row + 1
-        end
-
-        local historyHeader = math.min(height - 8, row + 1)
-        if historyHeader > row then
-            term.setCursorPos(2, historyHeader)
-            term.setTextColor(titleColor)
-            term.write("RECENT NOTIFICATIONS")
-        end
-        local historyRow = historyHeader + 1
-        local historyLimit = math.max(0, height - historyRow - 5)
-        for index = 1, math.min(#notificationHistory, historyLimit) do
-            local item = notificationHistory[index]
-            term.setCursorPos(2, historyRow)
-            term.setTextColor(mutedColor)
-            term.write((item.source .. ": " .. item.title .. " - " .. item.message)
-                :sub(1, math.max(0, width - 2)))
-            historyRow = historyRow + 1
-        end
-        if #notificationHistory == 0 and historyRow < height - 4 then
-            term.setCursorPos(2, historyRow)
-            term.setTextColor(mutedColor)
-            term.write("No notifications received this session.")
-        end
-        term.setCursorPos(2, height - 4)
-        term.setTextColor(mutedColor)
-        term.write(message:sub(1, math.max(0, width - 2)))
-        firstButtons = {}
-        secondButtons = {
-            { label = "PREVIOUS", action = "notifications-prev" },
-            { label = "BACK TO SETTINGS", action = "back-settings" },
-            { label = "NEXT", action = "notifications-next" },
-        }
-        drawButtons(secondButtons, height - 1, width, isColor)
-        return firstButtons, secondButtons, listenerRows
     end
 
     term.setCursorPos(2, height - 4)
@@ -1269,162 +1132,6 @@ local function runHomeProgram(programPath, profileContext, ...)
     local function virtualAbsolute(path)
         local normalized = normalizeVirtualPath(path)
         return normalized == "" and "/" or "/" .. normalized
-    end
-
-    local function createNotificationsModule()
-        local configPath, configPathError = notificationConfigPath(homeDirectory)
-
-        local function loadConfig()
-            if not configPath then return nil, configPathError end
-            if not nativeFs.exists(configPath) then return { listeners = {} } end
-            local file = nativeFs.open(configPath, "r")
-            if not file then return nil, "Could not open notification listener settings." end
-            local contents = file.readAll()
-            file.close()
-            local ok, config = pcall(textutils.unserializeJSON, contents)
-            if not ok or type(config) ~= "table" or type(config.listeners) ~= "table" then
-                return nil, "Notification listener settings are invalid."
-            end
-            return config
-        end
-
-        local function saveConfig(config)
-            if not configPath then return false, configPathError end
-            local saved, saveError = writeNotificationConfig(configPath, config)
-            if not saved then return false, saveError end
-            notificationConfigRevision = notificationConfigRevision + 1
-            return true
-        end
-
-        local api = {}
-        function api.send(protocol, payload, serviceName)
-            if type(protocol) ~= "string" or type(payload) ~= "table" then
-                return false, "A protocol string and table payload are required."
-            end
-            if type(serviceName) == "string" then
-                local serverId = rednet.lookup(protocol, serviceName)
-                if not serverId then return false, serviceName .. " was not found on rednet." end
-                rednet.send(serverId, payload, protocol)
-            else
-                rednet.broadcast(payload, protocol)
-            end
-            return true
-        end
-
-        function api.request(protocol, payload, serviceName, timeout)
-            if type(protocol) ~= "string" or type(payload) ~= "table"
-                or type(serviceName) ~= "string" then
-                return nil, "A protocol string, table payload, and service name are required."
-            end
-            local serverId = rednet.lookup(protocol, serviceName)
-            if not serverId then return nil, serviceName .. " was not found on rednet." end
-            rednet.send(serverId, payload, protocol)
-            local _, response = rednet.receive(protocol, timeout or 5, serverId)
-            if type(response) ~= "table" then return nil, "No response from " .. serviceName .. "." end
-            if response.type == "error" then
-                return nil, response.message or serviceName .. " rejected the request."
-            end
-            return response
-        end
-
-        function api.listen(protocol, titleField, messageField, name, filterField, filterValue)
-            if type(protocol) ~= "string" or #protocol < 1 or #protocol > 64
-                or not protocol:match("^[%w_.%-]+$") then
-                return false, "Protocol must be 1 to 64 letters, numbers, dots, dashes, or underscores."
-            end
-            if type(titleField) ~= "string" or not titleField:match("^[%w_]+$") then
-                return false, "Title field must be a table key containing letters, numbers, or underscores."
-            end
-            if #titleField > 32 then
-                return false, "Title field must be no longer than 32 characters."
-            end
-            if type(messageField) ~= "string" or #messageField > 32
-                or not messageField:match("^[%w_]+$") then
-                return false, "Message field must be a table key containing letters, numbers, or underscores."
-            end
-            name = name == nil and protocol or name
-            if type(name) ~= "string" or #name < 1 or #name > 32 then
-                return false, "Notification name must be 1 to 32 characters."
-            end
-            if filterField ~= nil or filterValue ~= nil then
-                if type(filterField) ~= "string" or #filterField > 32
-                    or not filterField:match("^[%w_]+$")
-                    or type(filterValue) ~= "string" or #filterValue < 1 or #filterValue > 64 then
-                    return false, "Notification filters require a valid field and a 1 to 64 character string value."
-                end
-            end
-
-            local config, loadError = loadConfig()
-            if not config then return false, loadError end
-            for _, listener in ipairs(config.listeners) do
-                if type(listener) == "table" and listener.protocol == protocol
-                    and listener.filterField == filterField
-                    and listener.filterValue == filterValue then
-                    if listener.name == name and listener.titleField == titleField
-                        and listener.messageField == messageField then
-                        return true
-                    end
-                    return false, "A listener for that protocol and filter already exists."
-                end
-            end
-            local listener = {
-                name = name,
-                protocol = protocol,
-                titleField = titleField,
-                messageField = messageField,
-            }
-            if filterField then
-                listener.filterField = filterField
-                listener.filterValue = filterValue
-            end
-            table.insert(config.listeners, listener)
-            return saveConfig(config)
-        end
-
-        function api.unlisten(protocol, filterField, filterValue)
-            if type(protocol) ~= "string" then return false, "Protocol must be a string." end
-            if filterField ~= nil or filterValue ~= nil then
-                if type(filterField) ~= "string" or #filterField > 32
-                    or not filterField:match("^[%w_]+$")
-                    or type(filterValue) ~= "string" or #filterValue < 1 or #filterValue > 64 then
-                    return false, "Unlisten filters require a valid field and a 1 to 64 character string value."
-                end
-            end
-            local config, loadError = loadConfig()
-            if not config then return false, loadError end
-            for index, listener in ipairs(config.listeners) do
-                if type(listener) == "table" and listener.protocol == protocol
-                    and (filterField == nil or listener.filterField == filterField
-                        and listener.filterValue == filterValue) then
-                    table.remove(config.listeners, index)
-                    return saveConfig(config)
-                end
-            end
-            return false, "No matching listener is registered for that protocol."
-        end
-
-        function api.notify(title, message, source)
-            if (type(title) ~= "string" and type(title) ~= "number")
-                or (type(message) ~= "string" and type(message) ~= "number") then
-                return false, "Notification title and message must be strings or numbers."
-            end
-            if #tostring(title) > 256 or #tostring(message) > 2000 then
-                return false, "Notification title or message is too long."
-            end
-            if #apiNotificationQueue >= MAX_API_NOTIFICATION_QUEUE then
-                return false, "The notification queue is full."
-            end
-            table.insert(apiNotificationQueue, {
-                type = "notification",
-                source = type(source) == "string" and source or "App",
-                user = currentUser,
-                title = title,
-                message = message,
-            })
-            return true
-        end
-
-        return api
     end
 
     local function createStorageModule()
@@ -1685,23 +1392,19 @@ local function runHomeProgram(programPath, profileContext, ...)
         environment.fs = sandboxFs
         environment.os = sandboxOs
         environment.shell = sandboxShell
-        local notificationsModule = createNotificationsModule()
+        environment.launcherTheme = getThemeInfo()
         local storageModule = createStorageModule()
-        environment.notifications = notificationsModule
         environment.storage = storageModule
         environment._G = environment
         environment.debug = nil
         environment.package = nil
         environment.commands = nil
         environment.require = function(moduleName)
-            if moduleName == "notifications" then
-                return notificationsModule
-            end
             if moduleName == "storage" then
                 return storageModule
             end
             if moduleName ~= "cc.pretty" or type(nativeRequire) ~= "function" then
-                error("Only the storage, notifications, and built-in cc.pretty modules are available to profile apps.", 2)
+                error("Only the storage and built-in cc.pretty modules are available to profile apps.", 2)
             end
             return nativeRequire(moduleName)
         end
@@ -1759,6 +1462,10 @@ local function launchSelected(openInTab)
         message = "This computer does not support program tabs."
         return
     end
+    if openInTab and app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "") then
+        message = "System Settings must be opened directly."
+        return
+    end
     local profileContext = {
         user = currentUser,
         homeDirectory = homeDirectory,
@@ -1798,6 +1505,9 @@ local function launchSelected(openInTab)
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
         ok, result = pcall(runner, _ENV, app.path, profileContext.homeDirectory,
             runProfileProgram, listLaunchProfiles, authorizeLaunchProfile)
+    elseif app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "") then
+        local runner = openInTab and nativeMultishell.launch or nativeOs.run
+        ok, result = pcall(runner, _ENV, app.path, homeDirectory, currentUser, getThemeInfo())
     else
         local runner = openInTab and nativeMultishell.launch or nativeOs.run
         ok, result = pcall(runner, _ENV, app.path, homeDirectory)
@@ -1829,6 +1539,9 @@ local function launchSelected(openInTab)
     end
     waitForReturn()
     message = "Returned from " .. app.name .. "."
+    if app.path:gsub("^/+", "") == SETTINGS_PROGRAM_PATH:gsub("^/+", "") then
+        loadSettings()
+    end
     refreshApps()
 end
 
@@ -1839,7 +1552,37 @@ local function changeSetting(direction)
         settings.alphabetical = not settings.alphabetical
         refreshApps()
     end
-    saveSettings()
+    if saveSettings() then applyTheme() end
+end
+
+local function openSystemSettings()
+    if not fs.exists(SETTINGS_PROGRAM_PATH) then
+        message = "System Settings is not installed. Refresh system apps and try again."
+        return
+    end
+
+    local previousDirectory = shell.dir()
+    shell.setDir(homeDirectory)
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    local ok, result = pcall(nativeOs.run, _ENV, SETTINGS_PROGRAM_PATH,
+        homeDirectory, currentUser, getThemeInfo())
+    shell.setDir(previousDirectory)
+    loadSettings()
+    refreshApps()
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+    if not ok then
+        message = "System Settings error: " .. tostring(result)
+    elseif result == false then
+        message = "System Settings did not complete successfully."
+    else
+        message = "Returned from System Settings."
+    end
 end
 
 local function uninstallLauncher()
@@ -1913,241 +1656,15 @@ local function uninstallLauncher()
     while true do os.pullEventRaw() end
 end
 
-local function showNotificationPopup(notification)
-    local function popupText(value, limit)
-        return tostring(value):gsub("%c", " "):sub(1, limit)
-    end
-    if activeNotificationPopupTimer then
-        os.cancelTimer(activeNotificationPopupTimer)
-        activeNotificationPopupTimer = nil
-    end
-    if activeNotificationPopup then
-        activeNotificationPopup.setVisible(false)
-        activeNotificationPopup = nil
-    end
-    table.insert(notificationHistory, 1, {
-        source = popupText(notification.source or "System", 64),
-        title = popupText(notification.title or "Notification", 256),
-        message = popupText(notification.message or "", 2000),
-        receivedAt = os.epoch and os.epoch("utc") or os.time() * 1000,
-    })
-    while #notificationHistory > 20 do table.remove(notificationHistory) end
-    if not nativeWindow or not nativeTerm then return end
-    local width, height = nativeTerm.getSize()
-    if width < 12 or height < 4 then return end
-
-    local popupWidth = math.min(width, 34)
-    local popupHeight = math.min(height, 4)
-    local popupX = width - popupWidth + 1
-    local popup = nativeWindow.create(nativeTerm, popupWidth, popupHeight, popupX, 1, false)
-    popup.setBackgroundColor(colors.black)
-    popup.setTextColor(colors.white)
-    popup.clear()
-    popup.setCursorPos(1, 1)
-    popup.setBackgroundColor(colors.cyan)
-    popup.write(string.rep(" ", popupWidth))
-    popup.setCursorPos(2, 1)
-    popup.write(popupText(notification.title or "Notification", 256):sub(1, popupWidth - 2))
-    popup.setBackgroundColor(colors.black)
-    popup.setCursorPos(2, 2)
-    popup.write(popupText(notification.source or "System", 64):sub(1, popupWidth - 2))
-    popup.setCursorPos(2, 3)
-    popup.write(popupText(notification.message or "", 2000):sub(1, popupWidth - 2))
-    popup.setVisible(true)
-    activeNotificationPopup = popup
-    activeNotificationPopupTimer = os.startTimer(4)
-end
-
-local function removeNotificationListener(index)
-    if not homeDirectory then return false, "No active profile." end
-    local configPath, configPathError = notificationConfigPath(homeDirectory)
-    if not configPath then return false, configPathError end
-    local config, loadError = readJSONFile(configPath)
-    if not config then return false, loadError or "No listener settings were found." end
-    if type(config.listeners) ~= "table" or type(config.listeners[index]) ~= "table" then
-        return false, "That listener is no longer available."
-    end
-
-    local removed = table.remove(config.listeners, index)
-    local saved, saveError = writeNotificationConfig(configPath, config)
-    if not saved then
-        table.insert(config.listeners, index, removed)
-        return false, saveError
-    end
-    notificationConfigRevision = notificationConfigRevision + 1
-    return true, "Removed listener for " .. tostring(removed.protocol) .. "."
-end
-
-local function openNotificationModems()
-    for _, name in ipairs(peripheral.getNames()) do
-        if peripheral.getType(name) == "modem" and not rednet.isOpen(name) then
-            rednet.open(name)
-        end
-    end
-end
-
-local function loadNotificationListeners(profilePath)
-    local configPath, pathError = notificationConfigPath(profilePath)
-    if not configPath then
-        showNotificationPopup({
-            source = "Notifications",
-            title = "Listener settings",
-            message = pathError,
-        })
-        return {}
-    end
-    if not nativeFs.exists(configPath) then
-        local initialized, initializeError = writeNotificationConfig(configPath, { listeners = {} })
-        if not initialized then
-            showNotificationPopup({
-                source = "Notifications",
-                title = "Listener settings",
-                message = initializeError,
-            })
-            return {}
-        end
-    end
-    local config, err = readJSONFile(configPath)
-    if not config then
-        if err then
-            showNotificationPopup({
-                source = "Notifications",
-                title = "Listener settings",
-                message = err,
-            })
-        end
-        return {}
-    end
-    if type(config.listeners) ~= "table" then
-        showNotificationPopup({
-            source = "Notifications",
-            title = "Listener settings",
-            message = "Listener settings need a listeners array.",
-        })
-        return {}
-    end
-
-    local listeners = {}
-    for _, listener in ipairs(config.listeners) do
-        if type(listener) == "table" and type(listener.name) == "string"
-            and type(listener.protocol) == "string"
-            and type(listener.titleField) == "string"
-            and type(listener.messageField) == "string"
-            and ((listener.filterField == nil and listener.filterValue == nil)
-                or (type(listener.filterField) == "string"
-                    and listener.filterField:match("^[%w_]+$")
-                    and type(listener.filterValue) == "string")) then
-            table.insert(listeners, listener)
-        else
-            showNotificationPopup({
-                source = "Notifications",
-                title = "Listener settings",
-                message = "A listener entry is invalid and was ignored.",
-            })
-        end
-    end
-    return listeners
-end
-
-local function notificationReceiver()
-    local lastProfilePath
-    local activeListeners = {}
-    local loadedConfigRevision = -1
-    local refreshTimer = os.startTimer(1)
-
-    while true do
-        if homeDirectory and (homeDirectory ~= lastProfilePath
-            or loadedConfigRevision ~= notificationConfigRevision) then
-            lastProfilePath = homeDirectory
-            activeListeners = loadNotificationListeners(homeDirectory)
-            loadedConfigRevision = notificationConfigRevision
-        end
-
-        local queuedCount = #apiNotificationQueue
-        for _ = 1, queuedCount do
-            local notification = table.remove(apiNotificationQueue, 1)
-            if notification.user == nil or notification.user == currentUser then
-                showNotificationPopup(notification)
-            else
-                table.insert(apiNotificationQueue, notification)
-            end
-        end
-
-        openNotificationModems()
-        local event, eventValue, payload, protocol = os.pullEventRaw()
-        if event == "timer" then
-            if eventValue == activeNotificationPopupTimer then
-                if activeNotificationPopup then
-                    activeNotificationPopup.setVisible(false)
-                    activeNotificationPopup = nil
-                end
-                activeNotificationPopupTimer = nil
-            elseif eventValue == refreshTimer then
-                refreshTimer = os.startTimer(1)
-            end
-        elseif event == "rednet_message" then
-            if type(payload) == "table" and payload.type == "notification" then
-                for _, listener in ipairs(activeListeners) do
-                    if listener.protocol == protocol
-                        and (not listener.filterField
-                            or payload[listener.filterField] == listener.filterValue) then
-                        local title = payload[listener.titleField]
-                        local body = payload[listener.messageField]
-                        if (type(title) == "string" or type(title) == "number")
-                            and (type(body) == "string" or type(body) == "number") then
-                            showNotificationPopup({
-                                source = listener.name,
-                                title = title,
-                                message = body,
-                            })
-                        end
-                    end
-                end
-            elseif type(payload) == "table" then
-                for _, listener in ipairs(activeListeners) do
-                    if listener.protocol == protocol
-                        and (not listener.filterField
-                            or payload[listener.filterField] == listener.filterValue) then
-                        local title = payload[listener.titleField]
-                        local body = payload[listener.messageField]
-                        local titleType, bodyType = type(title), type(body)
-                        if (titleType == "string" or titleType == "number")
-                            and (bodyType == "string" or bodyType == "number") then
-                            showNotificationPopup({
-                                source = listener.name,
-                                title = title,
-                                message = body,
-                            })
-                        end
-                    end
-                end
-            end
-        end
-    end
-end
-
 local function launcherMain()
 local migrateLegacySettings = not fs.exists(SETTINGS_PATH) and fs.exists(LEGACY_SETTINGS_PATH)
 loadSettings()
+applyTheme()
 if migrateLegacySettings and saveSettings() then
     fs.delete(LEGACY_SETTINGS_PATH)
 end
 
 chooseUser()
-local notificationPath, notificationPathError = notificationConfigPath(homeDirectory)
-if notificationPath then
-    if not nativeFs.exists(notificationPath) then
-        local initialized, initializeError = writeNotificationConfig(
-            notificationPath, { listeners = {} }
-        )
-        if not initialized then
-            message = initializeError
-        end
-    end
-else
-    message = notificationPathError
-end
-local downloaded, downloadMessage = installDownloader()
 local systemAppsInstalled = false
 local systemAppInstallMessage
 if downloaded then
@@ -2173,14 +1690,12 @@ else
 end
 
 while true do
-    local firstButtons, secondButtons, listenerRows = draw()
+    local firstButtons, secondButtons = draw()
     local event, button, x, y = os.pullEventRaw()
     if event == "mouse_scroll" then
         local _, height = term.getSize()
         if screen == "apps" and y >= 4 and y < 4 + math.max(1, height - 12) then
             selected = math.max(1, math.min(#apps, selected + button))
-        elseif screen == "notifications" and y >= 5 and y < height - 4 then
-            notificationListenerPage = math.max(1, notificationListenerPage + button)
         end
     elseif event == "mouse_click" and button == 1 then
         local _, height = term.getSize()
@@ -2222,22 +1737,6 @@ while true do
                     return
                 end
             end
-        elseif screen == "notifications" then
-            local listenerIndex = listenerRows and listenerRows[y]
-            if listenerIndex then
-                local removed, result = removeNotificationListener(listenerIndex)
-                message = result
-            elseif y == height - 1 then
-                local action = buttonAt(secondButtons, x)
-                if action == "back-settings" then
-                    screen = "settings"
-                    message = "Click a setting to change it."
-                elseif action == "notifications-prev" then
-                    notificationListenerPage = math.max(1, notificationListenerPage - 1)
-                elseif action == "notifications-next" then
-                    notificationListenerPage = notificationListenerPage + 1
-                end
-            end
         elseif y >= 5 and y <= 9 then
             selectedSetting = y - 4
             if selectedSetting == 1 then
@@ -2250,9 +1749,7 @@ while true do
             elseif selectedSetting == 4 then
                 uninstallLauncher()
             elseif selectedSetting == 5 then
-                screen = "notifications"
-                notificationListenerPage = 1
-                message = "File: H://[PRIVATE DATA]/notifications/listeners.json"
+                openSystemSettings()
             end
         elseif y == height - 1 and buttonAt(secondButtons, x) == "back" then
             screen = "apps"
@@ -2263,4 +1760,4 @@ end
 
 end
 
-nativeParallel.waitForAny(launcherMain, notificationReceiver)
+launcherMain()

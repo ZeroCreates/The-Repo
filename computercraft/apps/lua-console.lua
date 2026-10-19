@@ -67,20 +67,55 @@ local function compile(source)
     return load(source, "lua-console")
 end
 
-local themeAccent = colors.cyan
+local themes = {
+    { accent = colors.cyan, highlight = colors.blue },
+    { accent = colors.lime, highlight = colors.green },
+    { accent = colors.orange, highlight = colors.red },
+    { accent = colors.purple, highlight = colors.magenta },
+    { accent = colors.cyan, highlight = colors.blue },
+}
+local themeAccent, themeHighlight = colors.cyan, colors.blue
 local function loadTheme()
-    local path = "/.launcher/settings.json"
-    if not fs.exists(path) then return end
-    local file = fs.open(path, "r")
-    if not file then return end
-    local contents = file.readAll()
-    file.close()
-    local ok, settings = pcall(textutils.unserializeJSON, contents)
-    if not ok or type(settings) ~= "table" then return end
-    local accents = { colors.cyan, colors.lime, colors.orange, colors.purple }
-    if type(settings.theme) == "number" and accents[settings.theme] then
-        themeAccent = accents[settings.theme]
+    if type(launcherTheme) == "table"
+        and type(launcherTheme.accent) == "number"
+        and type(launcherTheme.highlight) == "number" then
+        themeAccent = term.isColor() and launcherTheme.accent or colors.gray
+        themeHighlight = term.isColor() and launcherTheme.highlight or colors.gray
+        return
     end
+    local themeIndex = type(launcherTheme) == "number" and launcherTheme or nil
+    local saved
+    if type(themeIndex) ~= "number" or not themes[themeIndex] or themeIndex == #themes then
+        local path = "/.launcher/settings.json"
+        if fs.exists(path) then
+            local file = fs.open(path, "r")
+            if file then
+                local contents = file.readAll()
+                file.close()
+                local ok, parsed = pcall(textutils.unserializeJSON, contents)
+                if ok and type(parsed) == "table"
+                    and type(parsed.theme) == "number" and themes[parsed.theme] then
+                    themeIndex = parsed.theme
+                    saved = parsed
+                end
+            end
+        end
+    end
+    if themeIndex == #themes and type(saved) == "table"
+        and term.isColor() and type(term.setPaletteColor) == "function"
+        and type(saved.customAccent) == "string" and saved.customAccent:match("^#?%x%x%x%x%x%x$")
+        and type(saved.customHighlight) == "string" and saved.customHighlight:match("^#?%x%x%x%x%x%x$") then
+        local function applyHex(slot, hex)
+            hex = hex:gsub("^#", "")
+            term.setPaletteColor(slot, tonumber(hex:sub(1, 2), 16) / 255,
+                tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255)
+        end
+        applyHex(colors.cyan, saved.customAccent)
+        applyHex(colors.blue, saved.customHighlight)
+    end
+    local theme = themes[themeIndex] or themes[1]
+    themeAccent = term.isColor() and theme.accent or colors.gray
+    themeHighlight = term.isColor() and theme.highlight or colors.gray
 end
 
 loadTheme()
@@ -89,7 +124,11 @@ term.setBackgroundColor(colors.black)
 term.setTextColor(term.isColor() and themeAccent or colors.gray)
 term.clear()
 term.setCursorPos(1, 1)
-print("Lua Console")
+local width = term.getSize()
+term.setBackgroundColor(term.isColor() and themeHighlight or colors.gray)
+term.write((" Lua Console" .. string.rep(" ", math.max(0, width - 12))):sub(1, width))
+term.setBackgroundColor(colors.black)
+term.setCursorPos(1, 2)
 term.setTextColor(colors.lightGray)
 print("Type help for commands, or exit to return to the launcher.")
 print("")

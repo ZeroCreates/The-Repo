@@ -256,20 +256,6 @@ function addRedeemableItem(source, itemId, amount) {
   return 1
 }
 
-function notifyEconomyAdmins(player, message) {
-  const auditMessage = '[Economy] ' + message
-  console.info(auditMessage)
-  try {
-    const onlinePlayers = player.getServer().getPlayerList().getPlayers()
-    for (let index = 0; index < onlinePlayers.size(); index++) {
-      const admin = onlinePlayers.get(index)
-      if (admin.hasPermissions(2)) admin.sendSystemMessage(Text.of(auditMessage))
-    }
-  } catch (error) {
-    console.warn('Could not send economy admin notification: ' + error)
-  }
-}
-
 function getMoneyNoteData(item) {
   const customData = item.get(DATA_COMPONENTS.CUSTOM_DATA)
   if (!customData) return null
@@ -636,8 +622,6 @@ ServerEvents.commandRegistry(event => {
 
               player.give(createMoneyNote(cents))
               player.tell('Created a money note worth ' + formatMoney(cents) + '.')
-              notifyEconomyAdmins(player, player.username + ' created a money note worth '
-                + formatMoney(cents) + '.')
               return 1
             })
           )
@@ -742,8 +726,6 @@ function redeemHeldItem(event) {
     startCooldown(player, 'redeem')
     player.tell('Redeemed ' + billCount + ' ' + redeemedDenomination.label + '(s) for ' + formatMoney(billCents)
       + '. Balance: ' + formatMoney(balance + billCents))
-    notifyEconomyAdmins(player, player.username + ' redeemed ' + billCount + ' '
-      + redeemedDenomination.label + '(s) worth ' + formatMoney(billCents) + '.')
     event.cancel()
     return
   }
@@ -771,8 +753,6 @@ function redeemHeldItem(event) {
       startCooldown(player, 'redeem')
       player.tell('Redeemed ' + noteCount + ' money note(s) worth ' + formatMoney(totalNoteCents)
         + '. Balance: ' + formatMoney(balance + totalNoteCents))
-      notifyEconomyAdmins(player, player.username + ' redeemed ' + noteCount + ' money note(s) worth '
-        + formatMoney(totalNoteCents) + '.')
       event.cancel()
       return
     }
