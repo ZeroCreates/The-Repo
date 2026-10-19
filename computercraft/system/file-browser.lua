@@ -365,6 +365,7 @@ local function draw()
         bottomButtons = {
             { label = "HOME", action = "home" },
             { label = "DELETE", action = "delete" },
+            { label = "CMD", action = "command" },
             { label = "EXIT", action = "exit" },
         }
     else
@@ -372,6 +373,7 @@ local function draw()
             { label = "UP", action = "up" },
             { label = "HOME", action = "home" },
             { label = "DELETE", action = "delete" },
+            { label = "CMD", action = "command" },
             { label = "EXIT", action = "exit" },
         }
     end
@@ -610,6 +612,195 @@ local function runSelected()
     end
     loadTheme()
     refreshEntries()
+end
+
+local function resolveHomePath(base, input)
+    if type(input) ~= "string" or input:find("[%c:]") then return nil end
+    local parts = {}
+    for part in homeDirectory:gmatch("[^/]+") do
+        table.insert(parts, part)
+    end
+    if input:sub(1, 1) ~= "/" and isWithinRoot(base, homeDirectory) then
+        for part in base:sub(#homeDirectory + 2):gmatch("[^/]+") do
+            table.insert(parts, part)
+        end
+    end
+    for part in input:gsub("\\", "/"):gmatch("[^/]+") do
+        if part == ".." then
+            if #parts > 2 then table.remove(parts) end
+        elseif part ~= "." then
+            table.insert(parts, part)
+        end
+    end
+    local path = table.concat(parts, "/")
+    if not isWithinRoot(path, homeDirectory) then return nil end
+    return path
+end
+
+local function tokenizeCommand(line)
+    local arguments, current, quote, escaped = {}, "", nil, false
+    for index = 1, #line do
+        local character = line:sub(index, index)
+        if escaped then
+            current = current .. character
+            escaped = false
+        elseif quote and character == "\\" then
+            escaped = true
+        elseif quote and character == quote then
+            quote = nil
+        elseif not quote and (character == "\"" or character == "'") then
+            quote = character
+        elseif not quote and character:match("%s") then
+            if current ~= "" then
+                table.insert(arguments, current)
+                current = ""
+            end
+        else
+            current = current .. character
+        end
+    end
+    if quote then return nil, "Unclosed quote in command." end
+    if escaped then current = current .. "\\" end
+    if current ~= "" then table.insert(arguments, current) end
+    return arguments
+end
+
+local function commandPrompt()
+    local workingDirectory = homeDirectory
+    local history = {}
+    local width = term.getSize()
+    local function writePromptLine(text, foreground)
+        term.setTextColor(foreground or colors.white)
+        print(tostring(text):sub(1, width))
+    end
+    local function drawPromptHeader()
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1, 1)
+        term.setBackgroundColor(term.isColor() and themes[themeIndex].accent or colors.gray)
+        term.write((" PROFILE COMMAND PROMPT"):sub(1, width))
+        term.setBackgroundColor(colors.black)
+        writePromptLine("Only programs and files in your home directory are available.", colors.lightGray)
+        writePromptLine("Commands: help, pwd, ls, cd, run, clear, exit", colors.lightGray)
+        writePromptLine("Paths and programs stay within your home directory.", colors.lightGray)
+    end
+    local function resolveProgram(command)
+        local paths = {}
+        local path = resolveHomePath(workingDirectory, command)
+        if path then
+            table.insert(paths, path)
+            if not path:lower():match("%.lua$") then
+                table.insert(paths, path .. ".lua")
+            end
+        end
+        if not command:find("[/\\]") then
+            local appPath = resolveHomePath(homeDirectory, "apps/" .. command)
+            if appPath then
+                table.insert(paths, appPath)
+                if not appPath:lower():match("%.lua$") then
+                    table.insert(paths, appPath .. ".lua")
+                end
+            end
+        end
+        for _, candidate in ipairs(paths) do
+            if isWithinRoot(candidate, homeDirectory)
+                and candidate:lower():match("%.lua$") and fs.exists(candidate)
+                and not fs.isDir(candidate) then
+                return candidate
+            end
+        end
+    end
+
+    drawPromptHeader()
+    while true do
+        local location = displayPath(workingDirectory)
+        term.setTextColor(term.isColor() and themes[themeIndex].accent or colors.white)
+        write(location .. "> ")
+        term.setTextColor(colors.white)
+        local input = read(nil, history)
+        if input:match("%S") and history[#history] ~= input then
+            table.insert(history, input)
+        end
+        local arguments, parseError = tokenizeCommand(input)
+        if not arguments then
+            writePromptLine(parseError, colors.red)
+        elseif #arguments > 0 then
+            local command = arguments[1]:lower()
+            if command == "exit" or command == "quit" then
+                break
+            elseif command == "help" then
+                writePromptLine("Commands: help, pwd, ls [path], cd [path], run <program> [args], clear, exit")
+                writePromptLine("Programs are limited to Lua files in your home directory.")
+            elseif command == "clear" then
+                term.clear()
+                term.setCursorPos(1, 1)
+            elseif command == "pwd" then
+                writePromptLine(location)
+            elseif command == "cd" then
+                local destination = resolveHomePath(workingDirectory, arguments[2] or "/")
+                if not destination or not fs.isDir(destination) then
+                    writePromptLine("Directory not found in your home directory.", colors.red)
+                else
+                    workingDirectory = destination
+                end
+            elseif command == "ls" then
+                local directory = resolveHomePath(workingDirectory, arguments[2] or ".")
+                if not directory or not fs.isDir(directory) then
+                    writePromptLine("Directory not found in your home directory.", colors.red)
+                else
+                    local names = fs.list(directory)
+                    table.sort(names, function(first, second)
+                        return first:lower() < second:lower()
+                    end)
+                    local shown = 0
+                    for _, name in ipairs(names) do
+                        if altHeld or name:sub(1, 1) ~= "." then
+                            local path = fs.combine(directory, name)
+                            writePromptLine(name .. (fs.isDir(path) and "/" or ""))
+                            shown = shown + 1
+                        end
+                    end
+                    if shown == 0 then writePromptLine("Directory is empty.", colors.lightGray) end
+                end
+            else
+                local firstArgument = command == "run" and 2 or 1
+                local programName = arguments[firstArgument]
+                if not programName then
+                    writePromptLine("Usage: run <program> [args]", colors.red)
+                elseif type(runProfileProgram) ~= "function" then
+                    writePromptLine("The profile-safe program runner is unavailable.", colors.red)
+                else
+                    local programPath = resolveProgram(programName)
+                    if not programPath then
+                        writePromptLine("Program not found in your home directory.", colors.red)
+                    else
+                        local programArguments = {}
+                        for index = firstArgument + 1, #arguments do
+                            table.insert(programArguments, arguments[index])
+                        end
+                        local status, statusColor
+                        local ok, result = pcall(runProfileProgram,
+                            "/" .. programPath, homeDirectory, table.unpack(programArguments))
+                        if not ok then
+                            status = "Program error: " .. tostring(result)
+                            statusColor = colors.red
+                        elseif result == false then
+                            status = "The program did not complete successfully."
+                            statusColor = colors.red
+                        end
+                        loadTheme()
+                        width = term.getSize()
+                        drawPromptHeader()
+                        if status then writePromptLine(status, statusColor) end
+                    end
+                end
+            end
+        end
+    end
+    loadTheme()
+    refreshEntries()
+    message = "Returned from the profile command prompt."
 end
 
 local function createFile()
@@ -1027,6 +1218,8 @@ while true do
                 message = "Returned to your home directory."
             elseif action == "delete" then
                 deleteSelected()
+            elseif action == "command" then
+                commandPrompt()
             elseif action == "exit" then
                 return
             end

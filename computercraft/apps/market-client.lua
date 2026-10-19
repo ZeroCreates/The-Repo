@@ -930,10 +930,11 @@ local function checkStatus()
         return
     end
     showOrder(response.order)
-    if response.order.status ~= "shipping" then return end
+    if response.order.status ~= "preparing" then return end
 
-    drawHeader("DELIVERY CONFIRMATION", "ONLY CONFIRM AFTER THE ORDER ARRIVES")
-    writeAt(2, 5, "Order " .. (response.order.reference or response.order.id) .. " has shipped.", colors.lightGray)
+    drawHeader("ORDER COMPLETION", "ONLY CONFIRM AFTER THE ORDER IS RECEIVED")
+    writeAt(2, 5, "Order " .. (response.order.reference or response.order.id)
+        .. " is being prepared.", colors.lightGray)
     local confirmCompletion
     if mouseEnabled then
         confirmCompletion = readChoice("y complete|n not yet") == "y"
@@ -965,37 +966,84 @@ local function showMyOrders()
         return
     end
 
-    drawHeader("MY ORDERS", "ORDERS LINKED TO YOUR RIFT ACCOUNT")
-    local width, height = term.getSize()
-    local visible = math.min(#orders, math.max(0, height - 9))
-    for index = 1, visible do
-        local order = orders[index]
-        local y = 4 + index
-        writeAt(2, y, "#" .. order.id .. "  " .. (order.reference or "ORDER")
-            .. "  " .. tostring(order.status):upper(), colors.yellow)
-        writeAt(width - 10, y, money(order.total), colors.lime)
-    end
-    if visible < #orders then
-        writeAt(2, height - 4, "Showing the newest " .. visible .. " of " .. #orders .. " orders.", colors.lightGray)
-    end
-    writeAt(2, height - 2, "Enter an order number to view it, or leave blank to return.", colors.lightGray)
-    term.setCursorPos(2, height - 1)
-    write("Order #: ")
-    local orderId = tonumber(read())
-    if not orderId then return end
-
-    local belongsToList = false
-    for _, order in ipairs(orders) do
-        if order.id == orderId then
-            belongsToList = true
-            break
+    local page, selectedIndex = 1, 1
+    local orderPerPage
+    local selectedOrder
+    while not selectedOrder do
+        drawHeader("MY ORDERS", "CLICK AN ORDER TO VIEW DETAILS")
+        local width, height = term.getSize()
+        orderPerPage = math.max(1, height - 8)
+        local pageCount = math.max(1, math.ceil(#orders / orderPerPage))
+        page = math.max(1, math.min(page, pageCount))
+        local first = (page - 1) * orderPerPage + 1
+        local last = math.min(#orders, first + orderPerPage - 1)
+        selectedIndex = math.max(first, math.min(selectedIndex, last))
+        local visibleOrders = {}
+        for index = first, last do
+            local order = orders[index]
+            local y = 5 + index - first
+            local selected = index == selectedIndex
+            writeAt(2, y, "#" .. order.id .. "  " .. (order.reference or "ORDER")
+                .. "  " .. tostring(order.status):upper(),
+                selected and colors.white or colors.yellow,
+                selected and themeHighlight or colors.black)
+            writeAt(width - 10, y, money(order.total), colors.lime,
+                selected and themeHighlight or colors.black)
+            table.insert(visibleOrders, { index = index, row = y })
+        end
+        writeAt(2, height - 2, "PAGE " .. page .. " / " .. pageCount
+            .. "  |  CLICK AN ORDER OR USE ARROWS + ENTER", colors.lightGray)
+        local buttons = drawChoices("b back|v previous|n next")
+        local event, key, x, y = os.pullEvent()
+        if event == "mouse_click" and key == 1 then
+            for _, entry in ipairs(visibleOrders) do
+                if y == entry.row then
+                    selectedOrder = orders[entry.index]
+                    break
+                end
+            end
+            if not selectedOrder then
+                for _, choice in ipairs(buttons) do
+                    if y == choice.row and x >= choice.left and x <= choice.right then
+                        if choice.key == "b" then return end
+                        if choice.key == "v" then
+                            page = math.max(1, page - 1)
+                            selectedIndex = (page - 1) * orderPerPage + 1
+                        elseif choice.key == "n" then
+                            page = math.min(pageCount, page + 1)
+                            selectedIndex = (page - 1) * orderPerPage + 1
+                        end
+                    end
+                end
+            end
+        elseif event == "key" then
+            if key == keys.q or key == keys.backspace then return end
+            if key == keys.up then
+                selectedIndex = math.max(1, selectedIndex - 1)
+                page = math.floor((selectedIndex - 1) / orderPerPage) + 1
+            elseif key == keys.down then
+                selectedIndex = math.min(#orders, selectedIndex + 1)
+                page = math.floor((selectedIndex - 1) / orderPerPage) + 1
+            elseif key == keys.enter then
+                selectedOrder = orders[selectedIndex]
+            elseif key == keys.v then
+                page = math.max(1, page - 1)
+                selectedIndex = (page - 1) * orderPerPage + 1
+            elseif key == keys.n then
+                page = math.min(pageCount, page + 1)
+                selectedIndex = (page - 1) * orderPerPage + 1
+            end
+        elseif event == "mouse_scroll" then
+            if key > 0 then
+                page = math.min(pageCount, page + 1)
+            else
+                page = math.max(1, page - 1)
+            end
+            selectedIndex = (page - 1) * orderPerPage + 1
         end
     end
-    if not belongsToList then
-        showNotice("ORDER NOT IN YOUR HISTORY", "Choose an order listed for your signed-in account.")
-        return
-    end
-    local selected, orderError = request({ type = "get_order", orderId = orderId })
+
+    local selected, orderError = request({ type = "get_order", orderId = selectedOrder.id })
     if not selected then
         showNotice("ORDER UNAVAILABLE", orderError)
         return

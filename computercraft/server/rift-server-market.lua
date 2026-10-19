@@ -11,8 +11,7 @@ local state
 
 local ALLOWED_TRANSITIONS = {
     waiting = { preparing = true, cancelled = true },
-    preparing = { shipping = true, cancelled = true },
-    shipping = { completed = true, cancelled = true },
+    preparing = { completed = true, cancelled = true },
     completed = {},
     cancelled = {},
 }
@@ -128,7 +127,9 @@ local function loadState()
         if order.status == "received" then
             order.status = "waiting"
         elseif order.status == "ready" then
-            order.status = "shipping"
+            order.status = "preparing"
+        elseif order.status == "shipping" then
+            order.status = "preparing"
         end
     end
     return loaded
@@ -332,8 +333,8 @@ local function completeOrder(senderId, username, message)
     if not userOwns(order, "customerUser", "customerId", senderId, username) then
         return sendError(senderId, "Only the customer who placed this order can complete it.")
     end
-    if order.status ~= "shipping" then
-        return sendError(senderId, "You can complete the order after it is marked shipping.")
+    if order.status ~= "preparing" then
+        return sendError(senderId, "You can complete the order after it is marked preparing.")
     end
 
     order.status = "completed"
@@ -475,9 +476,6 @@ local function updateOrder(senderId, username, message)
     end
     local order = findOrder(message.orderId)
     if not order then return sendError(senderId, "Order not found.") end
-    if message.status == "completed" then
-        return sendError(senderId, "The customer must confirm order completion.")
-    end
     if not accountOwns(order, "providerUser", username) then
         return sendError(senderId, "You can only update orders for your products.")
     end
@@ -539,8 +537,7 @@ local function drawDashboard()
         local order = state.orders[index]
         if order.status ~= "completed" and order.status ~= "cancelled" then
             if row + 2 > height then break end
-            local statusColor = order.status == "shipping" and colors.lime
-                or (order.status == "preparing" and colors.orange or colors.yellow)
+            local statusColor = order.status == "preparing" and colors.orange or colors.yellow
             line(row, "#" .. order.id .. "  " .. order.status:upper() .. "  $"
                 .. string.format("%.2f", order.total / 100), statusColor)
             local summary = {}

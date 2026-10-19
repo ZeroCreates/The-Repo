@@ -418,8 +418,7 @@ local function drawDashboard()
         local recentOrderCount = math.min(#market.recentOrders, math.max(0, height - row))
         for index = 1, recentOrderCount do
             local order = market.recentOrders[index]
-            local statusColor = order.status == "shipping" and good
-                or (order.status == "preparing" and warning or muted)
+            local statusColor = order.status == "preparing" and warning or muted
             lineAt(marketColumn, row, "#" .. order.id .. " " .. order.status:upper()
                 .. " $" .. string.format("%.2f", order.total / 100),
                 statusColor, nil, marketColumnWidth)
@@ -569,7 +568,7 @@ local function drawMonitorDashboard(page, pageNumber, pageCount, rowsPerPage, bo
                     .. tostring(order.status):upper() .. "  " .. total .. "  |  "
                     .. tostring(order.customerUser or "unknown") .. " -> "
                     .. tostring(order.providerUser or "unknown"),
-                    order.status == "shipping" and good or warning)
+                    order.status == "preparing" and warning or muted)
             end
         end
     elseif page.type == "products" then

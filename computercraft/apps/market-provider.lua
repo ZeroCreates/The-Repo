@@ -109,8 +109,7 @@ end
 
 local NEXT_STATUSES = {
     waiting = { "preparing", "cancelled" },
-    preparing = { "shipping", "cancelled" },
-    shipping = { "cancelled" },
+    preparing = { "completed", "cancelled" },
 }
 local orderMonitor
 
@@ -530,8 +529,7 @@ local function drawOrderMonitor(orders, errorMessage)
     for index = #orders, 1, -1 do
         local order = orders[index]
         if row + 2 > height then break end
-        local statusColor = order.status == "shipping" and colors.lime
-            or (order.status == "preparing" and colors.orange or colors.yellow)
+        local statusColor = order.status == "preparing" and colors.orange or colors.yellow
         line(row, (order.reference or string.format("ORD-%06d", order.id))
             .. "  " .. order.status:upper() .. "  " .. money(order.total), statusColor)
         local summary = {}
@@ -567,8 +565,7 @@ local function showOrders(orders, page, errorMessage)
                 local order = orders[index]
                 local y = firstRow + (index - first) * 3
                 table.insert(visibleOrders, { order = order, firstRow = y })
-                local statusColor = order.status == "shipping" and colors.lime
-                    or (order.status == "preparing" and colors.orange or colors.yellow)
+                local statusColor = order.status == "preparing" and colors.orange or colors.yellow
                 writeAt(2, y, order.reference or string.format("ORD-%06d", order.id), colors.cyan)
                 writeAt(18, y, order.status:upper(), statusColor)
                 local width = term.getSize()
