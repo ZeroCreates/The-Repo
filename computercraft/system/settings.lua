@@ -5,7 +5,7 @@ local PROFILE_PASSWORDS_PATH = SYSTEM_DIRECTORY .. "/profile-passwords.json"
 local PROFILE_ADMINS_PATH = SYSTEM_DIRECTORY .. "/profile-admins.json"
 local ENCRYPTION_KEY_PATH = SYSTEM_DIRECTORY .. "/.data-key"
 local LAUNCHER_PATH = "/launcher.lua"
-local HOST_BASE_URL = "http://127.0.0.1:3000/"
+local HOST_BASE_URL = "https://rift.zerocreates.org/"
 local THEMES = {
     { name = "Ocean", accent = colors.cyan, highlight = colors.blue },
     { name = "Forest", accent = colors.lime, highlight = colors.green },

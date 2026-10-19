@@ -1,4 +1,4 @@
-local HOST_BASE_URL = "http://127.0.0.1:3000/"
+local HOST_BASE_URL = "https://rift.zerocreates.org/"
 local CONFIG_NAME = "order-system.cfg"
 local ROLE_FILES = {
     server = {

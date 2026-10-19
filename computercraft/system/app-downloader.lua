@@ -1,4 +1,4 @@
-local HOST_BASE_URL = "http://127.0.0.1:3000/"
+local HOST_BASE_URL = "https://rift.zerocreates.org/"
 local CATALOG_PATH = "app-catalog.json"
 local USER_ROOT = "/users/"
 local SYSTEM_DIRECTORY = "/.launcher"

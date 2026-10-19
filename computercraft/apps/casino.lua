@@ -1,4 +1,4 @@
-local HOST_BASE_URL = "http://127.0.0.1:3000/"
+local HOST_BASE_URL = "https://rift.zerocreates.org/"
 local CASINO_PROTOCOL = "rift_casino_wallet_v1"
 local CASINO_SERVER = "rift-casino"
 local ACCOUNT_PROTOCOL = "rift_account_v1"
