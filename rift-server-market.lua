@@ -1,11 +1,11 @@
 local PROTOCOL = "order_system_v1"
-local SERVER_NAME = "order_server"
 local DATA_FILE = "orders.db"
 local BACKUP_FILE = "orders.db.bak"
 local TEMP_FILE = "orders.db.tmp"
 local PRODUCTS_FILE = "products.db"
 local PRODUCTS_BACKUP_FILE = "products.db.bak"
 local PRODUCTS_TEMP_FILE = "products.db.tmp"
+local function createMarketServer(getAuthenticatedUser)
 local state
 
 local ALLOWED_TRANSITIONS = {
@@ -15,17 +15,6 @@ local ALLOWED_TRANSITIONS = {
     completed = {},
     cancelled = {},
 }
-
-local function openModems()
-    local found = false
-    for _, name in ipairs(peripheral.getNames()) do
-        if peripheral.getType(name) == "modem" then
-            if not rednet.isOpen(name) then rednet.open(name) end
-            found = true
-        end
-    end
-    if not found then error("Attach a modem before starting the order server.") end
-end
 
 local function readOrdersState(path)
     if not fs.exists(path) then return nil end
@@ -171,7 +160,12 @@ local function findProduct(productId)
     end
 end
 
-local function createOrder(senderId, message)
+local function userOwns(record, userField, legacyIdField, senderId, username)
+    if record[userField] ~= nil then return record[userField] == username end
+    return record[legacyIdField] == senderId
+end
+
+local function createOrder(senderId, username, message)
     if type(message.deliveryAddress) ~= "string" then
         return sendError(senderId, "A delivery address is required.")
     end
@@ -184,6 +178,8 @@ local function createOrder(senderId, message)
     end
     local items, total, seen = {}, 0, {}
     local orderProviderId
+    local orderProviderUser
+    local orderProviderKey
     local orderProviderAddress
     for _, requested in ipairs(message.items) do
         if type(requested) ~= "table" or type(requested.productId) ~= "number"
@@ -195,11 +191,15 @@ local function createOrder(senderId, message)
         if not product or not product.available or seen[requested.productId] then
             return sendError(senderId, "A product is unavailable or repeated in this order.")
         end
-        if orderProviderId and orderProviderId ~= product.providerId then
+        local providerKey = product.providerUser or ("computer:" .. tostring(product.providerId))
+        if orderProviderKey and orderProviderKey ~= providerKey then
             return sendError(senderId, "Place separate orders for products from different providers.")
         end
+        orderProviderKey = providerKey
         orderProviderId = product.providerId
-        orderProviderAddress = state.providerAddresses[tostring(product.providerId)] or product.providerAddress
+        orderProviderUser = product.providerUser
+        orderProviderAddress = state.providerAddresses[product.providerUser or ""]
+            or state.providerAddresses[tostring(product.providerId)] or product.providerAddress
         seen[requested.productId] = true
         local lineTotal = product.price * requested.quantity
         total = total + lineTotal
@@ -222,7 +222,9 @@ local function createOrder(senderId, message)
         id = orderId,
         reference = string.format("ORD-%06d", orderId),
         customerId = senderId,
+        customerUser = username,
         providerId = orderProviderId,
+        providerUser = orderProviderUser,
         providerAddress = orderProviderAddress,
         deliveryAddress = deliveryAddress,
         items = items,
@@ -237,29 +239,31 @@ local function createOrder(senderId, message)
     rednet.send(senderId, { type = "order_created", order = order }, PROTOCOL)
 end
 
-local function getOrder(senderId, message)
+local function getOrder(senderId, username, message)
     if type(message.orderId) ~= "number" then
         return sendError(senderId, "Enter a valid order number.")
     end
     local order = findOrder(message.orderId)
     if not order then return sendError(senderId, "Order not found.") end
-    if order.customerId ~= senderId and order.providerId ~= senderId then
+    if not userOwns(order, "customerUser", "customerId", senderId, username)
+        and not userOwns(order, "providerUser", "providerId", senderId, username) then
         return sendError(senderId, "That order belongs to another customer.")
     end
     local orderCopy = {}
     for key, value in pairs(order) do orderCopy[key] = value end
     orderCopy.providerAddress = orderCopy.providerAddress
+        or state.providerAddresses[order.providerUser or ""]
         or state.providerAddresses[tostring(order.providerId)]
     rednet.send(senderId, { type = "order_status", order = orderCopy }, PROTOCOL)
 end
 
-local function completeOrder(senderId, message)
+local function completeOrder(senderId, username, message)
     if type(message.orderId) ~= "number" then
         return sendError(senderId, "Enter a valid order number.")
     end
     local order = findOrder(message.orderId)
     if not order then return sendError(senderId, "Order not found.") end
-    if order.customerId ~= senderId then
+    if not userOwns(order, "customerUser", "customerId", senderId, username) then
         return sendError(senderId, "Only the customer who placed this order can complete it.")
     end
     if order.status ~= "shipping" then
@@ -272,14 +276,16 @@ local function completeOrder(senderId, message)
     rednet.send(senderId, { type = "order_completed", order = order }, PROTOCOL)
 end
 
-local function listOrders(senderId)
+local function listOrders(senderId, username)
     local active = {}
     for _, order in ipairs(state.orders) do
-        if (order.providerId == senderId or order.providerId == nil)
+        if (userOwns(order, "providerUser", "providerId", senderId, username)
+            or order.providerId == nil)
             and order.status ~= "completed" and order.status ~= "cancelled" then
             local orderCopy = {}
             for key, value in pairs(order) do orderCopy[key] = value end
             orderCopy.providerAddress = orderCopy.providerAddress
+                or state.providerAddresses[order.providerUser or ""]
                 or state.providerAddresses[tostring(order.providerId)]
             table.insert(active, orderCopy)
         end
@@ -287,7 +293,7 @@ local function listOrders(senderId)
     rednet.send(senderId, { type = "provider_orders", orders = active }, PROTOCOL)
 end
 
-local function setProviderAddress(senderId, message)
+local function setProviderAddress(senderId, username, message)
     if type(message.address) ~= "string" then
         return sendError(senderId, "A provider payment address is required.")
     end
@@ -296,9 +302,11 @@ local function setProviderAddress(senderId, message)
         return sendError(senderId, "Provider addresses must be 1 to 64 characters without control characters.")
     end
 
-    state.providerAddresses[tostring(senderId)] = address
+    state.providerAddresses[username] = address
     for _, product in ipairs(state.products) do
-        if product.providerId == senderId then product.providerAddress = address end
+        if userOwns(product, "providerUser", "providerId", senderId, username) then
+            product.providerAddress = address
+        end
     end
     saveState()
     rednet.send(senderId, { type = "provider_address_saved", address = address }, PROTOCOL)
@@ -312,15 +320,17 @@ local function getCatalog(senderId)
     rednet.send(senderId, { type = "catalog", products = available }, PROTOCOL)
 end
 
-local function listProviderProducts(senderId)
+local function listProviderProducts(senderId, username)
     local products = {}
     for _, product in ipairs(state.products) do
-        if product.providerId == senderId then table.insert(products, product) end
+        if userOwns(product, "providerUser", "providerId", senderId, username) then
+            table.insert(products, product)
+        end
     end
     rednet.send(senderId, { type = "provider_products", products = products }, PROTOCOL)
 end
 
-local function publishProduct(senderId, message)
+local function publishProduct(senderId, username, message)
     local submitted = message.product
     if type(submitted) ~= "table" or type(submitted.name) ~= "string"
         or type(submitted.price) ~= "number" or submitted.price % 1 ~= 0
@@ -332,7 +342,8 @@ local function publishProduct(senderId, message)
     if #name < 1 or #name > 32 or name:find("%c") then
         return sendError(senderId, "Product names must be 1 to 32 characters without control characters.")
     end
-    local providerAddress = state.providerAddresses[tostring(senderId)]
+    local providerAddress = state.providerAddresses[username]
+        or state.providerAddresses[tostring(senderId)]
     if submitted.providerAddress ~= nil then
         if type(submitted.providerAddress) ~= "string" then
             return sendError(senderId, "The provider Packager address is invalid.")
@@ -341,7 +352,7 @@ local function publishProduct(senderId, message)
         if #providerAddress < 1 or #providerAddress > 64 or providerAddress:find("%c") then
             return sendError(senderId, "Provider addresses must be 1 to 64 characters without control characters.")
         end
-        state.providerAddresses[tostring(senderId)] = providerAddress
+        state.providerAddresses[username] = providerAddress
     end
 
     local product
@@ -350,19 +361,22 @@ local function publishProduct(senderId, message)
             return sendError(senderId, "Invalid product ID.")
         end
         product = findProduct(submitted.id)
-        if not product or product.providerId ~= senderId then
+        if not product
+            or not userOwns(product, "providerUser", "providerId", senderId, username) then
             return sendError(senderId, "You can only edit your own products.")
         end
     else
         product = {
             id = state.nextProductId,
             providerId = senderId,
+            providerUser = username,
             createdAt = os.epoch("utc"),
         }
         state.nextProductId = state.nextProductId + 1
         table.insert(state.products, product)
     end
 
+    product.providerUser = username
     product.name = name
     product.price = submitted.price
     product.available = submitted.available
@@ -376,7 +390,7 @@ local function publishProduct(senderId, message)
     rednet.send(senderId, { type = "product_saved", product = product }, PROTOCOL)
 end
 
-local function updateOrder(senderId, message)
+local function updateOrder(senderId, username, message)
     if type(message.orderId) ~= "number" or type(message.status) ~= "string" then
         return sendError(senderId, "The status update is invalid.")
     end
@@ -385,7 +399,8 @@ local function updateOrder(senderId, message)
     if message.status == "completed" then
         return sendError(senderId, "The customer must confirm order completion.")
     end
-    if order.providerId and order.providerId ~= senderId then
+    if order.providerId
+        and not userOwns(order, "providerUser", "providerId", senderId, username) then
         return sendError(senderId, "You can only update orders for your products.")
     end
     if not ALLOWED_TRANSITIONS[order.status] or not ALLOWED_TRANSITIONS[order.status][message.status] then
@@ -462,38 +477,40 @@ local function drawDashboard()
     if shown == 0 then line(9, "Waiting for orders...", colors.lightGray) end
 end
 
-openModems()
 state = loadState()
 saveState()
-rednet.host(PROTOCOL, SERVER_NAME)
 drawDashboard()
 
-while true do
-    local senderId, message, receivedProtocol = rednet.receive(nil, 1)
-    if senderId and receivedProtocol == PROTOCOL then
-        if type(message) ~= "table" then
-            sendError(senderId, "Invalid request.")
-        elseif message.type == "place_order" then
-            createOrder(senderId, message)
-        elseif message.type == "get_order" then
-            getOrder(senderId, message)
-        elseif message.type == "complete_order" then
-            completeOrder(senderId, message)
-        elseif message.type == "provider_list" then
-            listOrders(senderId)
-        elseif message.type == "set_provider_address" then
-            setProviderAddress(senderId, message)
-        elseif message.type == "get_catalog" then
-            getCatalog(senderId)
-        elseif message.type == "get_provider_products" then
-            listProviderProducts(senderId)
-        elseif message.type == "publish_product" then
-            publishProduct(senderId, message)
-        elseif message.type == "set_status" then
-            updateOrder(senderId, message)
-        else
-            sendError(senderId, "Unknown request.")
-        end
+return function(senderId, message)
+    local username = getAuthenticatedUser(senderId)
+    if type(username) ~= "string" then
+        return sendError(senderId, "Sign in to your Rift Jobs account before using the Market.")
+    end
+
+    if type(message) ~= "table" then return sendError(senderId, "Invalid request.") end
+    if message.type == "place_order" then
+        createOrder(senderId, username, message)
+    elseif message.type == "get_order" then
+        getOrder(senderId, username, message)
+    elseif message.type == "complete_order" then
+        completeOrder(senderId, username, message)
+    elseif message.type == "provider_list" then
+        listOrders(senderId, username)
+    elseif message.type == "set_provider_address" then
+        setProviderAddress(senderId, username, message)
+    elseif message.type == "get_catalog" then
+        getCatalog(senderId)
+    elseif message.type == "get_provider_products" then
+        listProviderProducts(senderId, username)
+    elseif message.type == "publish_product" then
+        publishProduct(senderId, username, message)
+    elseif message.type == "set_status" then
+        updateOrder(senderId, username, message)
+    else
+        sendError(senderId, "Unknown request.")
     end
     drawDashboard()
 end
+end
+
+return createMarketServer

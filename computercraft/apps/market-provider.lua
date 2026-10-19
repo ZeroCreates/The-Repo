@@ -1,9 +1,17 @@
 local PROTOCOL = "order_system_v1"
-local SERVER_NAME = "order_server"
+local SERVER_NAME = "rift-market"
+local JOBS_PROTOCOL = "rift_jobs_v1"
+local JOBS_SERVER_NAME = "rift-server"
 local TIMEOUT = 5
 local ADDRESS_FILE = "provider-address.cfg"
+local JOBS_LOGIN_PATH = "rift-jobs/login.json"
 local providerAddress
 local providerAddressRegistered = false
+local storageLoaded, storage = pcall(require, "storage")
+if not storageLoaded or type(storage) ~= "table"
+    or type(storage.read) ~= "function" then
+    storage = nil
+end
 
 local NEXT_STATUSES = {
     waiting = { "preparing", "cancelled" },
@@ -124,6 +132,38 @@ local function request(message)
         return nil, response.message or "The server rejected the request."
     end
     return response
+end
+
+local function authenticateJobsAccount()
+    if not storage then
+        return false, "Start Rift Jobs from the launcher and sign in to save your account in private storage."
+    end
+    local login, storageError = storage.read(JOBS_LOGIN_PATH)
+    if type(login) ~= "table" or type(login.username) ~= "string"
+        or type(login.password) ~= "string" then
+        if storageError and storageError ~= "Stored data was not found." then
+            return false, "Could not read the saved Rift Jobs login: " .. tostring(storageError)
+        end
+        return false, "Sign in to Rift Jobs first; the Market uses the same account."
+    end
+    local serverId = rednet.lookup(JOBS_PROTOCOL, JOBS_SERVER_NAME)
+    if not serverId then return false, "Combined Jobs and Market server not found." end
+    rednet.send(serverId, {
+        type = "login",
+        username = login.username,
+        password = login.password,
+    }, JOBS_PROTOCOL)
+    local senderId, response = rednet.receive(JOBS_PROTOCOL, TIMEOUT, serverId)
+    if senderId ~= serverId or type(response) ~= "table" then
+        return false, "No response from the Jobs login service."
+    end
+    if response.type == "error" then
+        return false, response.message or "Rift Jobs sign-in failed."
+    end
+    if response.type ~= "authenticated" then
+        return false, "Unexpected response from the Jobs login service."
+    end
+    return true
 end
 
 local function registerProviderAddress()
@@ -382,7 +422,7 @@ local function showDeliveryDetails(order)
     local width, height = term.getSize()
     writeAt(2, 5, "PAYMENT REF: "
         .. (order.reference or string.format("ORD-%06d", order.id)), colors.cyan)
-    local address = order.deliveryAddress or "No address was saved. Update and restart market-server.lua."
+    local address = order.deliveryAddress or "No address was saved. Update and restart rift-server.lua."
     local lineWidth = math.max(1, width - 3)
     local row = 6
     for start = 1, #address, lineWidth do
@@ -577,6 +617,11 @@ updateStatus = function(order)
 end
 
 openModems()
+local authenticated, authenticationError = authenticateJobsAccount()
+if not authenticated then
+    showNotice("MARKET SIGN IN", authenticationError)
+    return
+end
 providerAddress = loadProviderAddress()
 if providerAddress == "" then
     configureProviderAddress()

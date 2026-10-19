@@ -1,10 +1,14 @@
 local PROTOCOL = "rift_jobs_v1"
-local SERVER_NAME = "jobs_server"
+local LOGIN_SERVER_NAME = "rift-server"
+local JOBS_SERVER_NAME = "rift-jobs"
+local MARKET_PROTOCOL = "order_system_v1"
+local MARKET_SERVER_NAME = "rift-market"
 local DATA_FILE = "jobs.db"
 local BACKUP_FILE = "jobs.db.bak"
 local TEMP_FILE = "jobs.db.tmp"
 local state
 local sessions = {}
+local handleMarketRequest
 
 local function openModems()
     local found = false
@@ -14,7 +18,7 @@ local function openModems()
             found = true
         end
     end
-    if not found then error("Attach a modem before starting the Jobs server.") end
+    if not found then error("Attach a modem before starting the combined Jobs and Market server.") end
 end
 
 local function readState(path)
@@ -301,8 +305,8 @@ local function drawDashboard()
         if job.status == "claimed" or job.status == "review" then activeCount = activeCount + 1 end
         if job.status == "completed" then completedCount = completedCount + 1 end
     end
-    line(1, " RIFT JOBS SERVER  |  ONLINE", colors.white, colors.cyan)
-    line(2, "Computer #" .. os.getComputerID() .. "  |  Protocol: " .. PROTOCOL, colors.lightGray)
+    line(1, " RIFT JOBS + MARKET SERVER  |  ONLINE", colors.white, colors.cyan)
+    line(2, "Computer #" .. os.getComputerID() .. "  |  Protocols: Jobs + Market", colors.lightGray)
     line(4, "OPEN  " .. openCount .. "    IN PROGRESS  " .. activeCount .. "    COMPLETED  " .. completedCount, colors.lime)
     line(6, "RECENT JOBS", colors.white, colors.blue)
     local row = 7
@@ -316,12 +320,36 @@ local function drawDashboard()
 end
 
 openModems()
+
+local marketServerPath = fs.combine(fs.getDir(shell.getRunningProgram()), "rift-server-market.lua")
+local marketServerChunk, marketLoadError = loadfile(marketServerPath)
+if not marketServerChunk then
+    error("Could not load the Market server module at " .. marketServerPath .. ": "
+        .. tostring(marketLoadError), 0)
+end
+local moduleLoaded, createMarketServer = pcall(marketServerChunk)
+if not moduleLoaded or type(createMarketServer) ~= "function" then
+    error("The Market server module is invalid: " .. tostring(createMarketServer), 0)
+end
+handleMarketRequest = createMarketServer(function(senderId)
+    return sessions[senderId]
+end)
+if type(handleMarketRequest) ~= "function" then
+    error("The Market server module did not provide a request handler.", 0)
+end
+
 state = loadState()
-rednet.host(PROTOCOL, SERVER_NAME)
+rednet.host(PROTOCOL, LOGIN_SERVER_NAME)
+rednet.host(PROTOCOL, JOBS_SERVER_NAME)
+rednet.host(MARKET_PROTOCOL, MARKET_SERVER_NAME)
 drawDashboard()
 
 while true do
     local senderId, message, receivedProtocol = rednet.receive(nil, 1)
-    if senderId and receivedProtocol == PROTOCOL then handleRequest(senderId, message) end
+    if senderId and receivedProtocol == PROTOCOL then
+        handleRequest(senderId, message)
+    elseif senderId and receivedProtocol == MARKET_PROTOCOL then
+        handleMarketRequest(senderId, message)
+    end
     drawDashboard()
 end

@@ -3,8 +3,8 @@ local BRANCH = "main"
 local CONFIG_NAME = "order-system.cfg"
 local ROLE_FILES = {
     server = {
-        name = "market-server.lua",
-        source = "market-server.lua",
+        name = "rift-server.lua",
+        source = "rift-server.lua",
     },
     provider = {
         name = "market-provider.lua",
@@ -93,6 +93,13 @@ local files = {
         destination = fs.combine(installDirectory, UPDATER.name),
     },
 }
+if config.role == "server" then
+    table.insert(files, {
+        name = "rift-server-market.lua",
+        source = "rift-server-market.lua",
+        destination = fs.combine(installDirectory, "rift-server-market.lua"),
+    })
+end
 
 local staged = {}
 print("Checking GitHub for " .. config.role .. " and updater updates: " .. OWNER_REPO .. " (" .. BRANCH .. ")")
@@ -161,5 +168,12 @@ for _, entry in ipairs(installed) do
     if fs.exists(entry.backup) then fs.delete(entry.backup) end
 end
 
-print("The " .. config.role .. " system and market-update.lua are updated.")
+if config.role == "server" then
+    print("The combined Jobs and Market server is updated.")
+    print("Stop old jobs-server.lua and market-server.lua processes, then run rift-server.lua.")
+    print("Back up and keep jobs.db, orders.db, and products.db in the server's working folder.")
+    print("Copy the existing Jobs and Market database files there before first startup.")
+else
+    print("The " .. config.role .. " system and market-update.lua are updated.")
+end
 print("Restart running scripts to use the new version.")

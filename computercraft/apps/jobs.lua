@@ -1,7 +1,16 @@
 local PROTOCOL = "rift_jobs_v1"
-local SERVER_NAME = "jobs_server"
+local LOGIN_SERVER_NAME = "rift-server"
+local JOBS_SERVER_NAME = "rift-jobs"
 local TIMEOUT = 5
+local STORED_LOGIN_PATH = "rift-jobs/login.json"
 local playerName
+local savedLogin
+local storageLoaded, storage = pcall(require, "storage")
+if not storageLoaded or type(storage) ~= "table"
+    or type(storage.read) ~= "function" or type(storage.write) ~= "function"
+    or type(storage.delete) ~= "function" then
+    storage = nil
+end
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
     { accent = colors.lime, highlight = colors.green },
@@ -161,7 +170,11 @@ local function openModems()
 end
 
 local function request(message)
-    local serverId = rednet.lookup(PROTOCOL, SERVER_NAME)
+    local serverName = JOBS_SERVER_NAME
+    if message.type == "login" or message.type == "register" or message.type == "logout" then
+        serverName = LOGIN_SERVER_NAME
+    end
+    local serverId = rednet.lookup(PROTOCOL, serverName)
     if not serverId then
         return nil, "Rift Jobs server not found. Check that it is running and connected."
     end
@@ -172,6 +185,68 @@ local function request(message)
         return nil, response.message or "The Jobs server rejected the request."
     end
     return response
+end
+
+local function saveLogin(username, password)
+    if not storage then
+        return false, "Private storage is unavailable. Start Rift Jobs from the launcher."
+    end
+    local saved, saveError = storage.write(STORED_LOGIN_PATH, {
+        username = username,
+        password = password,
+    })
+    if not saved then
+        return false, "Could not save the Jobs login to private storage: "
+            .. tostring(saveError or "unknown storage error")
+    end
+    savedLogin = { username = username, password = password }
+    return true
+end
+
+local function loadSavedLogin()
+    if not storage then return nil, "Private storage is unavailable." end
+    local data, storageError = storage.read(STORED_LOGIN_PATH)
+    if data == nil then
+        if storageError == "Stored data was not found." then return nil end
+        return nil, "Could not load the saved Jobs login: "
+            .. tostring(storageError or "unknown storage error")
+    end
+    if type(data) ~= "table" or type(data.username) ~= "string"
+        or type(data.password) ~= "string" then
+        return nil, "Saved Jobs login data is invalid."
+    end
+    savedLogin = { username = data.username, password = data.password }
+    return savedLogin
+end
+
+local function deleteSavedLogin()
+    if not storage then
+        if not savedLogin then return true end
+        return false, "Private storage is unavailable; the saved Jobs login could not be removed."
+    end
+    local deleted, deleteError = storage.delete(STORED_LOGIN_PATH)
+    if not deleted and deleteError ~= "Stored data was not found." then
+        return false, "Could not remove the saved Jobs login: "
+            .. tostring(deleteError or "unknown storage error")
+    end
+    savedLogin = nil
+    return true
+end
+
+local function authenticate(username, password, failureTitle)
+    local response, err = request({
+        type = "login",
+        username = username,
+        password = password,
+    })
+    if not response then return showNotice(failureTitle, err) end
+    local saved, saveError = saveLogin(response.username, password)
+    if not saved then
+        playerName = response.username
+        showNotice("LOGIN NOT SAVED", saveError)
+        return
+    end
+    playerName = response.username
 end
 
 local function createAccount()
@@ -188,25 +263,27 @@ local function createAccount()
         password = password,
     })
     if not response then return showNotice("ACCOUNT NOT CREATED", err) end
+    local saved, saveError = saveLogin(response.username, password)
+    if not saved then
+        playerName = response.username
+        showNotice("ACCOUNT CREATED", "You are signed in, but " .. saveError)
+        return
+    end
     playerName = response.username
 end
 
 local function signIn()
     local username = readText("Username")
     local password = readText("Password", true)
-    local response, err = request({
-        type = "login",
-        username = username,
-        password = password,
-    })
-    if not response then return showNotice("SIGN IN FAILED", err) end
-    playerName = response.username
+    authenticate(username, password, "SIGN IN FAILED")
 end
 
 local function signOut()
-    local response, err = request({ type = "logout" })
+    local response, logoutError = request({ type = "logout" })
     playerName = nil
-    if not response then return showNotice("SIGNED OUT", err) end
+    local deleted, deleteError = deleteSavedLogin()
+    if not deleted then return showNotice("SIGNED OUT", deleteError) end
+    if not response then return showNotice("SIGNED OUT", logoutError) end
 end
 
 local function drawJobs(title, subtitle, jobs, page, showStatus)
@@ -375,6 +452,12 @@ local function myJobs()
 end
 
 openModems()
+local login, loginError = loadSavedLogin()
+if login then
+    authenticate(login.username, login.password, "SAVED SIGN IN FAILED")
+elseif loginError then
+    showNotice("SAVED LOGIN UNAVAILABLE", loginError)
+end
 
 while true do
     if playerName then
@@ -398,9 +481,14 @@ while true do
             signOut()
         elseif choice == "quit" then
             if playerName then
-                local response, err = request({ type = "logout" })
-                if not response then showNotice("SIGN OUT FAILED", err) end
+                local response, logoutError = request({ type = "logout" })
                 playerName = nil
+                local deleted, deleteError = deleteSavedLogin()
+                if not deleted then
+                    showNotice("SIGN OUT FAILED", deleteError)
+                elseif not response then
+                    showNotice("SIGN OUT FAILED", logoutError)
+                end
             end
             break
         end
