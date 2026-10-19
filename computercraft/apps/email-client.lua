@@ -14,6 +14,17 @@ local profileHome = type(requestedHome) == "string" and requestedHome:gsub("/+$"
 local mouseEnabled = false
 local account
 local currentFolder = "Inbox"
+local themeAccent = colors.cyan
+local themeHighlight = colors.blue
+
+if type(launcherTheme) == "table" then
+    if type(launcherTheme.accent) == "number" then themeAccent = launcherTheme.accent end
+    if type(launcherTheme.highlight) == "number" then themeHighlight = launcherTheme.highlight end
+end
+if not term.isColor() then
+    themeAccent = colors.gray
+    themeHighlight = colors.gray
+end
 
 local function clearScreen()
     term.setBackgroundColor(colors.black)
@@ -34,15 +45,15 @@ end
 local function drawHeader(title, subtitle)
     local width = term.getSize()
     clearScreen()
-    writeAt(1, 1, string.rep(" ", width), colors.white, colors.cyan)
-    writeAt(2, 1, title, colors.white, colors.cyan)
+    writeAt(1, 1, string.rep(" ", width), colors.white, themeAccent)
+    writeAt(2, 1, title, colors.white, themeAccent)
     writeAt(2, 2, subtitle or "", colors.lightGray)
 end
 
 local function sectionTitle(y, title)
     local width = term.getSize()
-    writeAt(1, y, string.rep(" ", width), colors.white, colors.blue)
-    writeAt(2, y, title, colors.white, colors.blue)
+    writeAt(1, y, string.rep(" ", width), colors.white, themeHighlight)
+    writeAt(2, y, title, colors.white, themeHighlight)
 end
 
 local function drawChoices(help)
@@ -70,7 +81,7 @@ local function drawChoices(help)
         local left = math.floor(column * width / columns) + 1
         local right = math.floor((column + 1) * width / columns)
         writeAt(left, row, ("[" .. option.label .. "]"):sub(1, right - left + 1),
-            colors.black, colors.lightBlue)
+            colors.black, themeHighlight)
         table.insert(buttons, { key = option.key, row = row, left = left, right = right })
     end
     return buttons
@@ -80,7 +91,7 @@ local function readChoice(help)
     if not mouseEnabled then
         local _, height = term.getSize()
         writeAt(2, height - 2, help, colors.lightGray)
-        writeAt(2, height - 1, "> ", colors.lime)
+        writeAt(2, height - 1, "> ", themeAccent)
         term.setCursorPos(4, height - 1)
         return read():lower()
     end
@@ -175,7 +186,7 @@ local function notice(title, message)
         row = row + 1
     end
     local _, height = term.getSize()
-    writeAt(2, height - 1, "[ OK ]", colors.white, colors.blue)
+    writeAt(2, height - 1, "[ OK ]", colors.white, themeHighlight)
     if mouseEnabled then
         while true do
             local event, button, x, y = os.pullEvent()
@@ -191,7 +202,7 @@ local function readField(label, secret)
     drawHeader("RIFTMAIL", "EMAIL CLIENT  /  ACCOUNT")
     sectionTitle(4, "INPUT")
     writeAt(2, 6, label, colors.white)
-    writeAt(2, 8, "> ", colors.lime)
+    writeAt(2, 8, "> ", themeAccent)
     term.setCursorPos(4, 8)
     return read(secret and "*" or nil)
 end
@@ -351,7 +362,7 @@ local function displayMessage(item)
         for index = firstLine, math.min(#lines, firstLine + pageSize - 1) do
             writeAt(2, 5 + index - firstLine, lines[index], colors.white)
         end
-        writeAt(2, height - 4, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
+        writeAt(2, height - 4, "PAGE " .. page .. " / " .. pageCount, themeAccent)
         local action = readChoice("p prev|n next|m move|d delete|b back")
         if action == "b" then return "back" end
         if action == "d" then return "delete" end
@@ -476,12 +487,12 @@ local function inbox(category)
                 local unreadMark = message.read and "" or "* "
                 writeAt(2, y, string.format("%02d  %s%s | %s",
                     index - startIndex + 1, unreadMark, message.from, message.subject),
-                    message.read and colors.white or colors.lime)
+                    message.read and colors.white or themeAccent)
                 writeAt(4, y + 1, message.read and "READ" or "UNREAD", colors.lightGray)
             end
         end
         local pageCount = math.max(1, math.ceil(#response.messages / pageSize))
-        writeAt(2, height - 4, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
+        writeAt(2, height - 4, "PAGE " .. page .. " / " .. pageCount, themeAccent)
         local help = (page > 1 and "p prev|" or "")
             .. (endIndex < #response.messages and "n next|" or "")
             .. "i inbox|c compose|f folders|s sign out|q quit"
@@ -518,7 +529,7 @@ local function inbox(category)
             end
         else
             writeAt(2, height - 2, help, colors.lightGray)
-            writeAt(2, height - 1, "Message number or action: ", colors.lime)
+            writeAt(2, height - 1, "Message number or action: ", themeAccent)
             selected = read():lower()
             local choice = tonumber(selected)
             if choice then

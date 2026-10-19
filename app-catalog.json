@@ -46,7 +46,7 @@
     "name": "Rift-Mail",
     "source": "computercraft/apps/email-client.lua",
     "file": "email-client.lua",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Create saved email accounts and send messages over rednet"
   },
   {
