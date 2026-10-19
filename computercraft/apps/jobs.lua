@@ -596,16 +596,6 @@ while true do
         elseif choice == "signout" then
             signOut()
         elseif choice == "quit" then
-            if playerName then
-                local response, logoutError = request({ type = "logout" })
-                playerName = nil
-                local deleted, deleteError = deleteSavedLogin()
-                if not deleted then
-                    showNotice("SIGN OUT FAILED", deleteError)
-                elseif not response then
-                    showNotice("SIGN OUT FAILED", logoutError)
-                end
-            end
             break
         end
     else

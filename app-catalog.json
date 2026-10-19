@@ -87,17 +87,17 @@
     "description": "Read and write local notes"
   },
   {
-    "name": "The Market",
+    "name": "Rift Market",
     "source": "computercraft/apps/market-client.lua",
     "file": "market-client.lua",
-    "version": "1.5.8",
-    "description": "Shop, save delivery addresses to your Rift account, and track account-based orders"
+    "version": "1.5.9",
+    "description": "Shop, save delivery addresses, track account-based orders, and sign out of Rift"
   },
   {
     "name": "Rift Jobs",
     "source": "computercraft/apps/jobs.lua",
     "file": "jobs.lua",
-    "version": "1.2.6",
+    "version": "1.2.7",
     "description": "Post player jobs, claim work, and review submissions"
   }
 ]

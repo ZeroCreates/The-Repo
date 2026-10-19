@@ -85,20 +85,22 @@ local function deleteRiftAccount(path)
     local storageError
     if storage then
         local called, deleted, err = pcall(storage.delete, path)
-        if called and deleted then return true end
-        storageError = called and err or deleted
-        if called and err == "Stored data was not found." then storageError = nil end
+        if not called or not deleted then
+            storageError = called and err or deleted
+            if called and err == "Stored data was not found." then storageError = nil end
+        end
     end
     local absolutePath = "/" .. path
-    if not fs.exists(absolutePath) then
-        if storageError then return false, "Could not delete account from launcher storage: " .. tostring(storageError) end
-        return false, "Stored data was not found."
+    if fs.exists(absolutePath) then
+        if fs.isDir(absolutePath) then return false, "Saved Rift account path is a folder." end
+        local deleted, deleteError = pcall(fs.delete, absolutePath)
+        if not deleted then
+            return false, "Could not delete saved Rift account: " .. tostring(deleteError)
+                .. (storageError and "; launcher storage also failed: " .. tostring(storageError) or "")
+        end
     end
-    if fs.isDir(absolutePath) then return false, "Saved Rift account path is a folder." end
-    local deleted, deleteError = pcall(fs.delete, absolutePath)
-    if not deleted then
-        return false, "Could not delete saved Rift account: " .. tostring(deleteError)
-            .. (storageError and "; launcher storage also failed: " .. tostring(storageError) or "")
+    if storageError then
+        return false, "Could not delete account from launcher storage: " .. tostring(storageError)
     end
     return true
 end
@@ -388,6 +390,27 @@ local function authenticateAccount(username, password, action)
     return true, "Signed in as " .. response.username .. "."
 end
 
+local function signOutRiftAccount()
+    local serverId = rednet.lookup(ACCOUNT_PROTOCOL, ACCOUNT_SERVER_NAME)
+    if not serverId then
+        return false, "Rift account server not found; saved credentials were not cleared."
+    end
+    rednet.send(serverId, { type = "logout" }, ACCOUNT_PROTOCOL)
+    local senderId, response = rednet.receive(ACCOUNT_PROTOCOL, TIMEOUT, serverId)
+    if senderId ~= serverId or type(response) ~= "table" or response.type ~= "logged_out" then
+        return false, "No confirmation from the Rift account server; saved credentials were not cleared."
+    end
+    for _, path in ipairs({ RIFT_LOGIN_PATH, LEGACY_LOGIN_PATH }) do
+        local deleted, deleteError = deleteRiftAccount(path)
+        if not deleted and deleteError ~= "Stored data was not found." then
+            return false, "Signed out of the Rift account, but could not clear saved credentials: "
+                .. tostring(deleteError)
+        end
+    end
+    riftAccount = {}
+    return true
+end
+
 local function authenticateRiftAccount()
     local savedLoginError
     local login, storageError = readRiftAccount(RIFT_LOGIN_PATH)
@@ -421,7 +444,7 @@ local function authenticateRiftAccount()
     end
 
     while true do
-        drawHeader("RIFT", "MARKET  /  SIGN IN WITH YOUR RIFT ACCOUNT")
+        drawHeader("RIFT", "RIFT MARKET  /  SIGN IN WITH YOUR RIFT ACCOUNT")
         if savedLoginError then writeAt(2, 4, savedLoginError, colors.yellow) end
         local choice = readChoice("s sign in|c create account|q quit")
         if choice == "q" then return false, "Sign-in cancelled." end
@@ -621,7 +644,7 @@ end
 
 local function renderCatalog(products, cart, errorMessage, page)
     local visibleProducts = {}
-    drawHeader("THE MARKET", "INDEPENDENT PROVIDERS  /  LIVE CATALOG")
+    drawHeader("RIFT MARKET", "INDEPENDENT PROVIDERS  /  LIVE CATALOG")
     sectionTitle(4, "AVAILABLE PRODUCTS  |  " .. #products)
     if errorMessage then
         writeAt(2, 6, errorMessage, colors.red)
@@ -650,7 +673,7 @@ local function renderCatalog(products, cart, errorMessage, page)
     end
 
     local help = "a add by ID|c cart " .. cartCount(cart)
-        .. "|o my orders|s track|n/v pages|r refresh|q quit"
+        .. "|o my orders|s track|x sign out|n/v pages|r refresh|q quit"
     if not mouseEnabled then return readChoice(help), page end
 
     local buttons = drawChoices(help)
@@ -674,7 +697,7 @@ end
 local addSelectedProduct
 
 local function addToCart(products, cart)
-    drawHeader("ADD TO CART", "ENTER A PRODUCT ID FROM THE MARKET")
+    drawHeader("RIFT MARKET", "ADD TO CART  /  ENTER A PRODUCT ID")
     term.setCursorPos(2, 6)
     write("Product ID: ")
     local productId = tonumber(read())
@@ -971,6 +994,11 @@ while true do
         checkStatus()
     elseif choice == "o" then
         showMyOrders()
+    elseif choice == "x" then
+        local signedOut, signOutError = signOutRiftAccount()
+        showNotice(signedOut and "SIGNED OUT" or "SIGN OUT FAILED",
+            signedOut and "You have been signed out of your Rift account." or signOutError)
+        if signedOut then break end
     elseif choice == "n" then
         page = page + 1
     elseif choice == "v" then
