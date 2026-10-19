@@ -604,7 +604,7 @@ local function runSelected()
         return
     end
 
-    local ok, result = pcall(runProfileProgram, "/" .. entry.path, homeDirectory)
+    local ok, result = pcall(runProfileProgram, "/" .. entry.path)
     if not ok then
         message = "Could not run " .. entry.name .. ": " .. tostring(result)
     elseif result == false then
@@ -1027,7 +1027,7 @@ local function commandPrompt()
                         end
                         local status, statusColor
                         local ok, result = pcall(runProfileProgram,
-                            "/" .. programPath, homeDirectory, table.unpack(programArguments))
+                            "/" .. programPath, table.unpack(programArguments))
                         if not ok then
                             status = "Program error: " .. tostring(result)
                             statusColor = colors.red
