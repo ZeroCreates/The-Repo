@@ -41,6 +41,8 @@
     .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; background: var(--green); color: white; }
     .server-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 12px var(--mono); }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #449368; }
+    .manager-link { color: var(--green); font: 11px var(--mono); text-decoration: none; }
+    .manager-link:hover { text-decoration: underline; }
     main { max-width: 1240px; margin: 0 auto; padding: 42px 28px 72px; }
     .intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: end; margin-bottom: 30px; }
     .eyebrow { margin: 0 0 11px; color: var(--coral); font: 700 11px var(--mono); text-transform: uppercase; }
@@ -97,7 +99,7 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark">R</span><span>RIFT / SCRIPT LIBRARY</span></div>
-    <div class="server-state"><span class="status-dot"></span><span id="server-status">CONNECTING</span></div>
+    <div class="server-state"><span class="status-dot"></span><span id="server-status">CONNECTING</span><a class="manager-link" href="/manager">MANAGE</a></div>
   </header>
   <main>
     <section class="intro">

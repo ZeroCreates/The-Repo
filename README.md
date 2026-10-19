@@ -20,6 +20,10 @@ The website is available at `https://rift.zerocreates.org/`. The catalog API is 
 
 The optional `.env` file controls `HOST` and `PORT`; the example binds to `0.0.0.0:3000`. `.env` is git-ignored and should hold machine-specific settings. To keep the host running, use a process manager or run it as a service. For public internet access, put it behind a TLS-enabled reverse proxy.
 
+## Manage apps
+
+Open `/manager` on the hosted site. Set `MANAGER_PASSWORD` in the host's `.env` to a strong, unique password, then restart the server. The manager can add apps, upload replacement Lua files, update descriptions and versions, and remove catalog apps and their files. It only manages catalog apps in `computercraft/apps`; server and system programs are not editable there. Keep manager access behind HTTPS because the password is sent to the host for authenticated requests.
+
 ## Connect ComputerCraft
 
 The Lua clients fetch from `https://rift.zerocreates.org/`. If you self-host at a different address, change `HOST_BASE_URL` in each of these files, including the trailing slash:
