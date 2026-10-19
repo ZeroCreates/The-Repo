@@ -186,7 +186,7 @@ local function authenticateJobsAccount()
                 or type(login.password) ~= "string" then
                 savedLoginError = "Saved Rift account data is invalid."
             else
-                local authenticated = authenticateAccount(login.username, login.password, "login")
+                local authenticated, authError = authenticateAccount(login.username, login.password, "login")
                 if authenticated then return true end
                 savedLoginError = "Saved Rift account sign-in failed: " .. authError
             end
