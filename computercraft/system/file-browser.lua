@@ -469,15 +469,49 @@ local function editSelected()
             message = temporaryError
             return
         end
-        local ran, result = pcall(os.run, _ENV, editorPath, temporaryPath)
-        if not ran or result == false then
+        local stagedContents, stagedReadError = readFile(temporaryPath)
+        if not stagedContents or stagedContents ~= plaintext then
             local removed, removeError = deleteFile(temporaryPath)
-            message = not ran and ("Could not run edit: " .. tostring(result))
-                or "The edit command did not complete successfully."
+            message = "Could not prepare the decrypted file for editing: "
+                .. tostring(stagedReadError or "the temporary contents did not match.")
             if not removed then
                 message = message .. " Plaintext remains at " .. temporaryPath
                     .. ": " .. removeError
             end
+            return
+        end
+
+        local previousDirectory = shell.dir()
+        local changedDirectory, directoryError = pcall(shell.setDir, "/.launcher")
+        if not changedDirectory then
+            local removed, removeError = deleteFile(temporaryPath)
+            message = "Could not open the decrypted file: " .. tostring(directoryError)
+            if not removed then
+                message = message .. " Plaintext remains at " .. temporaryPath
+                    .. ": " .. removeError
+            end
+            return
+        end
+        local ran, result = pcall(os.run, _ENV, editorPath, fs.getName(temporaryPath))
+        local restoredDirectory, restoreError = pcall(shell.setDir, previousDirectory)
+        if not ran or result == false then
+            local removed, removeError = deleteFile(temporaryPath)
+            message = not ran and ("Could not run edit: " .. tostring(result))
+                or "The edit command did not complete successfully."
+            if not restoredDirectory then
+                message = message .. " Could not restore the previous directory: "
+                    .. tostring(restoreError)
+            end
+            if not removed then
+                message = message .. " Plaintext remains at " .. temporaryPath
+                    .. ": " .. removeError
+            end
+            return
+        end
+        if not restoredDirectory then
+            message = "Could not restore the previous directory: " .. tostring(restoreError)
+                .. ". The original private data remains encrypted; plaintext is at "
+                .. temporaryPath .. "."
             return
         end
 
