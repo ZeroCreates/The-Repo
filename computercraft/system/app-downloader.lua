@@ -239,7 +239,8 @@ local function draw()
     term.setBackgroundColor(colors.black)
     term.setCursorPos(2, 2)
     term.setTextColor(colors.lightGray)
-    term.write("Apps from " .. OWNER_REPO)
+    term.write(("Apps from " .. OWNER_REPO .. "  |  N/V: PAGE")
+        :sub(1, math.max(0, width - 2)))
 
     local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
     for index = firstVisible, lastVisible do
@@ -762,6 +763,11 @@ while true do
             selected = math.max(1, selected - 1)
         elseif key == keys.down then
             selected = math.min(#apps, selected + 1)
+        elseif key == keys.n or key == keys.v then
+            local _, height = term.getSize()
+            local direction = key == keys.n and 1 or -1
+            selected = math.max(1, math.min(#apps,
+                selected + direction * visibleAppRows(height)))
         elseif key == keys.enter then
             downloadApp(apps[selected])
         elseif key == keys.u then

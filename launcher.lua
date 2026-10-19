@@ -766,7 +766,8 @@ local function chooseUser(skipAutoLogin)
         else
             term.setCursorPos(2, height - 3)
             term.setTextColor(colors.lightGray)
-            term.write(("Click a profile once to select, again to open."):sub(1, math.max(0, width - 2)))
+            term.write(("N/V: change profile page  |  Click a profile twice to open.")
+                :sub(1, math.max(0, width - 2)))
         end
         term.setCursorPos(2, height - 2)
         term.setTextColor(colors.yellow)
@@ -792,7 +793,10 @@ local function chooseUser(skipAutoLogin)
         term.setBackgroundColor(colors.black)
 
         local event, button, x, y = os.pullEventRaw()
-        if event == "mouse_scroll" and y >= 5 and y < 5 + visibleRows then
+        if event == "key" and (button == keys.n or button == keys.v) then
+            userSelected = math.max(1, math.min(#users,
+                userSelected + (button == keys.n and visibleRows or -visibleRows)))
+        elseif event == "mouse_scroll" and y >= 5 and y < 5 + visibleRows then
             userSelected = math.max(1, math.min(#users, userSelected + button))
         elseif event == "mouse_click" and button == 1 then
             local index = userFirstVisible + y - 5
@@ -1075,7 +1079,7 @@ local function draw()
     term.setBackgroundColor(backgroundColor)
     term.setCursorPos(2, 2)
     term.setTextColor(mutedColor)
-    term.write(("YOUR PROGRAMS"):sub(1, math.max(0, width - 2)))
+    term.write(("YOUR PROGRAMS  |  N/V: PAGE"):sub(1, math.max(0, width - 2)))
 
     local lastVisible = math.min(#apps, firstVisible + visibleRows - 1)
     for index = firstVisible, lastVisible do
@@ -1827,7 +1831,12 @@ end
 while true do
     local firstButtons, secondButtons = draw()
     local event, button, x, y = os.pullEventRaw()
-    if event == "mouse_scroll" then
+    if event == "key" and (button == keys.n or button == keys.v) then
+        local _, height = term.getSize()
+        local visibleRows = math.max(1, height - 12)
+        selected = math.max(1, math.min(#apps,
+            selected + (button == keys.n and visibleRows or -visibleRows)))
+    elseif event == "mouse_scroll" then
         local _, height = term.getSize()
         if y >= 4 and y < 4 + math.max(1, height - 12) then
             selected = math.max(1, math.min(#apps, selected + button))

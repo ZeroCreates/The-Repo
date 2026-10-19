@@ -467,8 +467,8 @@ local function browseJobs()
         page = shownPage
         local buttons = drawButtons({
             { id = "back", label = "BACK", key = keys.backspace },
-            { id = "previous", label = "PREVIOUS", key = keys.left },
-            { id = "next", label = "NEXT", key = keys.right },
+            { id = "previous", label = "PREVIOUS (V)", key = keys.v },
+            { id = "next", label = "NEXT (N)", key = keys.n },
             { id = "refresh", label = "REFRESH", key = keys.r },
         })
         local choice, selectedJob = waitForAction(buttons, rows)
@@ -553,8 +553,8 @@ local function myJobs()
         page = shownPage
         local buttons = drawButtons({
             { id = "back", label = "BACK", key = keys.backspace },
-            { id = "previous", label = "PREVIOUS", key = keys.left },
-            { id = "next", label = "NEXT", key = keys.right },
+            { id = "previous", label = "PREVIOUS (V)", key = keys.v },
+            { id = "next", label = "NEXT (N)", key = keys.n },
             { id = "refresh", label = "REFRESH", key = keys.r },
         })
         local choice, selectedJob = waitForAction(buttons, rows)

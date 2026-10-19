@@ -102,15 +102,20 @@ local function readChoice(help)
     while true do
         local event, button, x, y = os.pullEvent()
         if event == "mouse_scroll" then
-            local scrollAction = button > 0 and "n" or "p"
+            local action = button > 0 and "n" or "v"
             for _, choice in ipairs(buttons) do
-                if choice.key == scrollAction then return scrollAction end
+                if choice.key == action then return action end
             end
         elseif event == "mouse_click" and button == 1 then
             for _, choice in ipairs(buttons) do
                 if y == choice.row and x >= choice.left and x <= choice.right then
                     return choice.key
                 end
+            end
+        elseif event == "key" and (button == keys.n or button == keys.v) then
+            local action = button == keys.n and "n" or "v"
+            for _, choice in ipairs(buttons) do
+                if choice.key == action then return action end
             end
         end
     end
@@ -158,7 +163,10 @@ local function choose(title, subtitle, choices)
 
     if not mouseEnabled then
         writeAt(2, height - 1, "Choose an option by number and press Enter.", colors.lightGray)
-        local selected = tonumber(read())
+        local input = read():lower()
+        if input == "n" then return "next" end
+        if input == "v" then return "previous" end
+        local selected = tonumber(input)
         return selected and choices[selected] and choices[selected].key
     end
 
@@ -168,6 +176,11 @@ local function choose(title, subtitle, choices)
             local scrollAction = button > 0 and "next" or "previous"
             for _, choice in ipairs(choices) do
                 if choice.key == scrollAction then return scrollAction end
+            end
+        elseif event == "key" and (button == keys.n or button == keys.v) then
+            local action = button == keys.n and "next" or "previous"
+            for _, choice in ipairs(choices) do
+                if choice.key == action then return action end
             end
         elseif event == "mouse_click" and button == 1 and x >= 2 then
             local index = y - firstRow + 1
@@ -409,12 +422,12 @@ local function displayMessage(item)
             writeAt(2, 5 + index - firstLine, lines[index], colors.white)
         end
         writeAt(2, height - 4, "PAGE " .. page .. " / " .. pageCount, themeAccent)
-        local action = readChoice("p prev|n next|m move|d delete|b back")
+        local action = readChoice("v prev|n next|m move|d delete|b back")
         if action == "b" then return "back" end
         if action == "d" then return "delete" end
         if action == "m" then return "move" end
         if action == "n" then page = math.min(pageCount, page + 1) end
-        if action == "p" then page = math.max(1, page - 1) end
+        if action == "v" or action == "p" then page = math.max(1, page - 1) end
     end
 end
 
@@ -533,7 +546,7 @@ local function inbox(category)
         end
         local pageCount = math.max(1, math.ceil(#response.messages / pageSize))
         writeAt(2, height - 4, "PAGE " .. page .. " / " .. pageCount, themeAccent)
-        local help = (page > 1 and "p prev|" or "")
+        local help = (page > 1 and "v prev|" or "")
             .. (endIndex < #response.messages and "n next|" or "")
             .. "i inbox|c compose|f folders|s sign out|q quit"
         local selected
@@ -545,7 +558,14 @@ local function inbox(category)
                     if button > 0 and endIndex < #response.messages then
                         selected = "n"
                     elseif button < 0 and page > 1 then
-                        selected = "p"
+                        selected = "v"
+                    end
+                    if selected then break end
+                elseif event == "key" and (button == keys.n or button == keys.v) then
+                    if button == keys.n and endIndex < #response.messages then
+                        selected = "n"
+                    elseif button == keys.v and page > 1 then
+                        selected = "v"
                     end
                     if selected then break end
                 elseif event == "mouse_click" and button == 1 then
@@ -584,7 +604,7 @@ local function inbox(category)
         if selected == "i" then return "folder", "Inbox" end
         if selected == "s" then return "signout" end
         if selected == "q" then return "quit" end
-        if selected == "p" then page = math.max(1, page - 1) end
+        if selected == "v" or selected == "p" then page = math.max(1, page - 1) end
         if selected == "n" then page = math.min(pageCount, page + 1) end
 
         if type(selected) == "string" then

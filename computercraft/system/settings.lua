@@ -782,6 +782,9 @@ local function draw()
             term.setTextColor(colors.lightGray)
             term.write("No user accounts exist.")
         end
+        term.setCursorPos(2, height - 3)
+        term.setTextColor(colors.lightGray)
+        term.write(("N/V: PAGE THROUGH USERS"):sub(1, math.max(0, width - 2)))
         term.setCursorPos(2, height - 2)
         term.setTextColor(colors.lightGray)
         term.write(message:sub(1, math.max(0, width - 2)))
@@ -802,7 +805,14 @@ end
 while true do
     local buttons, users, firstUserRow, visibleRows = draw()
     local event, button, x, y = os.pullEventRaw()
-    if event == "mouse_scroll" and page == "accounts" then
+    if event == "key" and page == "accounts" and (button == keys.n or button == keys.v) then
+        local direction = button == keys.n and 1 or -1
+        selectedUser = math.max(1, math.min(#users, selectedUser + direction * visibleRows))
+        if selectedUser < firstUserRow then firstVisible = selectedUser end
+        if selectedUser >= firstUserRow + visibleRows then
+            firstVisible = selectedUser - visibleRows + 1
+        end
+    elseif event == "mouse_scroll" and page == "accounts" then
         selectedUser = math.max(1, math.min(#users, selectedUser + button))
         if selectedUser < firstUserRow then firstVisible = selectedUser end
         if selectedUser >= firstUserRow + visibleRows then

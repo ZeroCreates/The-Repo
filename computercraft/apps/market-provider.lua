@@ -546,7 +546,7 @@ end
 
 local function showOrders(orders, page, errorMessage)
     local function render()
-        drawHeader("PROVIDER CONSOLE", "LIVE ORDERS  /  REDNET ORDER SYSTEM")
+        drawHeader("PROVIDER CONSOLE", "LIVE ORDERS  /  N/V OR WHEEL TO BROWSE")
         sectionTitle(4, "ACTIVE ORDERS  |  " .. #orders)
         local visibleOrders = {}
         local firstRow = 5
@@ -586,7 +586,7 @@ local function showOrders(orders, page, errorMessage)
     end
 
     local visibleOrders = render()
-    local buttons = drawChoices("p products|a address|n/v pages|r refresh|q quit")
+    local buttons = drawChoices("p products|a address|r refresh|q quit")
     local refreshTimer = os.startTimer(5)
     while true do
         local event, eventId, x, y = os.pullEvent()
@@ -600,7 +600,7 @@ local function showOrders(orders, page, errorMessage)
             end
             drawOrderMonitor(orders, errorMessage)
             visibleOrders = render()
-            buttons = drawChoices("p products|a address|n/v pages|r refresh|q quit")
+            buttons = drawChoices("p products|a address|r refresh|q quit")
             refreshTimer = os.startTimer(5)
         elseif event == "mouse_click" and eventId == 1 then
             for _, choice in ipairs(buttons) do
@@ -613,6 +613,14 @@ local function showOrders(orders, page, errorMessage)
                     return "order", page, entry.order, orders
                 end
             end
+        elseif event == "mouse_scroll" then
+            page = eventId > 0 and page + 1 or math.max(1, page - 1)
+            visibleOrders = render()
+            buttons = drawChoices("p products|a address|r refresh|q quit")
+        elseif event == "key" and (eventId == keys.n or eventId == keys.v) then
+            page = eventId == keys.n and page + 1 or math.max(1, page - 1)
+            visibleOrders = render()
+            buttons = drawChoices("p products|a address|r refresh|q quit")
         end
     end
 end
@@ -660,7 +668,7 @@ local function showOrderActions(order)
 end
 
 local function productPage(products, page, errorMessage)
-    drawHeader("MY PRODUCTS", "CLICK TO MANAGE  /  SCROLL TO BROWSE")
+    drawHeader("MY PRODUCTS", "CLICK TO MANAGE  /  N/V OR WHEEL TO BROWSE")
     sectionTitle(4, "YOUR CATALOG  |  " .. #products)
     local visibleProducts = {}
 
@@ -687,7 +695,7 @@ local function productPage(products, page, errorMessage)
         writeAt(2, height - 3, "PAGE " .. page .. " / " .. pageCount, colors.yellow)
     end
 
-    local buttons = drawChoices("a add|n/v scroll|b back")
+    local buttons = drawChoices("a add|b back")
     while true do
         local event, button, x, y = os.pullEvent()
         if event == "mouse_click" and button == 1 then
@@ -703,6 +711,8 @@ local function productPage(products, page, errorMessage)
             return "n", page
         elseif event == "mouse_scroll" then
             return "v", page
+        elseif event == "key" and (button == keys.n or button == keys.v) then
+            return button == keys.n and "n" or "v", page
         end
     end
 end

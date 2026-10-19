@@ -389,7 +389,8 @@ local function draw()
     term.setBackgroundColor(colors.black)
     term.setCursorPos(2, 2)
     term.setTextColor(colors.lightGray)
-    term.write(("Path: " .. displayPath(currentDirectory)):sub(1, math.max(0, width - 2)))
+    term.write(("Path: " .. displayPath(currentDirectory) .. "  |  N/V: PAGE")
+        :sub(1, math.max(0, width - 2)))
 
     local lastVisible = math.min(#entries, firstVisible + rowCount - 1)
     for index = firstVisible, lastVisible do
@@ -964,6 +965,11 @@ while true do
             copyOrCutSelected("cut")
         elseif controlHeld and button == keys.v then
             pasteClipboard()
+        elseif button == keys.n or button == keys.v then
+            local _, height = term.getSize()
+            local direction = button == keys.n and 1 or -1
+            selected = math.max(1, math.min(#entries,
+                selected + direction * visibleRows(height)))
         end
     elseif event == "key_up" then
         if button == keys.leftAlt or button == keys.rightAlt then

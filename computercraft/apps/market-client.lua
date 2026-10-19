@@ -656,7 +656,7 @@ end
 
 local function renderCatalog(products, cart, errorMessage, page)
     local visibleProducts = {}
-    drawHeader("RIFT MARKET", "CLICK A PRODUCT TO ADD  /  SCROLL TO BROWSE")
+    drawHeader("RIFT MARKET", "CLICK TO ADD  /  N/V OR WHEEL TO BROWSE")
     sectionTitle(4, "AVAILABLE PRODUCTS  |  " .. #products)
     if errorMessage then
         writeAt(2, 6, errorMessage, colors.red)
@@ -684,13 +684,18 @@ local function renderCatalog(products, cart, errorMessage, page)
     end
 
     local help = "c cart " .. cartCount(cart)
-        .. "|o my orders|s track|x sign out|n/v scroll|r refresh|q quit"
+        .. "|o my orders|s track|x sign out|r refresh|q quit"
+    if not mouseEnabled then
+        help = help .. "|n next|v previous"
+    end
     if not mouseEnabled then return readChoice(help), page end
 
     local buttons = drawChoices(help)
     while true do
         local event, button, x, y = os.pullEvent()
-        if event == "mouse_click" and button == 1 then
+        if event == "key" and (button == keys.n or button == keys.v) then
+            return button == keys.n and "n" or "v", page
+        elseif event == "mouse_click" and button == 1 then
             for _, choice in ipairs(buttons) do
                 if y == choice.row and x >= choice.left and x <= choice.right then
                     return choice.key, page
