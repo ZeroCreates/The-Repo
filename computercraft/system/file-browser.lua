@@ -711,6 +711,53 @@ local function commandPrompt()
             end
         end
     end
+    local function completeCommand(line)
+        local prefix = line:match("([^%s]*)$") or ""
+        local beforePrefix = line:sub(1, #line - #prefix)
+        local command = beforePrefix:match("^%s*(%S+)")
+        local candidates = {}
+        if not command then
+            candidates = { "help", "pwd", "ls", "cd", "run", "clear", "exit" }
+        elseif command:lower() == "cd" or command:lower() == "ls"
+            or command:lower() == "run" then
+            local pathPrefix = prefix:gsub("\\", "/")
+            local parent, leaf = pathPrefix:match("^(.*)/([^/]*)$")
+            leaf = leaf or pathPrefix
+            local directory = resolveHomePath(workingDirectory, parent or ".")
+            if directory and fs.isDir(directory) then
+                local inApps = command:lower() == "run" and parent == nil
+                local directories = { directory }
+                if inApps then
+                    local appsDirectory = resolveHomePath(homeDirectory, "apps")
+                    if appsDirectory and fs.isDir(appsDirectory) then
+                        table.insert(directories, appsDirectory)
+                    end
+                end
+                for directoryIndex, searchDirectory in ipairs(directories) do
+                    for _, name in ipairs(fs.list(searchDirectory)) do
+                        if (altHeld or name:sub(1, 1) ~= ".")
+                            and name:sub(1, #leaf):lower() == leaf:lower() then
+                            local candidatePath = fs.combine(searchDirectory, name)
+                            local isDirectory = fs.isDir(candidatePath)
+                            if (command:lower() ~= "cd" or isDirectory)
+                                and (command:lower() ~= "run"
+                                    or isDirectory or name:lower():match("%.lua$")) then
+                                local candidate = (parent and parent ~= "" and parent .. "/" or "")
+                                    .. name .. (isDirectory and "/" or "")
+                                if inApps and directoryIndex == 2 then
+                                    candidate = name .. (isDirectory and "/" or "")
+                                end
+                                if candidate:sub(1, #prefix):lower() == prefix:lower() then
+                                    table.insert(candidates, candidate:sub(#prefix + 1))
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return candidates
+    end
 
     drawPromptHeader()
     while true do
@@ -718,7 +765,7 @@ local function commandPrompt()
         term.setTextColor(term.isColor() and themes[themeIndex].accent or colors.white)
         write(location .. "> ")
         term.setTextColor(colors.white)
-        local input = read(nil, history)
+        local input = read(nil, history, completeCommand)
         if input:match("%S") and history[#history] ~= input then
             table.insert(history, input)
         end
