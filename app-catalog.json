@@ -15,7 +15,7 @@
     "description": "Basic two-number calculator"
   },
   {
-    "name": "Casino",
+    "name": "Rift Casino",
     "source": "computercraft/apps/casino.lua",
     "file": "casino.lua",
     "version": "1.3.0",
