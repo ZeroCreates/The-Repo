@@ -90,8 +90,8 @@
     "name": "The Market",
     "source": "computercraft/apps/market-client.lua",
     "file": "market-client.lua",
-    "version": "1.4.1",
-    "description": "Shop and sign in with a shared Rift account"
+    "version": "1.5.0",
+    "description": "Shop, track account-based order history, and sign in with a shared Rift account"
   },
   {
     "name": "Rift Jobs",

@@ -424,7 +424,7 @@ local function renderCatalog(products, cart, errorMessage, page)
     end
 
     local help = "a add by ID|c cart " .. cartCount(cart)
-        .. "|s track|n/v pages|r refresh|q quit"
+        .. "|o my orders|s track|n/v pages|r refresh|q quit"
     if not mouseEnabled then return readChoice(help), page end
 
     local buttons = drawChoices(help)
@@ -673,6 +673,57 @@ local function checkStatus()
     showOrder(completed.order)
 end
 
+local function showMyOrders()
+    local response, err = request({ type = "my_orders" })
+    if not response then
+        showNotice("ORDER HISTORY UNAVAILABLE", err)
+        return
+    end
+
+    local orders = response.orders or {}
+    if #orders == 0 then
+        showNotice("NO ORDERS YET", "Orders placed with this Rift account will appear here.")
+        return
+    end
+
+    drawHeader("MY ORDERS", "ORDERS LINKED TO YOUR RIFT ACCOUNT")
+    local width, height = term.getSize()
+    local visible = math.min(#orders, math.max(0, height - 9))
+    for index = 1, visible do
+        local order = orders[index]
+        local y = 4 + index
+        writeAt(2, y, "#" .. order.id .. "  " .. (order.reference or "ORDER")
+            .. "  " .. tostring(order.status):upper(), colors.yellow)
+        writeAt(width - 10, y, money(order.total), colors.lime)
+    end
+    if visible < #orders then
+        writeAt(2, height - 4, "Showing the newest " .. visible .. " of " .. #orders .. " orders.", colors.lightGray)
+    end
+    writeAt(2, height - 2, "Enter an order number to view it, or leave blank to return.", colors.lightGray)
+    term.setCursorPos(2, height - 1)
+    write("Order #: ")
+    local orderId = tonumber(read())
+    if not orderId then return end
+
+    local belongsToList = false
+    for _, order in ipairs(orders) do
+        if order.id == orderId then
+            belongsToList = true
+            break
+        end
+    end
+    if not belongsToList then
+        showNotice("ORDER NOT IN YOUR HISTORY", "Choose an order listed for your signed-in account.")
+        return
+    end
+    local selected, orderError = request({ type = "get_order", orderId = orderId })
+    if not selected then
+        showNotice("ORDER UNAVAILABLE", orderError)
+        return
+    end
+    showOrder(selected.order)
+end
+
 openModems()
 local authenticated, authenticationError = authenticateJobsAccount()
 if not authenticated then
@@ -703,6 +754,8 @@ while true do
         end
     elseif choice == "s" then
         checkStatus()
+    elseif choice == "o" then
+        showMyOrders()
     elseif choice == "n" then
         page = page + 1
     elseif choice == "v" then

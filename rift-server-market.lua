@@ -276,6 +276,25 @@ local function completeOrder(senderId, username, message)
     rednet.send(senderId, { type = "order_completed", order = order }, PROTOCOL)
 end
 
+local function listCustomerOrders(senderId, username)
+    local orders = {}
+    for _, order in ipairs(state.orders) do
+        if order.customerUser == username
+            or order.customerUser == nil and order.customerId == senderId then
+            local orderCopy = {}
+            for key, value in pairs(order) do orderCopy[key] = value end
+            orderCopy.providerAddress = orderCopy.providerAddress
+                or state.providerAddresses[order.providerUser or ""]
+                or state.providerAddresses[tostring(order.providerId)]
+            table.insert(orders, orderCopy)
+        end
+    end
+    table.sort(orders, function(first, second)
+        return (first.createdAt or 0) > (second.createdAt or 0)
+    end)
+    rednet.send(senderId, { type = "customer_orders", orders = orders }, PROTOCOL)
+end
+
 local function listOrders(senderId, username)
     local active = {}
     for _, order in ipairs(state.orders) do
@@ -494,6 +513,8 @@ return function(senderId, message)
         getOrder(senderId, username, message)
     elseif message.type == "complete_order" then
         completeOrder(senderId, username, message)
+    elseif message.type == "my_orders" then
+        listCustomerOrders(senderId, username)
     elseif message.type == "provider_list" then
         listOrders(senderId, username)
     elseif message.type == "set_provider_address" then
