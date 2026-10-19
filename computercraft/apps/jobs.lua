@@ -1,7 +1,6 @@
 local PROTOCOL = "rift_jobs_v1"
 local SERVER_NAME = "jobs_server"
 local TIMEOUT = 5
-local PROFILE_FILE = "jobs-profile.txt"
 local playerName
 local themes = {
     { accent = colors.cyan, highlight = colors.blue },
@@ -79,12 +78,12 @@ local function drawHeader(title, subtitle)
     writeAt(2, 2, subtitle, colors.lightGray)
 end
 
-local function readText(label)
+local function readText(label, hidden)
     drawHeader("RIFT JOBS  /  INPUT", label)
     local _, height = term.getSize()
     writeAt(2, height - 1, "> ", themeAccent)
     term.setCursorPos(4, height - 1)
-    return read()
+    return read(hidden and "*" or nil)
 end
 
 local function drawButtons(options)
@@ -161,25 +160,6 @@ local function openModems()
     if not found then error("Attach a modem before starting Rift Jobs.") end
 end
 
-local function loadProfile()
-    if fs.exists(PROFILE_FILE) then
-        local file = fs.open(PROFILE_FILE, "r")
-        if file then
-            playerName = file.readAll():match("^%s*(.-)%s*$")
-            file.close()
-        end
-    end
-    if not playerName or playerName == "" then
-        drawHeader("WELCOME TO RIFT JOBS", "CHOOSE A NAME OTHER PLAYERS WILL RECOGNIZE")
-        playerName = readText("Your name (up to 24 characters)")
-        playerName = playerName:match("^%s*(.-)%s*$")
-        if playerName == "" then playerName = "Computer #" .. os.getComputerID() end
-        local file = fs.open(PROFILE_FILE, "w")
-        if file then file.write(playerName:sub(1, 24)); file.close() end
-    end
-    playerName = playerName:sub(1, 24)
-end
-
 local function request(message)
     local serverId = rednet.lookup(PROTOCOL, SERVER_NAME)
     if not serverId then
@@ -192,6 +172,41 @@ local function request(message)
         return nil, response.message or "The Jobs server rejected the request."
     end
     return response
+end
+
+local function createAccount()
+    local username = readText("Choose a username (3-24 letters, numbers, _ or -)")
+        :match("^%s*(.-)%s*$")
+    local password = readText("Choose a password (1-128 characters)", true)
+    local confirmation = readText("Confirm your password", true)
+    if password ~= confirmation then
+        return showNotice("ACCOUNT NOT CREATED", "The passwords do not match.")
+    end
+    local response, err = request({
+        type = "register",
+        username = username,
+        password = password,
+    })
+    if not response then return showNotice("ACCOUNT NOT CREATED", err) end
+    playerName = response.username
+end
+
+local function signIn()
+    local username = readText("Username")
+    local password = readText("Password", true)
+    local response, err = request({
+        type = "login",
+        username = username,
+        password = password,
+    })
+    if not response then return showNotice("SIGN IN FAILED", err) end
+    playerName = response.username
+end
+
+local function signOut()
+    local response, err = request({ type = "logout" })
+    playerName = nil
+    if not response then return showNotice("SIGNED OUT", err) end
 end
 
 local function drawJobs(title, subtitle, jobs, page, showStatus)
@@ -228,7 +243,6 @@ local function postJob()
     local reward = readText("Reward, e.g. 2 diamonds or $5.00")
     local response, err = request({
         type = "create_job",
-        name = playerName,
         title = title,
         description = description,
         reward = reward,
@@ -238,7 +252,7 @@ local function postJob()
 end
 
 local function claimJob(job)
-    local response, err = request({ type = "claim_job", jobId = job.id, name = playerName })
+    local response, err = request({ type = "claim_job", jobId = job.id })
     if not response then return showNotice("JOB NOT CLAIMED", err) end
     showNotice("JOB CLAIMED", "You are assigned to: " .. response.job.title)
 end
@@ -282,8 +296,10 @@ showJobDetails = function(job, fromBoard)
     if job.submission then writeAt(2, 10, "SUBMISSION  " .. job.submission, colors.yellow) end
     if job.reviewNote then writeAt(2, 11, "REVISION  " .. job.reviewNote, colors.orange) end
 
-    local isPoster = job.posterId == os.getComputerID()
-    local isWorker = job.claimantId == os.getComputerID()
+    local isPoster = job.posterUser == playerName
+        or (not job.posterUser and job.posterId == os.getComputerID())
+    local isWorker = job.claimantUser == playerName
+        or (not job.claimantUser and job.claimantId == os.getComputerID())
     local options = {}
     if isPoster and job.status == "review" then
         table.insert(options, { id = "approve", label = "APPROVE", key = keys.a })
@@ -359,33 +375,49 @@ local function myJobs()
 end
 
 openModems()
-loadProfile()
 
 while true do
-    drawHeader("RIFT JOBS", "PLAYER CONTRACTS  /  SIGNED IN AS " .. playerName:upper())
-    writeAt(2, 5, "Post work, pick up a contract, and track your jobs.", colors.white)
-    local buttons = drawButtons({
-        { id = "post", label = "POST A JOB", key = keys.p },
-        { id = "board", label = "BROWSE JOBS", key = keys.b },
-        { id = "mine", label = "MY JOBS", key = keys.m },
-        { id = "name", label = "CHANGE NAME", key = keys.n },
-        { id = "quit", label = "QUIT", key = keys.q },
-    })
-    local choice = waitForAction(buttons)
-    if choice == "post" then
-        postJob()
-    elseif choice == "board" then
-        browseJobs()
-    elseif choice == "mine" then
-        myJobs()
-    elseif choice == "name" then
-        local newName = readText("Your display name (up to 24 characters)"):match("^%s*(.-)%s*$")
-        if newName ~= "" then
-            playerName = newName:sub(1, 24)
-            local file = fs.open(PROFILE_FILE, "w")
-            if file then file.write(playerName); file.close() end
+    if playerName then
+        drawHeader("RIFT JOBS", "PLAYER CONTRACTS  /  SIGNED IN AS " .. playerName:upper())
+        writeAt(2, 5, "Post work, pick up a contract, and track your jobs.", colors.white)
+        local buttons = drawButtons({
+            { id = "post", label = "POST A JOB", key = keys.p },
+            { id = "board", label = "BROWSE JOBS", key = keys.b },
+            { id = "mine", label = "MY JOBS", key = keys.m },
+            { id = "signout", label = "SIGN OUT", key = keys.s },
+            { id = "quit", label = "QUIT", key = keys.q },
+        })
+        local choice = waitForAction(buttons)
+        if choice == "post" then
+            postJob()
+        elseif choice == "board" then
+            browseJobs()
+        elseif choice == "mine" then
+            myJobs()
+        elseif choice == "signout" then
+            signOut()
+        elseif choice == "quit" then
+            if playerName then
+                local response, err = request({ type = "logout" })
+                if not response then showNotice("SIGN OUT FAILED", err) end
+                playerName = nil
+            end
+            break
         end
-    elseif choice == "quit" then
-        break
+    else
+        drawHeader("RIFT JOBS", "CREATE AN ACCOUNT OR SIGN IN")
+        local buttons = drawButtons({
+            { id = "register", label = "CREATE ACCOUNT", key = keys.c },
+            { id = "login", label = "SIGN IN", key = keys.l },
+            { id = "quit", label = "QUIT", key = keys.q },
+        })
+        local choice = waitForAction(buttons)
+        if choice == "register" then
+            createAccount()
+        elseif choice == "login" then
+            signIn()
+        elseif choice == "quit" then
+            break
+        end
     end
 end

@@ -4,6 +4,7 @@ local DATA_FILE = "jobs.db"
 local BACKUP_FILE = "jobs.db.bak"
 local TEMP_FILE = "jobs.db.tmp"
 local state
+local sessions = {}
 
 local function openModems()
     local found = false
@@ -30,12 +31,25 @@ end
 
 local function loadState()
     if not fs.exists(DATA_FILE) and not fs.exists(BACKUP_FILE) then
-        return { nextId = 1, jobs = {} }
+        return { nextId = 1, jobs = {}, accounts = {} }
     end
     local loaded = readState(DATA_FILE) or readState(BACKUP_FILE)
     if not loaded then error("Could not read saved Jobs data; refusing to overwrite it.") end
     loaded.nextId = type(loaded.nextId) == "number" and loaded.nextId or 1
     loaded.jobs = type(loaded.jobs) == "table" and loaded.jobs or {}
+    if loaded.accounts == nil then loaded.accounts = {} end
+    if type(loaded.accounts) ~= "table" then
+        error("Saved Jobs account data is invalid; refusing to overwrite it.")
+    end
+    for username, account in pairs(loaded.accounts) do
+        if type(username) ~= "string" or type(account) ~= "table"
+            or type(account.username) ~= "string" or account.username:lower() ~= username
+            or #account.username < 3 or #account.username > 24
+            or not account.username:match("^[%w_-]+$") or type(account.password) ~= "string"
+            or #account.password < 1 or #account.password > 128 then
+            error("Saved Jobs account data is invalid; refusing to overwrite it.")
+        end
+    end
     for _, job in ipairs(loaded.jobs) do
         if type(job.id) == "number" then loaded.nextId = math.max(loaded.nextId, job.id + 1) end
     end
@@ -45,7 +59,11 @@ end
 local function saveState()
     local file = fs.open(TEMP_FILE, "w")
     if not file then return false, "Could not create the temporary Jobs data file." end
-    file.write(textutils.serialize({ nextId = state.nextId, jobs = state.jobs }))
+    file.write(textutils.serialize({
+        nextId = state.nextId,
+        jobs = state.jobs,
+        accounts = state.accounts,
+    }))
     file.close()
 
     if fs.exists(BACKUP_FILE) then fs.delete(BACKUP_FILE) end
@@ -76,10 +94,50 @@ local function cleanText(value, minimum, maximum)
     return value
 end
 
-local function cleanName(value, senderId)
-    local name = cleanText(value, 1, 24)
-    if not name then name = "Computer #" .. senderId end
-    return name
+local function accountKey(username)
+    local cleaned = cleanText(username, 3, 24)
+    if not cleaned or not cleaned:match("^[%w_-]+$") then return nil end
+    return cleaned:lower(), cleaned
+end
+
+local function registerAccount(senderId, message)
+    local key, username = accountKey(message.username)
+    local password = message.password
+    if not key then
+        return sendError(senderId, "Username must be 3-24 letters, numbers, underscores, or dashes.")
+    end
+    if type(password) ~= "string" or #password < 1 or #password > 128 then
+        return sendError(senderId, "Password must be 1 to 128 characters.")
+    end
+    if state.accounts[key] then
+        return sendError(senderId, "That Jobs username is already registered.")
+    end
+
+    state.accounts[key] = { username = username, password = password }
+    local saved, saveError = saveState()
+    if not saved then
+        state.accounts[key] = nil
+        return sendError(senderId, saveError)
+    end
+    sessions[senderId] = username
+    rednet.send(senderId, { type = "authenticated", username = username }, PROTOCOL)
+end
+
+local function loginAccount(senderId, message)
+    local key = accountKey(message.username)
+    local account = key and state.accounts[key]
+    if not account or type(message.password) ~= "string"
+        or account.password ~= message.password then
+        return sendError(senderId, "Username or password is incorrect.")
+    end
+    sessions[senderId] = account.username
+    rednet.send(senderId, { type = "authenticated", username = account.username }, PROTOCOL)
+end
+
+local function belongsToUser(job, field, legacyId, senderId, username)
+    local owner = job[field]
+    if owner then return owner == username end
+    return job[legacyId] == senderId
 end
 
 local function copyJob(job)
@@ -101,7 +159,7 @@ local function mutateJob(senderId, job, changes, responseType)
     rednet.send(senderId, { type = responseType, job = copyJob(job) }, PROTOCOL)
 end
 
-local function createJob(senderId, message)
+local function createJob(senderId, username, message)
     local title = cleanText(message.title, 3, 40)
     local description = cleanText(message.description, 5, 180)
     local reward = cleanText(message.reward, 1, 60)
@@ -112,7 +170,8 @@ local function createJob(senderId, message)
     local job = {
         id = state.nextId,
         posterId = senderId,
-        posterName = cleanName(message.name, senderId),
+        posterName = username,
+        posterUser = username,
         title = title,
         description = description,
         reward = reward,
@@ -131,10 +190,11 @@ local function createJob(senderId, message)
     rednet.send(senderId, { type = "job_created", job = copyJob(job) }, PROTOCOL)
 end
 
-local function listJobs(senderId, mineOnly)
+local function listJobs(senderId, username, mineOnly)
     local jobs = {}
     for _, job in ipairs(state.jobs) do
-        local isMine = job.posterId == senderId or job.claimantId == senderId
+        local isMine = belongsToUser(job, "posterUser", "posterId", senderId, username)
+            or belongsToUser(job, "claimantUser", "claimantId", senderId, username)
         if mineOnly and isMine or not mineOnly and job.status == "open" then
             table.insert(jobs, copyJob(job))
         end
@@ -146,9 +206,18 @@ local function handleRequest(senderId, message)
     if type(message) ~= "table" or type(message.type) ~= "string" then
         return sendError(senderId, "Invalid Jobs request.")
     end
-    if message.type == "list_jobs" then return listJobs(senderId, false) end
-    if message.type == "my_jobs" then return listJobs(senderId, true) end
-    if message.type == "create_job" then return createJob(senderId, message) end
+    if message.type == "register" then return registerAccount(senderId, message) end
+    if message.type == "login" then return loginAccount(senderId, message) end
+    if message.type == "logout" then
+        sessions[senderId] = nil
+        return rednet.send(senderId, { type = "logged_out" }, PROTOCOL)
+    end
+
+    local username = sessions[senderId]
+    if not username then return sendError(senderId, "Sign in to a Jobs account first.") end
+    if message.type == "list_jobs" then return listJobs(senderId, username, false) end
+    if message.type == "my_jobs" then return listJobs(senderId, username, true) end
+    if message.type == "create_job" then return createJob(senderId, username, message) end
 
     if type(message.jobId) ~= "number" or message.jobId % 1 ~= 0 then
         return sendError(senderId, "Enter a valid job number.")
@@ -158,45 +227,54 @@ local function handleRequest(senderId, message)
 
     if message.type == "claim_job" then
         if job.status ~= "open" then return sendError(senderId, "That job is no longer open.") end
-        if job.posterId == senderId then return sendError(senderId, "You cannot claim your own job.") end
+        if belongsToUser(job, "posterUser", "posterId", senderId, username) then
+            return sendError(senderId, "You cannot claim your own job.")
+        end
         return mutateJob(senderId, job, {
             claimantId = senderId,
-            claimantName = cleanName(message.name, senderId),
+            claimantName = username,
+            claimantUser = username,
             status = "claimed",
             submission = nil,
             reviewNote = nil,
         }, "job_updated")
     elseif message.type == "submit_job" then
         local submission = cleanText(message.submission, 5, 180)
-        if job.claimantId ~= senderId or job.status ~= "claimed" then
+        if not belongsToUser(job, "claimantUser", "claimantId", senderId, username)
+            or job.status ~= "claimed" then
             return sendError(senderId, "Only the assigned worker can submit a claimed job.")
         end
         if not submission then return sendError(senderId, "Describe the completed work (5-180 characters).") end
         return mutateJob(senderId, job, { submission = submission, reviewNote = nil, status = "review" }, "job_updated")
     elseif message.type == "approve_job" then
-        if job.posterId ~= senderId or job.status ~= "review" then
+        if not belongsToUser(job, "posterUser", "posterId", senderId, username)
+            or job.status ~= "review" then
             return sendError(senderId, "Only the job poster can approve submitted work.")
         end
         return mutateJob(senderId, job, { status = "completed" }, "job_updated")
     elseif message.type == "revise_job" then
         local note = cleanText(message.note, 1, 120)
-        if job.posterId ~= senderId or job.status ~= "review" then
+        if not belongsToUser(job, "posterUser", "posterId", senderId, username)
+            or job.status ~= "review" then
             return sendError(senderId, "Only the job poster can request a revision.")
         end
         if not note then return sendError(senderId, "Enter a revision note (1-120 characters).") end
         return mutateJob(senderId, job, { status = "claimed", reviewNote = note, submission = nil }, "job_updated")
     elseif message.type == "withdraw_claim" then
-        if job.claimantId ~= senderId or job.status ~= "claimed" then
+        if not belongsToUser(job, "claimantUser", "claimantId", senderId, username)
+            or job.status ~= "claimed" then
             return sendError(senderId, "You can only withdraw a job before submitting it.")
         end
         return mutateJob(senderId, job, {
             claimantId = nil,
             claimantName = nil,
+            claimantUser = nil,
             status = "open",
             reviewNote = nil,
         }, "job_updated")
     elseif message.type == "cancel_job" then
-        if job.posterId ~= senderId or (job.status ~= "open" and job.status ~= "claimed") then
+        if not belongsToUser(job, "posterUser", "posterId", senderId, username)
+            or (job.status ~= "open" and job.status ~= "claimed") then
             return sendError(senderId, "Only the poster can cancel an open or claimed job.")
         end
         return mutateJob(senderId, job, { status = "cancelled" }, "job_updated")

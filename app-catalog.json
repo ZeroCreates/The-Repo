@@ -97,7 +97,7 @@
     "name": "Rift Jobs",
     "source": "computercraft/apps/jobs.lua",
     "file": "jobs.lua",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "Post player jobs, claim work, and review submissions"
   }
 ]
