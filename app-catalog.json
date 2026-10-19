@@ -62,7 +62,7 @@
     "source": "computercraft/system/settings.lua",
     "file": "settings.lua",
     "scope": "system",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Manage launcher preferences, user accounts, and system maintenance"
   },
   {
@@ -76,14 +76,14 @@
     "name": "Market Provider",
     "source": "computercraft/apps/market-provider.lua",
     "file": "market-provider.lua",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Manage provider products and orders"
   },
   {
     "name": "Notes",
     "source": "computercraft/apps/notes.lua",
     "file": "notes.lua",
-    "version": "1.0.1",
+    "version": "1.0.0",
     "description": "Read and write local notes"
   },
   {
