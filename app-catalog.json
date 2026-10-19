@@ -4,7 +4,7 @@
     "source": "computercraft/system/app-downloader.lua",
     "file": "app-downloader.lua",
     "scope": "system",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "description": "Download and update ComputerCraft apps"
   },
   {
@@ -46,7 +46,7 @@
     "name": "Rift Mail",
     "source": "computercraft/apps/email-client.lua",
     "file": "email-client.lua",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "description": "Send username-addressed messages using your Rift account"
   },
   {
@@ -54,7 +54,7 @@
     "source": "computercraft/system/file-browser.lua",
     "file": "file-browser.lua",
     "scope": "system",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "Browse and edit files; hold Alt to show hidden files and private data"
   },
   {
@@ -62,7 +62,7 @@
     "source": "computercraft/system/settings.lua",
     "file": "settings.lua",
     "scope": "system",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "Manage launcher preferences, auto-login and launch, user accounts, and maintenance"
   },
   {
@@ -76,7 +76,7 @@
     "name": "Market Provider",
     "source": "computercraft/apps/market-provider.lua",
     "file": "market-provider.lua",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "description": "Manage products and orders; save your payment address to your Rift account"
   },
   {
@@ -90,14 +90,14 @@
     "name": "Rift Market",
     "source": "computercraft/apps/market-client.lua",
     "file": "market-client.lua",
-    "version": "1.6.0",
+    "version": "1.6.1",
     "description": "Shop, save delivery addresses, track account-based orders, and sign out of Rift"
   },
   {
     "name": "Rift Jobs",
     "source": "computercraft/apps/jobs.lua",
     "file": "jobs.lua",
-    "version": "1.2.7",
+    "version": "1.2.8",
     "description": "Post player jobs, claim work, and review submissions"
   }
 ]
