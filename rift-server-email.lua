@@ -222,7 +222,7 @@ local function createEmailServer(isRegisteredUser)
         if not saved then error(saveError) end
     end
 
-    return function(username, request)
+    local function handleRequest(username, request)
         if not validUsername(username) or type(request) ~= "table"
             or type(request.type) ~= "string" then
             return { type = "error", message = "Sign in to a valid Rift account first." }
@@ -359,6 +359,24 @@ local function createEmailServer(isRegisteredUser)
         end
         return { type = "error", message = "Unknown Rift Mail request." }
     end
+
+    local function getStats()
+        local mailboxCount, messageCount, categoryCount = 0, 0, 0
+        for _, messages in pairs(mailboxes) do
+            mailboxCount = mailboxCount + 1
+            messageCount = messageCount + #messages
+        end
+        for _, userCategories in pairs(categories) do
+            categoryCount = categoryCount + #userCategories
+        end
+        return {
+            mailboxes = mailboxCount,
+            messages = messageCount,
+            categories = categoryCount,
+        }
+    end
+
+    return handleRequest, getStats
 end
 
 return createEmailServer

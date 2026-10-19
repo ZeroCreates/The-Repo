@@ -5,6 +5,8 @@ local CASINO_PROTOCOL = "rift_casino_wallet_v1"
 local CASINO_SERVER = "rift-casino"
 local ACCOUNT_PROTOCOL = "rift_account_v1"
 local ACCOUNT_SERVER = "rift-server"
+local LEGACY_ACCOUNT_PROTOCOL = "rift_jobs_v1"
+local LEGACY_ACCOUNT_SERVER = "rift-jobs"
 local TIMEOUT = 5
 local transactionSequence = 0
 local RIFT_ACCOUNT_PATH = "rift/account.json"
@@ -208,7 +210,12 @@ local function loadAccount()
 end
 
 local function authenticateAccount(username, password, action)
-    local serverId = rednet.lookup(ACCOUNT_PROTOCOL, ACCOUNT_SERVER)
+    local accountProtocol = ACCOUNT_PROTOCOL
+    local serverId = rednet.lookup(accountProtocol, ACCOUNT_SERVER)
+    if not serverId then
+        accountProtocol = LEGACY_ACCOUNT_PROTOCOL
+        serverId = rednet.lookup(accountProtocol, LEGACY_ACCOUNT_SERVER)
+    end
     if not serverId then
         return false, "Rift account server not found. Check that Rift Server is running."
     end
@@ -216,8 +223,8 @@ local function authenticateAccount(username, password, action)
         type = action,
         username = username,
         password = password,
-    }, ACCOUNT_PROTOCOL)
-    local senderId, response = rednet.receive(ACCOUNT_PROTOCOL, TIMEOUT, serverId)
+    }, accountProtocol)
+    local senderId, response = rednet.receive(accountProtocol, TIMEOUT, serverId)
     if senderId ~= serverId or type(response) ~= "table" then
         return false, "No response from the Rift account server."
     end
@@ -245,13 +252,18 @@ local function authenticateAccount(username, password, action)
 end
 
 local function signOut()
-    local serverId = rednet.lookup(ACCOUNT_PROTOCOL, ACCOUNT_SERVER)
+    local accountProtocol = ACCOUNT_PROTOCOL
+    local serverId = rednet.lookup(accountProtocol, ACCOUNT_SERVER)
+    if not serverId then
+        accountProtocol = LEGACY_ACCOUNT_PROTOCOL
+        serverId = rednet.lookup(accountProtocol, LEGACY_ACCOUNT_SERVER)
+    end
     if not serverId then
         statusMessage = "Rift account server not found; could not sign out."
         return false
     end
-    rednet.send(serverId, { type = "logout" }, ACCOUNT_PROTOCOL)
-    local senderId, response = rednet.receive(ACCOUNT_PROTOCOL, TIMEOUT, serverId)
+    rednet.send(serverId, { type = "logout" }, accountProtocol)
+    local senderId, response = rednet.receive(accountProtocol, TIMEOUT, serverId)
     if senderId ~= serverId or type(response) ~= "table" or response.type ~= "logged_out" then
         statusMessage = "No confirmation from the Rift account server."
         return false

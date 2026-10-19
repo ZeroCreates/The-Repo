@@ -521,8 +521,9 @@ end
 
 local function getDashboardStats()
     local activeOrders, completedOrders, cancelledOrders, liveProducts = 0, 0, 0, 0
-    local recentOrders = {}
+    local recentOrders, orders, products = {}, {}, {}
     for _, order in ipairs(state.orders) do
+        table.insert(orders, order)
         if order.status == "completed" then
             completedOrders = completedOrders + 1
         elseif order.status == "cancelled" then
@@ -533,8 +534,15 @@ local function getDashboardStats()
         end
     end
     for _, product in ipairs(state.products) do
+        table.insert(products, product)
         if product.available then liveProducts = liveProducts + 1 end
     end
+    table.sort(orders, function(first, second)
+        return (first.createdAt or 0) > (second.createdAt or 0)
+    end)
+    table.sort(products, function(first, second)
+        return (first.id or 0) > (second.id or 0)
+    end)
     table.sort(recentOrders, function(first, second)
         return (first.createdAt or 0) > (second.createdAt or 0)
     end)
@@ -546,6 +554,8 @@ local function getDashboardStats()
         liveProducts = liveProducts,
         totalProducts = #state.products,
         recentOrders = recentOrders,
+        orders = orders,
+        products = products,
     }
 end
 

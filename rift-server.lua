@@ -17,6 +17,7 @@ local handleJobsRequest
 local handleMarketRequest
 local getMarketDashboardStats
 local handleMailRequest
+local getMailStats
 local handleCasinoRequest
 local getCasinoStats
 
@@ -153,6 +154,7 @@ end
 local startedAt = os.clock()
 local requestsByService = { login = 0, jobs = 0, market = 0, mail = 0, casino = 0 }
 local lastRequest = "Waiting for network requests"
+local monitorErrors = {}
 
 local function drawDashboard()
     local width, height = term.getSize()
@@ -207,6 +209,70 @@ local function drawDashboard()
     line(2, " ONLINE  |  COMPUTER #" .. os.getComputerID()
         .. "  |  UP " .. string.format("%02d:%02d", math.floor((os.clock() - startedAt) / 60),
             math.floor((os.clock() - startedAt) % 60)), muted)
+
+    if width < 40 or height < 15 then
+        if height <= 7 then
+            line(3, "Jobs " .. openCount .. " open / " .. activeCount .. " active", good)
+            line(4, "Market " .. market.activeOrders .. " orders / "
+                .. market.liveProducts .. " products", good)
+            if height >= 5 then
+                line(5, "Users " .. sessionCount .. " / chips " .. casino.totalChips, muted)
+            end
+            if height >= 6 then
+                line(6, "Last: " .. lastRequest, muted)
+            end
+            if height >= 7 then
+                line(7, "RIFT SERVER  |  Ctrl+T to stop", muted)
+            end
+            term.setBackgroundColor(background)
+            return
+        end
+        section(1, 4, "JOBS", width)
+        line(5, " Open " .. openCount .. "  |  Active " .. activeCount
+            .. "  |  Done " .. completedCount, good)
+        section(1, 6, "MARKET", width)
+        line(7, " Orders " .. market.activeOrders .. "  |  Products "
+            .. market.liveProducts .. "/" .. market.totalProducts, good)
+        line(8, " Done " .. market.completedOrders .. "  |  Cancelled "
+            .. market.cancelledOrders, muted)
+        section(1, 9, "RIFT ACCOUNTS + CASINO", width)
+        line(10, " Signed in " .. sessionCount .. "  |  Wallets " .. casino.wallets, good)
+        line(11, " Chips in play " .. casino.totalChips, muted)
+        if height >= 13 then
+            line(12, " Last: " .. lastRequest, muted)
+        end
+        if height >= 14 then
+            section(1, 13, "RECENT ACTIVITY", width)
+            local row = 14
+            local jobIndex, orderIndex = #state.jobs, 1
+            while row < height and (jobIndex > 0 or orderIndex <= #market.recentOrders) do
+                if jobIndex > 0 then
+                    local job = state.jobs[jobIndex]
+                    line(row, "J #" .. job.id .. " " .. job.status:upper() .. " " .. job.title,
+                        job.status == "open" and good or warning)
+                    jobIndex = jobIndex - 1
+                    row = row + 1
+                end
+                if orderIndex <= #market.recentOrders and row < height then
+                    local order = market.recentOrders[orderIndex]
+                    line(row, "M #" .. order.id .. " " .. order.status:upper(), muted)
+                    orderIndex = orderIndex + 1
+                    row = row + 1
+                end
+            end
+        end
+        if height >= 14 then
+            for name, monitorError in pairs(monitorErrors) do
+                line(height - 1, " Monitor " .. name .. " error: " .. monitorError, warning)
+                break
+            end
+        end
+        if height >= 13 then
+            line(height, " RIFT SERVER  |  Ctrl+T to stop", muted)
+        end
+        term.setBackgroundColor(background)
+        return
+    end
 
     local jobsColumnWidth = math.max(1, math.floor(width / 2))
     local marketColumn = jobsColumnWidth + 1
@@ -314,7 +380,236 @@ local function drawDashboard()
         term.setTextColor(muted)
         term.write((" Ctrl+T / terminate  |  Computer #%s"):format(os.getComputerID()):sub(1, width))
     end
+    for name, monitorError in pairs(monitorErrors) do
+        line(height, " Monitor " .. name .. " error: " .. monitorError, warning)
+        break
+    end
     term.setBackgroundColor(background)
+end
+
+local function monitorPages(height, market)
+    local bodyStart = height >= 6 and 5 or 3
+    local bodyEnd = math.max(bodyStart, height - 1)
+    local rowsPerPage = math.max(1, bodyEnd - bodyStart + 1)
+    local pages = { { type = "overview", title = "SERVER OVERVIEW" } }
+
+    local function addListPages(pageType, title, count)
+        local pageCount = math.max(1, math.ceil(count / rowsPerPage))
+        for page = 1, pageCount do
+            table.insert(pages, {
+                type = pageType,
+                title = title,
+                offset = (page - 1) * rowsPerPage + 1,
+                count = count,
+            })
+        end
+    end
+
+    addListPages("jobs", "JOBS", #state.jobs)
+    addListPages("orders", "MARKET ORDERS", #market.orders)
+    addListPages("products", "MARKET PRODUCTS", #market.products)
+    table.insert(pages, { type = "services", title = "SERVICES AND TRAFFIC" })
+    local sessionCount = 0
+    for _ in pairs(sessions) do sessionCount = sessionCount + 1 end
+    addListPages("sessions", "SIGNED-IN USERS", sessionCount)
+    return pages, rowsPerPage, bodyStart, bodyEnd
+end
+
+local function drawMonitorDashboard(page, pageNumber, pageCount, rowsPerPage, bodyStart, bodyEnd)
+    local width, height = term.getSize()
+    local color = term.isColor()
+    local background = colors.black
+    local foreground = colors.white
+    local accent = color and colors.cyan or colors.white
+    local panel = color and colors.blue or colors.gray
+    local muted = color and colors.lightGray or colors.white
+    local good = color and colors.lime or colors.white
+    local warning = color and colors.yellow or colors.white
+    local rows = {}
+
+    local function add(text, foregroundColor)
+        table.insert(rows, { text = text, color = foregroundColor or foreground })
+    end
+
+    local market = getMarketDashboardStats()
+    local casino = getCasinoStats()
+    local openJobs, activeJobs, completedJobs = 0, 0, 0
+    for _, job in ipairs(state.jobs) do
+        if job.status == "open" then
+            openJobs = openJobs + 1
+        elseif job.status == "claimed" or job.status == "review" then
+            activeJobs = activeJobs + 1
+        elseif job.status == "completed" then
+            completedJobs = completedJobs + 1
+        end
+    end
+    local accountCount, sessionCount = 0, 0
+    for _ in pairs(state.accounts) do accountCount = accountCount + 1 end
+    for _ in pairs(sessions) do sessionCount = sessionCount + 1 end
+
+    if page.type == "overview" then
+        add("JOBS  |  " .. openJobs .. " open  /  " .. activeJobs .. " active  /  "
+            .. completedJobs .. " completed", good)
+        add("MARKET  |  " .. market.activeOrders .. " active orders  /  "
+            .. market.completedOrders .. " completed  /  " .. market.cancelledOrders .. " cancelled", good)
+        add("CATALOG  |  " .. market.liveProducts .. " live  /  "
+            .. market.totalProducts .. " total products", muted)
+        add("RIFT ACCOUNTS  |  " .. accountCount .. " registered  /  "
+            .. sessionCount .. " currently signed in", good)
+        local mail = getMailStats()
+        add("RIFT MAIL  |  " .. mail.mailboxes .. " mailboxes  /  "
+            .. mail.messages .. " messages  /  " .. mail.categories .. " categories", good)
+        add("CASINO  |  " .. casino.wallets .. " player wallets  /  "
+            .. casino.totalChips .. " chips", good)
+        add("UPTIME  |  " .. string.format("%02d:%02d:%02d",
+            math.floor((os.clock() - startedAt) / 3600),
+            math.floor((os.clock() - startedAt) / 60) % 60,
+            math.floor((os.clock() - startedAt) % 60)), muted)
+        add("LAST REQUEST  |  " .. lastRequest, warning)
+    elseif page.type == "jobs" then
+        if page.count == 0 then
+            add("No jobs have been posted.", muted)
+        else
+            local last = math.min(page.offset + rowsPerPage - 1, page.count)
+            for index = page.offset, last do
+                local job = state.jobs[page.count - index + 1]
+                local statusColor = job.status == "open" and good
+                    or (job.status == "completed" and muted or warning)
+                add("#" .. job.id .. "  " .. job.status:upper() .. "  " .. job.title
+                    .. "  |  by " .. tostring(job.posterName or job.posterUser or "unknown"), statusColor)
+            end
+        end
+    elseif page.type == "orders" then
+        if page.count == 0 then
+            add("No market orders have been placed.", muted)
+        else
+            local last = math.min(page.offset + rowsPerPage - 1, page.count)
+            for index = page.offset, last do
+                local order = market.orders[index]
+                local total = type(order.total) == "number"
+                    and ("$" .. string.format("%.2f", order.total / 100)) or "total n/a"
+                add(tostring(order.reference or ("#" .. tostring(order.id))) .. "  "
+                    .. tostring(order.status):upper() .. "  " .. total .. "  |  "
+                    .. tostring(order.customerUser or "unknown") .. " -> "
+                    .. tostring(order.providerUser or "unknown"),
+                    order.status == "shipping" and good or warning)
+            end
+        end
+    elseif page.type == "products" then
+        if page.count == 0 then
+            add("No market products have been published.", muted)
+        else
+            local last = math.min(page.offset + rowsPerPage - 1, page.count)
+            for index = page.offset, last do
+                local product = market.products[index]
+                local price = type(product.price) == "number"
+                    and ("$" .. string.format("%.2f", product.price / 100)) or "price n/a"
+                add("#" .. tostring(product.id) .. "  "
+                    .. (product.available and "LIVE" or "PAUSED") .. "  "
+                    .. tostring(product.name or "unnamed") .. "  |  " .. price .. "  by "
+                    .. tostring(product.providerName or product.providerUser or "unknown"),
+                    product.available and good or muted)
+            end
+        end
+    elseif page.type == "services" then
+        add("RIFT ACCOUNTS  |  " .. ACCOUNT_PROTOCOL .. " @ " .. LOGIN_SERVER_NAME, good)
+        add("RIFT JOBS  |  " .. PROTOCOL .. " @ " .. JOBS_SERVER_NAME, good)
+        add("RIFT MARKET  |  " .. MARKET_PROTOCOL .. " @ " .. MARKET_SERVER_NAME, good)
+        add("RIFT MAIL  |  " .. MAIL_PROTOCOL .. " @ " .. MAIL_SERVER_NAME, good)
+        add("RIFT CASINO  |  " .. CASINO_PROTOCOL .. " @ " .. CASINO_SERVER_NAME, good)
+        add("REQUESTS  |  Login " .. requestsByService.login .. "  /  Jobs "
+            .. requestsByService.jobs .. "  /  Market " .. requestsByService.market, muted)
+        add("REQUESTS  |  Mail " .. requestsByService.mail .. "  /  Casino "
+            .. requestsByService.casino, muted)
+        add("MAIL  |  " .. getMailStats().mailboxes .. " mailboxes  /  "
+            .. getMailStats().messages .. " messages", muted)
+        add("DATA  |  jobs.db  /  market data  /  Rift Mail data  /  casino wallets", muted)
+    elseif page.type == "sessions" then
+        if page.count == 0 then
+            add("No users are currently signed in.", muted)
+        else
+            local activeSessions = {}
+            for computerId, username in pairs(sessions) do
+                table.insert(activeSessions, { computerId = computerId, username = username })
+            end
+            table.sort(activeSessions, function(first, second)
+                return first.username:lower() < second.username:lower()
+            end)
+            local last = math.min(page.offset + rowsPerPage - 1, #activeSessions)
+            for index = page.offset, last do
+                local session = activeSessions[index]
+                add(session.username .. "  |  computer #" .. session.computerId, good)
+            end
+        end
+    end
+
+    term.setBackgroundColor(background)
+    term.setTextColor(foreground)
+    term.clear()
+    local function drawLine(row, text, textColor, fill)
+        if row < 1 or row > height then return end
+        term.setCursorPos(1, row)
+        term.setBackgroundColor(fill or background)
+        term.setTextColor(textColor or foreground)
+        local content = tostring(text):sub(1, width)
+        term.write(content .. string.rep(" ", math.max(0, width - #content)))
+    end
+
+    drawLine(1, " RIFT SERVER  /  " .. page.title .. "  [" .. pageNumber .. "/" .. pageCount .. "]",
+        foreground, accent)
+    drawLine(2, " ONLINE  |  COMPUTER #" .. os.getComputerID()
+        .. "  |  UP " .. string.format("%02d:%02d",
+            math.floor((os.clock() - startedAt) / 60), math.floor((os.clock() - startedAt) % 60)), muted)
+    if height >= 6 then
+        drawLine(4, " PAGE DETAILS", foreground, panel)
+    end
+    local row = bodyStart
+    for index = 1, #rows do
+        if row > bodyEnd then break end
+        drawLine(row, rows[index].text, rows[index].color)
+        row = row + 1
+    end
+    if height >= 3 then
+        drawLine(height, " AUTO-PAGES  |  updates every 5s  |  Ctrl+T stops server", muted)
+    end
+    term.setBackgroundColor(background)
+end
+
+local function drawMonitorDashboards()
+    local attachedMonitors = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        if peripheral.getType(name) == "monitor" then
+            attachedMonitors[name] = true
+            local ok, monitorOrError = pcall(peripheral.wrap, name)
+            if ok and monitorOrError then
+                local previous = term.current()
+                local redirected, redirectError = pcall(term.redirect, monitorOrError)
+                if redirected then
+                    local market = getMarketDashboardStats()
+                    local pages, rowsPerPage, bodyStart, bodyEnd =
+                        monitorPages(select(2, term.getSize()), market)
+                    local pageNumber = math.floor(os.clock() / 5) % #pages + 1
+                    local drawn, drawError = pcall(
+                        drawMonitorDashboard, pages[pageNumber], pageNumber, #pages,
+                        rowsPerPage, bodyStart, bodyEnd
+                    )
+                    term.redirect(previous)
+                    if drawn then
+                        monitorErrors[name] = nil
+                    else
+                        monitorErrors[name] = tostring(drawError)
+                    end
+                else
+                    monitorErrors[name] = tostring(redirectError)
+                end
+            else
+                monitorErrors[name] = tostring(monitorOrError)
+            end
+        end
+    end
+    for name in pairs(monitorErrors) do
+        if not attachedMonitors[name] then monitorErrors[name] = nil end
+    end
 end
 
 openModems()
@@ -364,12 +659,12 @@ local mailModuleLoaded, createMailServer = pcall(mailServerChunk)
 if not mailModuleLoaded or type(createMailServer) ~= "function" then
     error("The Rift Mail server module is invalid: " .. tostring(createMailServer), 0)
 end
-handleMailRequest = createMailServer(function(username)
+handleMailRequest, getMailStats = createMailServer(function(username)
     local key = accountKey(username)
     return key ~= nil and state.accounts[key] ~= nil
 end)
-if type(handleMailRequest) ~= "function" then
-    error("The Rift Mail server module did not provide a request handler.", 0)
+if type(handleMailRequest) ~= "function" or type(getMailStats) ~= "function" then
+    error("The Rift Mail server module did not provide its required handlers.", 0)
 end
 local casinoServerPath = fs.combine(fs.getDir(shell.getRunningProgram()), "rift-server-casino.lua")
 local casinoServerChunk, casinoLoadError = loadfile(casinoServerPath)
@@ -391,6 +686,7 @@ rednet.host(MARKET_PROTOCOL, MARKET_SERVER_NAME)
 rednet.host(MAIL_PROTOCOL, MAIL_SERVER_NAME)
 rednet.host(CASINO_PROTOCOL, CASINO_SERVER_NAME)
 drawDashboard()
+drawMonitorDashboards()
 
 while true do
     local senderId, message, receivedProtocol = rednet.receive(nil, 1)
@@ -449,4 +745,5 @@ while true do
         rednet.send(senderId, response, CASINO_PROTOCOL)
     end
     drawDashboard()
+    drawMonitorDashboards()
 end

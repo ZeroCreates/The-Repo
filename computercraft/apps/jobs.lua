@@ -267,6 +267,11 @@ local function request(message)
         protocol = ACCOUNT_PROTOCOL
     end
     local serverId = rednet.lookup(protocol, serverName)
+    if not serverId and protocol == ACCOUNT_PROTOCOL then
+        protocol = PROTOCOL
+        serverName = JOBS_SERVER_NAME
+        serverId = rednet.lookup(protocol, serverName)
+    end
     if not serverId then
         return nil, (protocol == ACCOUNT_PROTOCOL and "Rift account server"
             or "Rift Jobs server") .. " not found. Check that it is running and connected."
