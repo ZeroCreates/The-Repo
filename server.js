@@ -1,9 +1,12 @@
 "use strict";
 
 const http = require("node:http");
+const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { Transform } = require("node:stream");
+const { pipeline } = require("node:stream/promises");
 
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, "public");
@@ -17,10 +20,14 @@ const PORT = Number(process.env.PORT || 3000);
 const MANAGER_PASSWORD = process.env.MANAGER_PASSWORD || "";
 const MAX_SCRIPT_BYTES = 1024 * 1024;
 const MAX_REQUEST_BYTES = MAX_SCRIPT_BYTES * 6 + 16 * 1024;
+const MAX_SHARED_FILE_BYTES = 50 * 1024 * 1024;
+const SHARE_LIFETIME_MS = 24 * 60 * 60 * 1000;
+const SHARE_DIRECTORY = path.join(ROOT, "uploads");
 const SCRIPT_PATH = /^(?:launcher\.lua|computercraft\/.+\.lua)$/i;
 const MANAGED_SCRIPT_PATH = /^computercraft\/(?:server|system)\/[a-z0-9_-]+\.lua$/i;
 const APP_FILE_NAME = /^[a-z0-9][a-z0-9_-]*\.lua$/;
 const APP_VERSION = /^\d+\.\d+\.\d+$/;
+const SHARE_ID = /^[a-f0-9]{32}$/;
 const SCRIPT_VERSIONS_PATH = path.join(ROOT, "script-versions.json");
 
 function respond(response, status, body, contentType) {
@@ -74,6 +81,28 @@ async function handleRequest(request, response) {
             return;
         }
         await handleManagerApi(request, response, requestPath);
+        return;
+    }
+
+    if (requestPath === "/api/share") {
+        if (request.method !== "POST") {
+            response.setHeader("Allow", "POST");
+            sendJson(response, 405, { error: "Method not allowed." });
+            return;
+        }
+        await handleShareUpload(request, response);
+        return;
+    }
+
+    const sharedFileId = requestPath.startsWith("/share/")
+        ? requestPath.slice("/share/".length) : "";
+    if (sharedFileId) {
+        if (request.method !== "GET" && request.method !== "HEAD") {
+            response.setHeader("Allow", "GET, HEAD");
+            respond(response, 405, "Method not allowed", "text/plain; charset=utf-8");
+            return;
+        }
+        await handleSharedFile(request, response, sharedFileId);
         return;
     }
 
@@ -134,6 +163,135 @@ async function handleRequest(request, response) {
 
 function sendJson(response, status, value) {
     respond(response, status, JSON.stringify(value), "application/json; charset=utf-8");
+}
+
+function shareFilePath(id, extension) {
+    return path.join(SHARE_DIRECTORY, `${id}.${extension}`);
+}
+
+async function handleShareUpload(request, response) {
+    const contentLength = Number(request.headers["content-length"]);
+    if (Number.isFinite(contentLength) && contentLength > MAX_SHARED_FILE_BYTES) {
+        sendJson(response, 413, { error: "Files must be 50 MB or smaller." });
+        request.resume();
+        return;
+    }
+
+    await fs.mkdir(SHARE_DIRECTORY, { recursive: true });
+    const id = crypto.randomBytes(16).toString("hex");
+    const temporaryPath = shareFilePath(id, "tmp");
+    let size = 0;
+    const sizeLimit = new Transform({
+        transform(chunk, encoding, callback) {
+            size += chunk.length;
+            if (size > MAX_SHARED_FILE_BYTES) {
+                const error = new Error("Files must be 50 MB or smaller.");
+                error.statusCode = 413;
+                callback(error);
+                return;
+            }
+            callback(null, chunk);
+        },
+    });
+
+    try {
+        await pipeline(request, sizeLimit, fsSync.createWriteStream(temporaryPath, { flags: "wx" }));
+        if (size === 0) {
+            const error = new Error("Upload a non-empty file.");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const suppliedName = request.headers["x-filename"];
+        const fileName = (typeof suppliedName === "string" ? suppliedName : "shared-file")
+            .replace(/[\\/]/g, "_").replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, 255) || "shared-file";
+        const expiresAt = Date.now() + SHARE_LIFETIME_MS;
+        await fs.rename(temporaryPath, shareFilePath(id, "data"));
+        try {
+            await writeAtomically(shareFilePath(id, "json"), JSON.stringify({ fileName, expiresAt }));
+        } catch (error) {
+            await fs.rm(shareFilePath(id, "data"), { force: true });
+            throw error;
+        }
+
+        const forwardedProtocol = request.headers["x-forwarded-proto"];
+        const protocol = typeof forwardedProtocol === "string" && ["http", "https"].includes(forwardedProtocol.split(",")[0].trim())
+            ? forwardedProtocol.split(",")[0].trim() : "http";
+        const origin = new URL(`${protocol}://${request.headers.host || "localhost"}`).origin;
+        sendJson(response, 201, {
+            id,
+            url: `${origin}/share/${id}`,
+            fileName,
+            expiresAt: new Date(expiresAt).toISOString(),
+        });
+    } catch (error) {
+        await fs.rm(temporaryPath, { force: true }).catch(() => {});
+        throw error;
+    }
+}
+
+async function handleSharedFile(request, response, id) {
+    if (!SHARE_ID.test(id)) {
+        respond(response, 404, "Not found", "text/plain; charset=utf-8");
+        return;
+    }
+
+    const metadataPath = shareFilePath(id, "json");
+    try {
+        const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+        if (!Number.isFinite(metadata.expiresAt) || metadata.expiresAt <= Date.now()) {
+            await Promise.all([
+                fs.rm(shareFilePath(id, "data"), { force: true }),
+                fs.rm(metadataPath, { force: true }),
+            ]);
+            respond(response, 404, "Not found", "text/plain; charset=utf-8");
+            return;
+        }
+
+        const contents = await fs.readFile(shareFilePath(id, "data"));
+        response.writeHead(200, {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": contents.length,
+            "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(metadata.fileName || "shared-file").replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-cache",
+        });
+        response.end(request.method === "HEAD" ? undefined : contents);
+    } catch (error) {
+        if (error.code === "ENOENT" || error instanceof SyntaxError) {
+            respond(response, 404, "Not found", "text/plain; charset=utf-8");
+            return;
+        }
+        throw error;
+    }
+}
+
+async function cleanupExpiredShares() {
+    let entries;
+    try {
+        entries = await fs.readdir(SHARE_DIRECTORY, { withFileTypes: true });
+    } catch (error) {
+        if (error.code === "ENOENT") return;
+        throw error;
+    }
+
+    const expiredFiles = entries
+        .filter((entry) => entry.isFile() && SHARE_ID.test(entry.name.replace(/\.json$/, "")) && entry.name.endsWith(".json"));
+    await Promise.all(expiredFiles.map(async (entry) => {
+        const metadataPath = path.join(SHARE_DIRECTORY, entry.name);
+        try {
+            const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+            if (Number.isFinite(metadata.expiresAt) && metadata.expiresAt <= Date.now()) {
+                const id = entry.name.slice(0, -".json".length);
+                await Promise.all([
+                    fs.rm(shareFilePath(id, "data"), { force: true }),
+                    fs.rm(metadataPath, { force: true }),
+                ]);
+            }
+        } catch (error) {
+            if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+        }
+    }));
 }
 
 function isAuthorizedManager(request) {
@@ -423,6 +581,12 @@ const server = http.createServer((request, response) => {
         }
     });
 });
+
+cleanupExpiredShares().catch((error) => console.error("Could not clean up expired shared files:", error));
+const shareCleanupTimer = setInterval(() => {
+    cleanupExpiredShares().catch((error) => console.error("Could not clean up expired shared files:", error));
+}, 15 * 60 * 1000);
+shareCleanupTimer.unref();
 
 server.listen(PORT, HOST, () => {
     console.log(`Rift Script Library listening on http://${HOST}:${PORT}`);

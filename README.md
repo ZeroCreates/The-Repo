@@ -20,6 +20,16 @@ The website is available at `https://rift.zerocreates.org/`. The catalog API is 
 
 The optional `.env` file controls `HOST` and `PORT`; the example binds to `0.0.0.0:3000`. `.env` is git-ignored and should hold machine-specific settings. To keep the host running, use a process manager or run it as a service. For public internet access, put it behind a TLS-enabled reverse proxy.
 
+## Share a temporary file
+
+Upload a file as the raw request body to `POST /api/share`. The optional `X-Filename` header sets its download filename. Files can be up to 50 MB and are deleted after 24 hours. The response includes the random access URL and expiration time:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/share -InFile .\example.zip -Headers @{ "X-Filename" = "example.zip" }
+```
+
+The returned `url` can be opened or shared directly. The file is served as a download at that URL.
+
 ## Manage apps
 
 Open `/manager` on the hosted site. Set `MANAGER_PASSWORD` in the host's `.env` to a strong, unique password, then restart the server. The manager can add apps, upload replacement Lua files, update descriptions and versions, and remove catalog apps and their files. It also allows versioned updates to scripts under `computercraft/server` and `computercraft/system`; system versions are saved in the app catalog, while server versions are stored in `script-versions.json`. Server/system scripts cannot be removed from the manager. Keep manager access behind HTTPS because the password is sent to the host for authenticated requests.
