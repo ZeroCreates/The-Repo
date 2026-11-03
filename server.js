@@ -118,6 +118,12 @@ async function handleRequest(request, response) {
         return;
     }
 
+    if (requestPath === "/library" || requestPath === "/library/") {
+        const page = await fs.readFile(path.join(PUBLIC_ROOT, "library.html"));
+        respond(response, 200, request.method === "HEAD" ? "" : page, "text/html; charset=utf-8");
+        return;
+    }
+
     if (requestPath === "/api/health") {
         respond(response, 200, JSON.stringify({ status: "ok" }), "application/json; charset=utf-8");
         return;

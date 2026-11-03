@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0e14">
+  <title>Script Library | Rift Launcher</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #d7dde8;
+      --muted: #8794a8;
+      --paper: #0b0e14;
+      --surface: #141a24;
+      --line: #1f2836;
+      --green: #2dd4f0;
+      --mint: #17313a;
+      --coral: #f08369;
+      --yellow: #ffd479;
+      --mono: Consolas, "Liberation Mono", monospace;
+      --display: Georgia, "Times New Roman", serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.6 system-ui, Segoe UI, sans-serif;
+    }
+    a { color: inherit; }
+    .topbar {
+      min-height: 66px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 5vw;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+    .brand { display: flex; gap: 12px; align-items: center; font: 700 13px var(--mono); }
+    .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; background: var(--green); color: var(--paper); }
+    .server-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 12px var(--mono); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #449368; }
+    .manager-link { color: var(--green); font: 11px var(--mono); text-decoration: none; }
+    .manager-link:hover { text-decoration: underline; }
+    main { max-width: 1240px; margin: 0 auto; padding: 42px 28px 72px; }
+    .intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: end; margin-bottom: 30px; }
+    .eyebrow { margin: 0 0 11px; color: var(--coral); font: 700 11px var(--mono); text-transform: uppercase; }
+    h1 { margin: 0; font: 400 clamp(34px, 5vw, 56px) var(--display); }
+    .intro-copy { max-width: 510px; margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
+    .count { padding: 11px 14px; border-left: 2px solid var(--yellow); color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+    .toolbar { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .search { width: min(310px, 44vw); height: 38px; border: 1px solid var(--line); background: var(--surface); padding: 0 12px; color: var(--ink); font: 13px system-ui, Segoe UI, sans-serif; }
+    .section-label { display: flex; align-items: center; gap: 12px; margin: 26px 0 13px; color: var(--muted); font: 700 11px var(--mono); text-transform: uppercase; }
+    .section-label::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+    .launcher-feature { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 4px 0 30px; padding: 24px 0; border-top: 2px solid var(--green); border-bottom: 1px solid var(--line); }
+    .launcher-feature h2 { margin: 0; font: 400 32px var(--display); }
+    .launcher-feature p { max-width: 620px; margin: 8px 0 0; color: var(--muted); line-height: 1.5; }
+    .launcher-download { flex: none; padding: 13px 18px; background: var(--green); color: var(--paper); text-decoration: none; font: 700 12px var(--mono); }
+    .launcher-download:hover { background: #80e8f7; }
+    .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--line); background: var(--line); }
+    .app { min-height: 190px; display: flex; flex-direction: column; padding: 19px; background: var(--surface); animation: arrive .35s both; }
+    .app-top { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+    .app h2 { margin: 0; font: 400 21px var(--display); }
+    .scope { color: var(--green); font: 10px var(--mono); text-transform: uppercase; }
+    .app p { margin: 12px 0 20px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .app-bottom { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: auto; }
+    .version { color: var(--muted); font: 11px var(--mono); }
+    .download { padding: 8px 11px; background: var(--mint); color: var(--green); text-decoration: none; font: 700 11px var(--mono); }
+    .download:hover { background: var(--green); color: var(--paper); }
+    .files { display: flex; flex-wrap: wrap; border: 1px solid var(--line); background: var(--surface); }
+    .file-link { display: flex; justify-content: space-between; flex: 1 1 240px; gap: 12px; padding: 15px 17px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-decoration: none; font-size: 13px; }
+    .file-link span:last-child { color: var(--coral); font: 11px var(--mono); }
+    .file-link:hover { background: var(--mint); }
+    .empty, .error { grid-column: 1 / -1; padding: 30px; background: var(--surface); color: var(--muted); }
+    footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font: 11px var(--mono); }
+    @keyframes arrive { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-width: 760px) {
+      main { padding: 30px 18px 48px; }
+      .intro { grid-template-columns: 1fr; gap: 14px; }
+      .count { width: max-content; }
+      .catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 520px) {
+      .topbar { padding: 0 18px; }
+      .server-state { font-size: 0; }
+      .server-state .status-dot { width: 10px; height: 10px; }
+      .toolbar { align-items: stretch; flex-direction: column-reverse; }
+      .search { width: 100%; }
+      .filters { overflow-x: auto; }
+      .filter { flex: 1; padding: 0 9px; }
+      .catalog { grid-template-columns: 1fr; }
+      .app { min-height: 165px; }
+      footer { flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">R</span><span>RIFT / SCRIPT LIBRARY</span></div>
+    <div class="server-state"><span class="status-dot"></span><span id="server-status">CONNECTING</span><a class="manager-link" href="/">RIFT INFO</a><a class="manager-link" href="/manager">MANAGE</a></div>
+  </header>
+  <main>
+    <section class="intro">
+      <div>
+        <p class="eyebrow">Self-hosted ComputerCraft distribution</p>
+        <h1>Script library</h1>
+        <p class="intro-copy">Applications, system tools, and server scripts served directly from your own Rift installation.</p>
+      </div>
+      <div class="count" id="catalog-count">Loading library</div>
+    </section>
+    <section class="launcher-feature" aria-labelledby="launcher-title">
+      <div>
+        <p class="eyebrow">Main program</p>
+        <h2 id="launcher-title">Rift Launcher</h2>
+        <p>The starting point for the ComputerCraft suite. Download the current launcher directly from this host.</p>
+      </div>
+      <a class="launcher-download" href="/launcher" download="launcher.lua">DOWNLOAD LAUNCHER</a>
+    </section>
+    <section aria-label="Current apps">
+      <div class="toolbar">
+        <div class="section-label">Current apps <span id="apps-count"></span></div>
+        <input class="search" id="search" type="search" placeholder="Find a script" aria-label="Find a script">
+      </div>
+      <div class="catalog" id="catalog" aria-live="polite"><div class="empty">Loading apps…</div></div>
+    </section>
+    <section aria-label="Server programs">
+      <div class="section-label">Server programs <span id="server-count"></span></div>
+      <div class="files" id="server-files" aria-live="polite"></div>
+    </section>
+    <section aria-label="System programs">
+      <div class="section-label">System programs <span id="system-count"></span></div>
+      <div class="files" id="system-files" aria-live="polite"></div>
+    </section>
+    <footer><span>RIFT SCRIPT LIBRARY</span><span id="host-address"></span></footer>
+  </main>
+  <script>
+    const catalogElement = document.querySelector("#catalog");
+    const searchElement = document.querySelector("#search");
+    const countElement = document.querySelector("#catalog-count");
+    const statusElement = document.querySelector("#server-status");
+    const serverFilesElement = document.querySelector("#server-files");
+    const systemFilesElement = document.querySelector("#system-files");
+    let entries = [];
+    let serverFiles = [];
+    let systemFiles = [];
+
+    function renderCatalog() {
+      const term = searchElement.value.trim().toLowerCase();
+      const visible = entries.filter((app) => app.scope !== "system"
+        && `${app.name} ${app.description} ${app.file}`.toLowerCase().includes(term));
+      document.querySelector("#apps-count").textContent = `(${visible.length})`;
+      document.querySelector("#server-count").textContent = `(${serverFiles.filter((file) => file.toLowerCase().includes(term)).length})`;
+      document.querySelector("#system-count").textContent = `(${systemFiles.filter((file) => file.toLowerCase().includes(term)).length})`;
+      catalogElement.replaceChildren();
+      if (!visible.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No apps match this search.";
+        catalogElement.append(empty);
+      } else for (const [index, app] of visible.entries()) {
+        const card = document.createElement("article");
+        card.className = "app";
+        card.style.animationDelay = `${Math.min(index, 12) * 25}ms`;
+        const top = document.createElement("div");
+        top.className = "app-top";
+        const title = document.createElement("h2");
+        title.textContent = app.name;
+        const scope = document.createElement("span");
+        scope.className = "scope";
+        scope.textContent = app.scope === "system" ? "System" : "Application";
+        top.append(title, scope);
+        const description = document.createElement("p");
+        description.textContent = app.description;
+        const bottom = document.createElement("div");
+        bottom.className = "app-bottom";
+        const version = document.createElement("span");
+        version.className = "version";
+        version.textContent = `v${app.version}`;
+        const download = document.createElement("a");
+        download.className = "download";
+        download.href = `/${app.source}`;
+        download.download = app.file;
+        download.textContent = "DOWNLOAD";
+        bottom.append(version, download);
+        card.append(top, description, bottom);
+        catalogElement.append(card);
+      }
+      renderFileList(serverFilesElement, serverFiles, term);
+      renderFileList(systemFilesElement, systemFiles, term);
+    }
+
+    function renderFileList(container, files, term) {
+      const visible = files.filter((file) => file.toLowerCase().includes(term));
+      container.replaceChildren();
+      if (!visible.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No programs match this search.";
+        container.append(empty);
+        return;
+      }
+      for (const file of visible) {
+        const link = document.createElement("a");
+        link.className = "file-link";
+        link.href = `/${file}`;
+        link.download = file.split("/").pop();
+        const name = document.createElement("span");
+        name.textContent = file.split("/").pop();
+        const action = document.createElement("span");
+        action.textContent = "GET FILE";
+        link.append(name, action);
+        container.append(link);
+      }
+    }
+
+    searchElement.addEventListener("input", renderCatalog);
+    document.querySelector("#host-address").textContent = location.host;
+
+    Promise.all([fetch("/api/catalog").then((response) => {
+      if (!response.ok) throw new Error(`Catalog request returned ${response.status}`);
+      return response.json();
+    }), fetch("/api/health"), fetch("/api/scripts").then((response) => {
+      if (!response.ok) throw new Error(`Script list returned ${response.status}`);
+      return response.json();
+    })]).then(([catalog, health, scripts]) => {
+      if (!health.ok || !Array.isArray(catalog) || !Array.isArray(scripts)) throw new Error("Host response was invalid");
+      entries = catalog;
+      serverFiles = scripts.filter((file) => file.startsWith("computercraft/server/"));
+      systemFiles = scripts.filter((file) => file.startsWith("computercraft/system/")
+        && file.toLowerCase() !== "computercraft/system/cloud.lua");
+      statusElement.textContent = "HOST ONLINE";
+      countElement.textContent = `${entries.filter((app) => app.scope !== "system").length} APPS · ${serverFiles.length} SERVER · ${systemFiles.length} SYSTEM`;
+      renderCatalog();
+    }).catch((error) => {
+      statusElement.textContent = "HOST ERROR";
+      countElement.textContent = "CATALOG UNAVAILABLE";
+      catalogElement.replaceChildren();
+      const message = document.createElement("div");
+      message.className = "error";
+      message.textContent = error.message;
+      catalogElement.append(message);
+    });
+  </script>
+</body>
+</html>

@@ -1,247 +1,207 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f3f4ef">
-  <title>Rift Script Library</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --ink: #202923;
-      --muted: #647168;
-      --paper: #f3f4ef;
-      --surface: #fff;
-      --line: #dce2d9;
-      --green: #285b49;
-      --mint: #d9eee2;
-      --coral: #d9664d;
-      --yellow: #e5b84f;
-      --mono: Consolas, "Liberation Mono", monospace;
-      --display: Georgia, "Times New Roman", serif;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--paper);
-      color: var(--ink);
-      font-family: "Trebuchet MS", sans-serif;
-    }
-    a { color: inherit; }
-    .topbar {
-      min-height: 66px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 5vw;
-      border-bottom: 1px solid var(--line);
-      background: var(--surface);
-    }
-    .brand { display: flex; gap: 12px; align-items: center; font: 700 13px var(--mono); }
-    .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; background: var(--green); color: white; }
-    .server-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 12px var(--mono); }
-    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #449368; }
-    .manager-link { color: var(--green); font: 11px var(--mono); text-decoration: none; }
-    .manager-link:hover { text-decoration: underline; }
-    main { max-width: 1240px; margin: 0 auto; padding: 42px 28px 72px; }
-    .intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: end; margin-bottom: 30px; }
-    .eyebrow { margin: 0 0 11px; color: var(--coral); font: 700 11px var(--mono); text-transform: uppercase; }
-    h1 { margin: 0; font: 400 clamp(34px, 5vw, 56px) var(--display); }
-    .intro-copy { max-width: 510px; margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
-    .count { padding: 11px 14px; border-left: 2px solid var(--yellow); color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
-    .toolbar { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-    .search { width: min(310px, 44vw); height: 38px; border: 1px solid var(--line); background: var(--surface); padding: 0 12px; color: var(--ink); font: 13px "Trebuchet MS", sans-serif; }
-    .section-label { display: flex; align-items: center; gap: 12px; margin: 26px 0 13px; color: var(--muted); font: 700 11px var(--mono); text-transform: uppercase; }
-    .section-label::after { content: ""; height: 1px; flex: 1; background: var(--line); }
-    .launcher-feature { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 4px 0 30px; padding: 24px 0; border-top: 2px solid var(--green); border-bottom: 1px solid var(--line); }
-    .launcher-feature h2 { margin: 0; font: 400 32px var(--display); }
-    .launcher-feature p { max-width: 620px; margin: 8px 0 0; color: var(--muted); line-height: 1.5; }
-    .launcher-download { flex: none; padding: 13px 18px; background: var(--green); color: white; text-decoration: none; font: 700 12px var(--mono); }
-    .launcher-download:hover { background: #1e4436; }
-    .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--line); background: var(--line); }
-    .app { min-height: 190px; display: flex; flex-direction: column; padding: 19px; background: var(--surface); animation: arrive .35s both; }
-    .app-top { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
-    .app h2 { margin: 0; font: 400 21px var(--display); }
-    .scope { color: var(--green); font: 10px var(--mono); text-transform: uppercase; }
-    .app p { margin: 12px 0 20px; color: var(--muted); font-size: 13px; line-height: 1.45; }
-    .app-bottom { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: auto; }
-    .version { color: var(--muted); font: 11px var(--mono); }
-    .download { padding: 8px 11px; background: var(--mint); color: var(--green); text-decoration: none; font: 700 11px var(--mono); }
-    .download:hover { background: var(--green); color: white; }
-    .files { display: flex; flex-wrap: wrap; border: 1px solid var(--line); background: var(--surface); }
-    .file-link { display: flex; justify-content: space-between; flex: 1 1 240px; gap: 12px; padding: 15px 17px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-decoration: none; font-size: 13px; }
-    .file-link span:last-child { color: var(--coral); font: 11px var(--mono); }
-    .file-link:hover { background: #e9f2eb; }
-    .empty, .error { grid-column: 1 / -1; padding: 30px; background: var(--surface); color: var(--muted); }
-    footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font: 11px var(--mono); }
-    @keyframes arrive { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
-    @media (max-width: 760px) {
-      main { padding: 30px 18px 48px; }
-      .intro { grid-template-columns: 1fr; gap: 14px; }
-      .count { width: max-content; }
-      .catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    @media (max-width: 520px) {
-      .topbar { padding: 0 18px; }
-      .server-state { font-size: 0; }
-      .server-state .status-dot { width: 10px; height: 10px; }
-      .toolbar { align-items: stretch; flex-direction: column-reverse; }
-      .search { width: 100%; }
-      .filters { overflow-x: auto; }
-      .filter { flex: 1; padding: 0 9px; }
-      .catalog { grid-template-columns: 1fr; }
-      .app { min-height: 165px; }
-      footer { flex-direction: column; }
-    }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; } }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rift Launcher | Info</title>
+<style>
+  :root { --bg:#0b0e14; --panel:#141a24; --accent:#2dd4f0; --text:#d7dde8; --dim:#8794a8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 system-ui,Segoe UI,sans-serif; }
+  header { position:relative; padding:56px 24px 40px; text-align:center; border-bottom:1px solid #1f2836; }
+  h1 { margin:0 0 8px; font-size:2.6rem; letter-spacing:.2em; color:var(--accent); }
+  header p { margin:0 auto; max-width:620px; color:var(--dim); }
+  .site-nav { position:absolute; top:18px; right:24px; display:flex; gap:18px; }
+  .site-nav a { color:var(--accent); font-size:.8rem; text-decoration:none; }
+  .site-nav a:hover { text-decoration:underline; }
+  main { max-width:900px; margin:0 auto; padding:32px 24px 64px; }
+  h2 { color:var(--accent); margin-top:48px; border-bottom:1px solid #1f2836; padding-bottom:6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:16px; }
+  .card { background:var(--panel); border-radius:8px; padding:16px 18px; }
+  .card h3 { margin:0 0 6px; font-size:1rem; }
+  .card p { margin:0; color:var(--dim); font-size:.93rem; }
+  pre { background:#05070b; border:1px solid #1f2836; border-radius:8px; padding:14px; overflow:auto; color:#b8f1c8; }
+  code { color:#ffd479; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { text-align:left; padding:8px 10px; border-bottom:1px solid #1f2836; vertical-align:top; }
+  th { color:var(--dim); font-weight:600; }
+  footer { text-align:center; color:var(--dim); padding:24px; font-size:.85rem; }
+  @media (max-width:520px) {
+    header { padding:64px 18px 32px; }
+    .site-nav { top:14px; left:18px; right:18px; justify-content:center; gap:24px; }
+    h1 { font-size:clamp(1.7rem,8vw,2.4rem); letter-spacing:.12em; }
+    main { padding:28px 18px 48px; }
+    td, th { padding:8px 6px; }
+  }
+</style>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark">R</span><span>RIFT / SCRIPT LIBRARY</span></div>
-    <div class="server-state"><span class="status-dot"></span><span id="server-status">CONNECTING</span><a class="manager-link" href="/manager">MANAGE</a></div>
-  </header>
-  <main>
-    <section class="intro">
-      <div>
-        <p class="eyebrow">Self-hosted ComputerCraft distribution</p>
-        <h1>Script library</h1>
-        <p class="intro-copy">Applications, system tools, and server scripts served directly from your own Rift installation.</p>
-      </div>
-      <div class="count" id="catalog-count">Loading library</div>
-    </section>
-    <section class="launcher-feature" aria-labelledby="launcher-title">
-      <div>
-        <p class="eyebrow">Main program</p>
-        <h2 id="launcher-title">Rift Launcher</h2>
-        <p>The starting point for the ComputerCraft suite. Download the current launcher directly from this host.</p>
-      </div>
-      <a class="launcher-download" href="/launcher" download="launcher.lua">DOWNLOAD LAUNCHER</a>
-    </section>
-    <section aria-label="Current apps">
-      <div class="toolbar">
-        <div class="section-label">Current apps <span id="apps-count"></span></div>
-        <input class="search" id="search" type="search" placeholder="Find a script" aria-label="Find a script">
-      </div>
-      <div class="catalog" id="catalog" aria-live="polite"><div class="empty">Loading apps…</div></div>
-    </section>
-    <section aria-label="Server programs">
-      <div class="section-label">Server programs <span id="server-count"></span></div>
-      <div class="files" id="server-files" aria-live="polite"></div>
-    </section>
-    <section aria-label="System programs">
-      <div class="section-label">System programs <span id="system-count"></span></div>
-      <div class="files" id="system-files" aria-live="polite"></div>
-    </section>
-    <footer><span>RIFT SCRIPT LIBRARY</span><span id="host-address"></span></footer>
-  </main>
-  <script>
-    const catalogElement = document.querySelector("#catalog");
-    const searchElement = document.querySelector("#search");
-    const countElement = document.querySelector("#catalog-count");
-    const statusElement = document.querySelector("#server-status");
-    const serverFilesElement = document.querySelector("#server-files");
-    const systemFilesElement = document.querySelector("#system-files");
-    let entries = [];
-    let serverFiles = [];
-    let systemFiles = [];
+<header>
+  <nav class="site-nav" aria-label="Site navigation">
+    <a href="/library">SCRIPT LIBRARY</a>
+    <a href="/manager">MANAGE</a>
+  </nav>
+  <h1>RIFT LAUNCHER</h1>
+  <p>A full desktop-style launcher for ComputerCraft (CC:Tweaked): apps, accounts, notifications, background services and self-updating, all from one computer.</p>
+</header>
+<main>
 
-    function renderCatalog() {
-      const term = searchElement.value.trim().toLowerCase();
-      const visible = entries.filter((app) => app.scope !== "system"
-        && `${app.name} ${app.description} ${app.file}`.toLowerCase().includes(term));
-      document.querySelector("#apps-count").textContent = `(${visible.length})`;
-      document.querySelector("#server-count").textContent = `(${serverFiles.filter((file) => file.toLowerCase().includes(term)).length})`;
-      document.querySelector("#system-count").textContent = `(${systemFiles.filter((file) => file.toLowerCase().includes(term)).length})`;
-      catalogElement.replaceChildren();
-      if (!visible.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty";
-        empty.textContent = "No apps match this search.";
-        catalogElement.append(empty);
-      } else for (const [index, app] of visible.entries()) {
-        const card = document.createElement("article");
-        card.className = "app";
-        card.style.animationDelay = `${Math.min(index, 12) * 25}ms`;
-        const top = document.createElement("div");
-        top.className = "app-top";
-        const title = document.createElement("h2");
-        title.textContent = app.name;
-        const scope = document.createElement("span");
-        scope.className = "scope";
-        scope.textContent = app.scope === "system" ? "System" : "Application";
-        top.append(title, scope);
-        const description = document.createElement("p");
-        description.textContent = app.description;
-        const bottom = document.createElement("div");
-        bottom.className = "app-bottom";
-        const version = document.createElement("span");
-        version.className = "version";
-        version.textContent = `v${app.version}`;
-        const download = document.createElement("a");
-        download.className = "download";
-        download.href = `/${app.source}`;
-        download.download = app.file;
-        download.textContent = "DOWNLOAD";
-        bottom.append(version, download);
-        card.append(top, description, bottom);
-        catalogElement.append(card);
-      }
-      renderFileList(serverFilesElement, serverFiles, term);
-      renderFileList(systemFilesElement, systemFiles, term);
-    }
+<h2>Install</h2>
+<p>On a computer, download the launcher and boot it:</p>
+<pre>wget https://rift.zerocreates.org/launcher.lua launcher.lua
+launcher</pre>
+<p>On every boot the launcher checks the website for a new version, shows a boot screen while it updates, then reboots into the new build. If an update fails to start, it rolls back automatically.</p>
 
-    function renderFileList(container, files, term) {
-      const visible = files.filter((file) => file.toLowerCase().includes(term));
-      container.replaceChildren();
-      if (!visible.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty";
-        empty.textContent = "No programs match this search.";
-        container.append(empty);
-        return;
-      }
-      for (const file of visible) {
-        const link = document.createElement("a");
-        link.className = "file-link";
-        link.href = `/${file}`;
-        link.download = file.split("/").pop();
-        const name = document.createElement("span");
-        name.textContent = file.split("/").pop();
-        const action = document.createElement("span");
-        action.textContent = "GET FILE";
-        link.append(name, action);
-        container.append(link);
-      }
-    }
+<h2>Features</h2>
+<div class="grid">
+  <div class="card"><h3>Self-updating</h3><p>Updates from <code>rift.zerocreates.org/launcher.lua</code> with safe rollback and a black-box log.</p></div>
+  <div class="card"><h3>App Downloader</h3><p>Install and update apps from the online catalog.</p></div>
+  <div class="card"><h3>Multitasking</h3><p>Run several apps at once. Press <code>Ctrl+T</code> for the session menu; the launcher itself can never be terminated.</p></div>
+  <div class="card"><h3>Rift Account</h3><p>One sign-in and create-account page handled by the launcher for every app.</p></div>
+  <div class="card"><h3>Notifications</h3><p>Apps and services can raise notifications with a chime; Email and Market use this.</p></div>
+  <div class="card"><h3>Background services</h3><p>Headless services that can persist across reboots, with permission prompts.</p></div>
+  <div class="card"><h3>Permissions</h3><p>Peripherals are blocked until you allow them (modems excepted). Decisions are stored per user.</p></div>
+  <div class="card"><h3>Lock screen &amp; themes</h3><p>Lock the computer and pick a theme in Settings.</p></div>
+</div>
 
-    searchElement.addEventListener("input", renderCatalog);
-    document.querySelector("#host-address").textContent = location.host;
+<h2>Included apps</h2>
+<table>
+  <tr><th>App</th><th>Description</th></tr>
+  <tr><td>Email</td><td>Send and receive mail between Rift accounts.</td></tr>
+  <tr><td>Market / Market Provider</td><td>Order items and fulfil orders as a provider.</td></tr>
+  <tr><td>Jobs</td><td>Post and accept jobs with rewards.</td></tr>
+  <tr><td>Casino</td><td>Wallet-backed games including Blackjack, Dice and Texas Hold'em.</td></tr>
+  <tr><td>Utilities</td><td>Calculator, Clock, Countdown, Notes, Lua Console.</td></tr>
+  <tr><td>System</td><td>File Browser, Settings, App Downloader.</td></tr>
+</table>
 
-    Promise.all([fetch("/api/catalog").then((response) => {
-      if (!response.ok) throw new Error(`Catalog request returned ${response.status}`);
-      return response.json();
-    }), fetch("/api/health"), fetch("/api/scripts").then((response) => {
-      if (!response.ok) throw new Error(`Script list returned ${response.status}`);
-      return response.json();
-    })]).then(([catalog, health, scripts]) => {
-      if (!health.ok || !Array.isArray(catalog) || !Array.isArray(scripts)) throw new Error("Host response was invalid");
-      entries = catalog;
-      serverFiles = scripts.filter((file) => file.startsWith("computercraft/server/"));
-      systemFiles = scripts.filter((file) => file.startsWith("computercraft/system/")
-        && file.toLowerCase() !== "computercraft/system/cloud.lua");
-      statusElement.textContent = "HOST ONLINE";
-      countElement.textContent = `${entries.filter((app) => app.scope !== "system").length} APPS · ${serverFiles.length} SERVER · ${systemFiles.length} SYSTEM`;
-      renderCatalog();
-    }).catch((error) => {
-      statusElement.textContent = "HOST ERROR";
-      countElement.textContent = "CATALOG UNAVAILABLE";
-      catalogElement.replaceChildren();
-      const message = document.createElement("div");
-      message.className = "error";
-      message.textContent = error.message;
-      catalogElement.append(message);
-    });
-  </script>
+<h2>Servers</h2>
+<p>Host servers on separate computers with a modem. The combined <code>rift-server.lua</code> runs the account server (<code>rift_account_v1</code>) and the Email, Jobs, Market and Casino servers.</p>
+
+<h2>Developer API</h2>
+<p>Apps run in a sandbox with a global <code>rift</code> table:</p>
+<p>Apps started from the launcher get these modules. Failing calls return <code>nil/false, message</code> unless noted. Guard against older launchers by checking the module exists first.</p>
+<pre>if type(rift) ~= "table" or type(rift.account) ~= "table" then
+  error("Update the launcher.")
+end</pre>
+
+<h3>Core</h3>
+<table>
+  <tr><th>Call</th><th>Description</th></tr>
+  <tr><td><code>rift.version</code></td><td>API version string (<code>"1"</code>).</td></tr>
+  <tr><td><code>rift.user()</code></td><td>Name of the launcher profile that is signed in.</td></tr>
+  <tr><td><code>rift.notifications()</code></td><td>Array of recent notification texts (last 20).</td></tr>
+  <tr><td><code>rift.settings.get(key, default)</code></td><td>Read a launcher setting.</td></tr>
+  <tr><td><code>rift.settings.set(key, value)</code></td><td>Write a setting. Values must be string, number or boolean. Returns <code>true</code> when saved.</td></tr>
+</table>
+
+<h3>rift.notify</h3>
+<p><code>rift.notify(text [, options])</code> shows a toast in the status bar and keeps it in history. Control characters are stripped and text is cut to 120 characters. The sending app is attached automatically and muted apps are ignored.</p>
+<table>
+  <tr><th>Option</th><th>Description</th></tr>
+  <tr><td><code>title</code></td><td>Prefix shown as <code>Title: text</code> (30 chars max).</td></tr>
+  <tr><td><code>key</code></td><td>Unique id (64 chars max). Identical text for the same key is skipped; new text replaces the old entry.</td></tr>
+  <tr><td><code>priority</code></td><td><code>"low"</code> (3s, silent), <code>"normal"</code> (5s, chime) or <code>"high"</code> (10s, chime).</td></tr>
+</table>
+<pre>rift.notify("3 new messages", { title = "Email", key = "mail-unread", priority = "high" })</pre>
+
+<h3>rift.account</h3>
+<p>One shared Rift account per launcher profile. Credentials are stored in the profile's encrypted storage, so apps never need their own sign-in screen.</p>
+<table>
+  <tr><th>Call</th><th>Description</th></tr>
+  <tr><td><code>signIn([options])</code></td><td>Returns the current user, auto-logs in with saved credentials, or shows the launcher sign-in / create-account page. Returns the username, or <code>nil</code> if cancelled. <code>options.reason</code> adds a line to the page.</td></tr>
+  <tr><td><code>current()</code></td><td>Username signed in this session, or <code>nil</code>.</td></tr>
+  <tr><td><code>saved()</code></td><td>Saved username, or <code>nil</code>.</td></tr>
+  <tr><td><code>auto()</code></td><td>Log in with saved credentials. Returns <code>ok, usernameOrError</code>. Use it in background services.</td></tr>
+  <tr><td><code>login(user, pass)</code></td><td>Returns <code>ok, usernameOrError</code>.</td></tr>
+  <tr><td><code>register(user, pass)</code></td><td>Create the account and sign in. Returns <code>ok, usernameOrError</code>.</td></tr>
+  <tr><td><code>logout()</code></td><td>Clears the saved password and signs out on the server.</td></tr>
+  <tr><td><code>get(key, default)</code></td><td>Read extra per-account data (such as a delivery address). <code>username</code> and <code>password</code> are reserved.</td></tr>
+  <tr><td><code>set(key, value)</code></td><td>Store extra per-account data. Returns <code>true</code> when saved; needs a saved account.</td></tr>
+</table>
+<pre>local name = rift.account.signIn({ reason = "Your wallet is tied to your Rift name." })
+if not name then return end
+rift.account.set("favourite", "dice")</pre>
+
+<h3>rift.service</h3>
+<p>Headless background programs that keep running while you use other apps. Starting one asks the user for permission (Y once, A always, N deny, D never). Names use letters, digits, <code>_ . -</code> and at most 32 characters.</p>
+<table>
+  <tr><th>Call</th><th>Description</th></tr>
+  <tr><td><code>persistInit(name, fn [, options])</code></td><td>Put at the top of the app. Only declares the endpoint; <code>options.displayName</code> sets the label. After a reboot the launcher re-runs the app hidden, starts <code>fn</code> as the service when this call is reached, and discards the rest of the run.</td></tr>
+  <tr><td><code>spawn(name [, fn] [, options])</code></td><td>Registers and starts the service (asks permission). If <code>persistInit</code> declared the same name, <code>fn</code> can be omitted and the service is restored on every login. Returns <code>ok, reason</code>.</td></tr>
+  <tr><td><code>forget(name)</code></td><td>Stops a persistent service from returning after reboot.</td></tr>
+  <tr><td><code>install(name, path, opts)</code></td><td>Register a program in the profile (<code>path</code> relative to home) as a managed service. <code>opts</code>: <code>displayName</code>, <code>description</code>, <code>startType</code>, <code>recovery</code>.</td></tr>
+  <tr><td><code>uninstall(name)</code></td><td>Stop and remove an installed service.</td></tr>
+  <tr><td><code>start(name)</code> / <code>stop(name)</code> / <code>restart(name)</code></td><td>Control an installed service. A disabled service cannot start.</td></tr>
+  <tr><td><code>setStartType(name, type)</code></td><td><code>"automatic"</code>, <code>"manual"</code> or <code>"disabled"</code>.</td></tr>
+  <tr><td><code>status(name)</code></td><td><code>"Running"</code>, <code>"Stopped"</code>, <code>"Failed: reason"</code>, or <code>nil</code> if unknown.</td></tr>
+  <tr><td><code>list()</code></td><td>Array of <code>{ name, displayName, description, path, startType, recovery, status }</code>.</td></tr>
+</table>
+<p><code>recovery = "restart"</code> restarts the service if it crashes. Services run without a screen, so they must not draw or read input; use <code>rift.notify</code> to talk to the user. Hold <strong>Alt</strong> while the Ctrl+T menu is open to reach the Services submenu.</p>
+<pre>-- top of the app
+rift.service.persistInit("mail-notify", function()
+  while true do
+    pcall(rift.account.auto)
+    -- poll the server, then:
+    rift.notify("New mail", { key = "mail" })
+    sleep(30)
+  end
+end, { displayName = "Mail notifier" })
+
+-- later, when the user enables notifications
+local ok, reason = rift.service.spawn("mail-notify")
+if not ok then print(reason) end</pre>
+
+<h3>rift.permissions</h3>
+<p>Capabilities are remembered per user. <code>"peripheral:&lt;type&gt;"</code> is requested automatically when an app wraps or finds a peripheral; modems are always allowed. Denied access makes <code>peripheral.wrap</code> and <code>peripheral.find</code> return <code>nil</code> and <code>peripheral.call</code> raise an error, so always nil-check. Background and locked contexts cannot prompt and deny anything without a saved decision.</p>
+<table>
+  <tr><th>Call</th><th>Description</th></tr>
+  <tr><td><code>has(capability)</code></td><td><code>true</code> if already granted (always or this session). Never prompts.</td></tr>
+  <tr><td><code>request(capability [, label])</code></td><td>Asks the user if undecided; returns <code>true</code> or <code>false</code>. <code>label</code> is the text shown in the prompt.</td></tr>
+  <tr><td><code>revoke(capability)</code></td><td>Forget the decision so the user is asked again.</td></tr>
+  <tr><td><code>list()</code></td><td>Array of <code>{ capability, allowed }</code> for saved decisions.</td></tr>
+</table>
+<pre>local printer = peripheral.find("printer")
+if not printer then
+  rift.ui.notice("No printer, or access was denied.")
+  return
+end</pre>
+
+<h3>rift.ui</h3>
+<p>Themed dialogs drawn over the app's screen. Each redraws the app afterwards by sending a <code>term_resize</code> event.</p>
+<table>
+  <tr><th>Call</th><th>Description</th></tr>
+  <tr><td><code>notice(message [, title])</code></td><td>Message box; closes on any key or click.</td></tr>
+  <tr><td><code>confirm(message [, title])</code></td><td>Returns <code>true</code> for Y/Enter, <code>false</code> for N/Esc.</td></tr>
+  <tr><td><code>menu(title, items)</code></td><td>Arrow keys or mouse to pick. Returns the item index, or <code>nil</code> on Esc.</td></tr>
+  <tr><td><code>input(prompt [, options])</code></td><td>Text prompt. <code>options</code>: <code>title</code>, <code>hidden</code> (mask with <code>*</code>), <code>default</code>. Returns the text.</td></tr>
+  <tr><td><code>theme()</code></td><td>Current launcher theme info (including the accent colour).</td></tr>
+</table>
+<pre>local pick = rift.ui.menu("Difficulty", { "Easy", "Normal", "Hard" })
+if pick and rift.ui.confirm("Start on " .. ({ "Easy", "Normal", "Hard" })[pick] .. "?") then
+  local name = rift.ui.input("Player name", { title = "New game" })
+end</pre>
+
+<h3>rift.storage</h3>
+<p>Private, encrypted JSON storage for the current profile. Names may contain letters, numbers, dots, underscores, dashes and <code>/</code> for sub-folders (no <code>..</code>). Writes are atomic with a backup.</p>
+<table>
+  <tr><th>Call</th><th>Description</th></tr>
+  <tr><td><code>read(name)</code></td><td>Returns the stored value, or <code>nil, error</code>.</td></tr>
+  <tr><td><code>write(name, value)</code></td><td>Value must be JSON-serializable. Returns <code>true</code> or <code>false, error</code>.</td></tr>
+  <tr><td><code>delete(name)</code></td><td>Remove stored data.</td></tr>
+  <tr><td><code>list([folder])</code></td><td>Names inside the storage root or a folder.</td></tr>
+</table>
+<pre>rift.storage.write("mygame/save", { level = 3 })
+local save = rift.storage.read("mygame/save") or { level = 1 }</pre>
+
+<h2>Good to know</h2>
+<ul>
+  <li>Paths appear as <code>H://</code> (home) and <code>S://</code> (system).</li>
+  <li>Updating needs roughly 400 KB of free disk space.</li>
+  <li>Peripherals other than modems prompt for permission the first time an app uses them.</li>
+</ul>
+
+</main>
+<footer>Rift Launcher &middot; rift.zerocreates.org</footer>
 </body>
 </html>
