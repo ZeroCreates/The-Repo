@@ -27,7 +27,7 @@ const SCRIPT_PATH = /^(?:launcher\.lua|computercraft\/.+\.lua)$/i;
 const MANAGED_SCRIPT_PATH = /^computercraft\/(?:server|system)\/[a-z0-9_-]+\.lua$/i;
 const APP_FILE_NAME = /^[a-z0-9][a-z0-9_-]*\.lua$/;
 const APP_VERSION = /^\d+\.\d+\.\d+$/;
-const SHARE_ID = /^[a-f0-9]{32}$/;
+const SHARE_ID = /^[a-f0-9]{6}$/;
 const SCRIPT_VERSIONS_PATH = path.join(ROOT, "script-versions.json");
 
 function respond(response, status, body, contentType) {
@@ -178,7 +178,7 @@ async function handleShareUpload(request, response) {
     }
 
     await fs.mkdir(SHARE_DIRECTORY, { recursive: true });
-    const id = crypto.randomBytes(16).toString("hex");
+    const id = crypto.randomBytes(3).toString("hex");
     const temporaryPath = shareFilePath(id, "tmp");
     let size = 0;
     const sizeLimit = new Transform({
